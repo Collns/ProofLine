@@ -1,0 +1,101 @@
+// Request/response shapes for /v1/onboard/* — verified against
+// apps/functions/src/api/onboarding/*.handler.ts on main.
+
+export interface StartRequest {
+  domain: string;
+  legalName: string;
+  ein: string;
+  state: string;        // 2-char US state code, uppercased
+  ownerEmail: string;
+}
+export interface StartResponse {
+  companyId: string;
+  domain: string;
+  dnsToken: string;
+  txtRecord: string;    // e.g. "proofline-verify=abc123…"
+  txtHost: string;      // e.g. "_proofline.acme.com"
+}
+
+export interface VerifyDnsRequest {
+  companyId: string;
+}
+export interface VerifyDnsResponse {
+  ok: boolean;          // false → still polling; 200 with ok:false
+  domain: string;
+  status: string;       // OnboardingStatus
+  resolvers: string;    // detail string from each resolver
+}
+
+export interface VerifyEmailRequest {
+  companyId: string;
+}
+export interface VerifyEmailResponse {
+  sent: boolean;
+  to: string;
+  message: string;
+}
+
+export interface VerifyEmailCodeRequest {
+  companyId: string;
+  code: string;         // 6-digit
+}
+export interface VerifyEmailCodeResponse {
+  ok: boolean;
+  status: string;
+}
+
+export interface KybRequest {
+  companyId: string;
+}
+export interface KybResponse {
+  ok: boolean;
+  status: string;
+  vendorRef: string;
+  officers: { name: string; role: string }[];
+}
+
+export interface EnrollOfficerRequest {
+  companyId: string;
+  officerEmail: string;
+}
+export interface EnrollOfficerResponse {
+  stripeSessionId: string;
+  clientSecret: string;
+  officerEmail: string;
+  message: string;
+}
+
+export interface FinalizeRequest {
+  companyId: string;
+}
+export interface FinalizeResponse {
+  ok: boolean;
+  companyId: string;
+  domain: string;
+  status: string;
+  credentialId: string;
+  kmsKeyName: string;
+  anchorRoot: string;
+  anchorTxHash: string | null;
+  anchorBlockNumber: number | null;
+  verifiedAt: number;
+}
+
+// Generic error body returned by the API's ERR.* helpers.
+export interface ApiErrorBody {
+  error: {
+    code: string;
+    message: string;
+  };
+}
+
+export class ApiError extends Error {
+  constructor(
+    public readonly code: string,
+    public readonly httpStatus: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}

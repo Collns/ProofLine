@@ -1,19 +1,33 @@
 {
-    "name":  "@proofline/web-admin",
-    "version":  "0.0.0",
-    "private":  true,
-    "type":  "module",
-    "main":  "dist/index.js",
-    "types":  "dist/index.d.ts",
-    "scripts":  {
-                    "build":  "tsc",
-                    "typecheck":  "tsc --noEmit",
-                    "lint":  "tsc --noEmit",
-                    "test":  "vitest run --passWithNoTests",
-                    "clean":  "rm -rf dist"
-                },
-    "devDependencies":  {
-                            "typescript":  "catalog:",
-                            "vitest":  "catalog:"
-                        }
+  "name": "@proofline/web-admin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@proofline/webauthn": "workspace:*",
+    "@stripe/stripe-js": "^4.0.0",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "react-router-dom": "7.15.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "^5.0.4",
+    "autoprefixer": "^10.4.21",
+    "postcss": "8.5.14",
+    "tailwindcss": "^4.1.14",
+    "typescript": "catalog:",
+    "vite": "^6.2.3",
+    "vitest": "catalog:"
+  }
 }
