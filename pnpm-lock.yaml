@@ -139,6 +139,9 @@ importers:
       '@proofline/anchoring':
         specifier: workspace:*
         version: link:../../packages/anchoring
+      '@proofline/canonical':
+        specifier: workspace:*
+        version: link:../../packages/canonical
       '@proofline/email':
         specifier: workspace:*
         version: link:../../packages/email
@@ -148,6 +151,9 @@ importers:
       '@proofline/types':
         specifier: workspace:*
         version: link:../../packages/types
+      '@proofline/verification':
+        specifier: workspace:*
+        version: link:../../packages/verification
       express:
         specifier: ^4.21.2
         version: 4.22.1
