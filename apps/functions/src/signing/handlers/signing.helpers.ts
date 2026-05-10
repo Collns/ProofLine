@@ -18,7 +18,7 @@ import {
   SigningSession,
   WebAuthnAssertion,
 } from "@proofline/types";
-import type { SignerDisplayRecord } from "@proofline/email/banner";
+import type { SignerDisplayRecord } from "@proofline/email";
 
 // ─── Local envelope type (mirrors signing.types.ts) ───────────────────────────
 // The shared SignedEnvelope predates email signing fields — use a local type.
