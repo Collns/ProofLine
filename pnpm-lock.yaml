@@ -107,6 +107,10 @@ importers:
         version: 5.8.3
 
   apps/extension-chrome:
+    dependencies:
+      '@proofline/types':
+        specifier: workspace:*
+        version: link:../../packages/types
     devDependencies:
       '@types/chrome':
         specifier: ^0.0.270
