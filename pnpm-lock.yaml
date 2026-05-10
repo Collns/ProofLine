@@ -120,6 +120,9 @@ importers:
       '@proofline/email':
         specifier: workspace:*
         version: link:../../packages/email
+      '@proofline/onboarding':
+        specifier: workspace:*
+        version: link:../../packages/onboarding
       '@proofline/policy':
         specifier: workspace:*
         version: link:../../packages/policy
@@ -327,6 +330,34 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 2.1.9(@types/node@25.6.2)(lightningcss@1.32.0)
+
+  packages/onboarding:
+    dependencies:
+      '@proofline/anchoring':
+        specifier: workspace:*
+        version: link:../anchoring
+      '@proofline/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+      '@proofline/email':
+        specifier: workspace:*
+        version: link:../email
+      '@proofline/kyb':
+        specifier: workspace:*
+        version: link:../kyb
+      '@proofline/types':
+        specifier: workspace:*
+        version: link:../types
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: 'catalog:'
+        version: 5.8.3
+      vitest:
+        specifier: 'catalog:'
+        version: 2.1.9(@types/node@25.6.2)(jsdom@25.0.1)(lightningcss@1.32.0)
 
   packages/policy:
     dependencies:
