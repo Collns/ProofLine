@@ -273,6 +273,10 @@ importers:
         version: 2.1.9(@types/node@25.6.2)(lightningcss@1.32.0)
 
   packages/policy:
+    dependencies:
+      '@proofline/types':
+        specifier: workspace:*
+        version: link:../types
     devDependencies:
       typescript:
         specifier: 'catalog:'
