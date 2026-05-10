@@ -315,13 +315,32 @@ importers:
         version: 2.1.9(@types/node@25.6.2)(lightningcss@1.32.0)
 
   packages/verification:
+    dependencies:
+      '@proofline/anchoring':
+        specifier: workspace:*
+        version: link:../anchoring
+      '@proofline/canonical':
+        specifier: workspace:*
+        version: link:../canonical
+      '@proofline/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+      '@proofline/types':
+        specifier: workspace:*
+        version: link:../types
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
     devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.18
       typescript:
         specifier: 'catalog:'
         version: 5.8.3
       vitest:
         specifier: 'catalog:'
-        version: 2.1.9(@types/node@25.6.2)(lightningcss@1.32.0)
+        version: 2.1.9(@types/node@22.19.18)(lightningcss@1.32.0)
 
   packages/webauthn:
     dependencies:
