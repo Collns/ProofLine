@@ -108,9 +108,15 @@ importers:
 
   apps/extension-chrome:
     dependencies:
+      '@proofline/canonical':
+        specifier: workspace:*
+        version: link:../../packages/canonical
       '@proofline/types':
         specifier: workspace:*
         version: link:../../packages/types
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
     devDependencies:
       '@types/chrome':
         specifier: ^0.0.270
