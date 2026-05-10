@@ -111,9 +111,6 @@ importers:
       '@proofline/types':
         specifier: workspace:*
         version: link:../../packages/types
-      '@proofline/verification':
-        specifier: workspace:*
-        version: link:../../packages/verification
     devDependencies:
       '@types/chrome':
         specifier: ^0.0.270
