@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Public — verification page reads signed envelopes
+    match /signed_messages/{messageId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Public — verification reads company records
+    match /companies/{companyId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Auth-gated — users can only read their own company's sessions
+    match /sessions/{sessionId} {
+      allow read: if request.auth != null
+        && request.auth.token.companyId == resource.data.companyId;
+      allow write: if false;
+    }
+
+    // Everything else requires auth, writes are Functions-only
+    match /{document=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "projects": {
+    "default": "proofline-cdabb"
+  },
+  "targets": {
+    "proofline-cdabb": {
+      "hosting": {
+        "admin": [
+          "proofline-admin"
+        ],
+        "counterparty": [
+          "proofline-counterparty"
+        ],
+        "verify": [
+          "proofline-verify"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
