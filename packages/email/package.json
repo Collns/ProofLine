@@ -1,19 +1,24 @@
 {
-    "name":  "@proofline/email",
-    "version":  "0.0.0",
-    "private":  true,
-    "type":  "module",
-    "main":  "dist/index.js",
-    "types":  "dist/index.d.ts",
-    "scripts":  {
-                    "build":  "tsc",
-                    "typecheck":  "tsc --noEmit",
-                    "lint":  "tsc --noEmit",
-                    "test":  "vitest run --passWithNoTests",
-                    "clean":  "rm -rf dist"
-                },
-    "devDependencies":  {
-                            "typescript":  "catalog:",
-                            "vitest":  "catalog:"
-                        }
+    "name": "@proofline/email",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "typecheck": "tsc --noEmit",
+        "lint": "tsc --noEmit",
+        "test": "vitest run --passWithNoTests",
+        "clean": "rm -rf dist"
+    },
+    "devDependencies": {
+        "typescript": "catalog:",
+        "vitest": "catalog:"
+    },
+    "dependencies": {
+        "@proofline/types": "workspace:*",
+        "resend": "6.12.3",
+        "zod": "catalog:"
+    }
 }
