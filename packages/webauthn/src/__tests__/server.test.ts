@@ -34,7 +34,7 @@ const FIXED_BYTES = new Uint8Array(32).fill(42);
 const FIXED_CHALLENGE = Buffer.from(FIXED_BYTES).toString('base64url');
 
 function makeClientDataJSON(challenge: string, type = 'webauthn.create'): string {
-  const json = JSON.stringify({ type, challenge, origin: 'https://proofline.app' });
+  const json = JSON.stringify({ type, challenge, origin: 'https://proofline.web.app' });
   return Buffer.from(json).toString('base64url');
 }
 
@@ -82,8 +82,8 @@ function mockVerifyRegistrationSuccess() {
       fmt: 'none',
       attestationObject: new Uint8Array(0),
       userVerified: true,
-      origin: 'https://proofline.app',
-      rpID: 'proofline.app',
+      origin: 'https://proofline.web.app',
+      rpID: 'proofline.web.app',
     } as unknown as Awaited<ReturnType<typeof verifyRegistrationResponse>>['registrationInfo'],
   } as Awaited<ReturnType<typeof verifyRegistrationResponse>>);
 }
@@ -97,8 +97,8 @@ function mockVerifyAuthenticationSuccess(newCounter = 1) {
       credentialDeviceType: 'singleDevice',
       credentialBackedUp: false,
       userVerified: true,
-      origin: 'https://proofline.app',
-      rpID: 'proofline.app',
+      origin: 'https://proofline.web.app',
+      rpID: 'proofline.web.app',
     } as unknown as Awaited<ReturnType<typeof verifyAuthenticationResponse>>['authenticationInfo'],
   } as Awaited<ReturnType<typeof verifyAuthenticationResponse>>);
 }
@@ -108,7 +108,7 @@ beforeEach(() => {
   vi.mocked(randomBytes as (size: number) => Buffer).mockReturnValue(Buffer.from(FIXED_BYTES));
   vi.mocked(generateRegistrationOptions).mockResolvedValue({
     challenge: FIXED_CHALLENGE,
-    rp: { name: 'ProofLine', id: 'proofline.app' },
+    rp: { name: 'ProofLine', id: 'proofline.web.app' },
     user: { id: 'dXNlci0x', name: 'test@example.com', displayName: 'Test User' },
     pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
     timeout: 60000,
@@ -117,7 +117,7 @@ beforeEach(() => {
   } as unknown as Awaited<ReturnType<typeof generateRegistrationOptions>>);
   vi.mocked(generateAuthenticationOptions).mockResolvedValue({
     challenge: FIXED_CHALLENGE,
-    rpId: 'proofline.app',
+    rpId: 'proofline.web.app',
     allowCredentials: [],
     timeout: 60000,
     userVerification: 'preferred',
@@ -133,7 +133,7 @@ describe('startRegistration', () => {
       userId: 'user-1',
       userName: 'test@example.com',
       userDisplayName: 'Test User',
-      rpId: 'proofline.app',
+      rpId: 'proofline.web.app',
       rpName: 'ProofLine',
       challengeStore: store,
     });
@@ -152,7 +152,7 @@ describe('finishRegistration', () => {
       userId: 'user-1',
       userName: 'test@example.com',
       userDisplayName: 'Test User',
-      rpId: 'proofline.app',
+      rpId: 'proofline.web.app',
       rpName: 'ProofLine',
       challengeStore: store,
     });
@@ -160,8 +160,8 @@ describe('finishRegistration', () => {
 
     const result = await finishRegistration({
       response: makeRegistrationResponse(FIXED_CHALLENGE) as never,
-      expectedRPID: 'proofline.app',
-      expectedOrigin: 'https://proofline.app',
+      expectedRPID: 'proofline.web.app',
+      expectedOrigin: 'https://proofline.web.app',
       challengeStore: store,
     });
 
@@ -177,8 +177,8 @@ describe('finishRegistration', () => {
     const store = new InMemoryChallengeStore();
     const result = await finishRegistration({
       response: makeRegistrationResponse('unknown-challenge') as never,
-      expectedRPID: 'proofline.app',
-      expectedOrigin: 'https://proofline.app',
+      expectedRPID: 'proofline.web.app',
+      expectedOrigin: 'https://proofline.web.app',
       challengeStore: store,
     });
     expect(result.ok).toBe(false);
@@ -192,7 +192,7 @@ describe('finishRegistration', () => {
       challenge: FIXED_CHALLENGE,
       userId: 'user-1',
       purpose: 'registration',
-      rpId: 'proofline.app',
+      rpId: 'proofline.web.app',
       createdAt: now,
       expiresAt: now + 60_000,
       consumed: true,
@@ -200,8 +200,8 @@ describe('finishRegistration', () => {
 
     const result = await finishRegistration({
       response: makeRegistrationResponse(FIXED_CHALLENGE) as never,
-      expectedRPID: 'proofline.app',
-      expectedOrigin: 'https://proofline.app',
+      expectedRPID: 'proofline.web.app',
+      expectedOrigin: 'https://proofline.web.app',
       challengeStore: store,
     });
     expect(result.ok).toBe(false);
@@ -215,7 +215,7 @@ describe('finishRegistration', () => {
       challenge: FIXED_CHALLENGE,
       userId: 'user-1',
       purpose: 'registration',
-      rpId: 'proofline.app',
+      rpId: 'proofline.web.app',
       createdAt: past - 60_000,
       expiresAt: past,
       consumed: false,
@@ -223,8 +223,8 @@ describe('finishRegistration', () => {
 
     const result = await finishRegistration({
       response: makeRegistrationResponse(FIXED_CHALLENGE) as never,
-      expectedRPID: 'proofline.app',
-      expectedOrigin: 'https://proofline.app',
+      expectedRPID: 'proofline.web.app',
+      expectedOrigin: 'https://proofline.web.app',
       challengeStore: store,
     });
     expect(result.ok).toBe(false);
@@ -238,7 +238,7 @@ describe('finishRegistration', () => {
       challenge: FIXED_CHALLENGE,
       userId: 'user-1',
       purpose: 'registration',
-      rpId: 'proofline.app',
+      rpId: 'proofline.web.app',
       createdAt: now,
       expiresAt: now + 60_000,
       consumed: false,
@@ -249,8 +249,8 @@ describe('finishRegistration', () => {
 
     const result = await finishRegistration({
       response: makeRegistrationResponse(FIXED_CHALLENGE) as never,
-      expectedRPID: 'proofline.app',
-      expectedOrigin: 'https://proofline.app',
+      expectedRPID: 'proofline.web.app',
+      expectedOrigin: 'https://proofline.web.app',
       challengeStore: store,
     });
     expect(result.ok).toBe(false);
@@ -264,7 +264,7 @@ describe('finishRegistration', () => {
       challenge: FIXED_CHALLENGE,
       userId: 'user-1',
       purpose: 'registration',
-      rpId: 'proofline.app',
+      rpId: 'proofline.web.app',
       createdAt: now,
       expiresAt: now + 60_000,
       consumed: false,
@@ -275,8 +275,8 @@ describe('finishRegistration', () => {
 
     const result = await finishRegistration({
       response: makeRegistrationResponse(FIXED_CHALLENGE) as never,
-      expectedRPID: 'proofline.app',
-      expectedOrigin: 'https://proofline.app',
+      expectedRPID: 'proofline.web.app',
+      expectedOrigin: 'https://proofline.web.app',
       challengeStore: store,
     });
     expect(result.ok).toBe(false);
@@ -291,7 +291,7 @@ describe('startAssertion', () => {
     const store = new InMemoryChallengeStore();
     await startAssertion({
       userId: 'user-1',
-      rpId: 'proofline.app',
+      rpId: 'proofline.web.app',
       userVerification: 'preferred',
       challengeStore: store,
     });
@@ -306,7 +306,7 @@ describe('finishAssertion', () => {
     const store = new InMemoryChallengeStore();
     await startAssertion({
       userId: 'user-1',
-      rpId: 'proofline.app',
+      rpId: 'proofline.web.app',
       userVerification: 'preferred',
       challengeStore: store,
     });
@@ -314,8 +314,8 @@ describe('finishAssertion', () => {
 
     const result = await finishAssertion({
       response: makeAuthenticationResponse(FIXED_CHALLENGE) as never,
-      expectedRPID: 'proofline.app',
-      expectedOrigin: 'https://proofline.app',
+      expectedRPID: 'proofline.web.app',
+      expectedOrigin: 'https://proofline.web.app',
       storedPublicKey: STORED_PUBLIC_KEY,
       storedSignCount: 0,
       challengeStore: store,
@@ -335,7 +335,7 @@ describe('finishAssertion', () => {
       challenge: FIXED_CHALLENGE,
       userId: 'user-1',
       purpose: 'assertion',
-      rpId: 'proofline.app',
+      rpId: 'proofline.web.app',
       createdAt: now,
       expiresAt: now + 60_000,
       consumed: false,
@@ -345,8 +345,8 @@ describe('finishAssertion', () => {
 
     const result = await finishAssertion({
       response: makeAuthenticationResponse(FIXED_CHALLENGE) as never,
-      expectedRPID: 'proofline.app',
-      expectedOrigin: 'https://proofline.app',
+      expectedRPID: 'proofline.web.app',
+      expectedOrigin: 'https://proofline.web.app',
       storedPublicKey: STORED_PUBLIC_KEY,
       storedSignCount: 5,
       challengeStore: store,
@@ -359,7 +359,7 @@ describe('finishAssertion', () => {
     const store = new InMemoryChallengeStore();
     await startAssertion({
       userId: 'user-1',
-      rpId: 'proofline.app',
+      rpId: 'proofline.web.app',
       userVerification: 'discouraged',
       challengeStore: store,
     });
@@ -367,8 +367,8 @@ describe('finishAssertion', () => {
 
     const result = await finishAssertion({
       response: makeAuthenticationResponse(FIXED_CHALLENGE) as never,
-      expectedRPID: 'proofline.app',
-      expectedOrigin: 'https://proofline.app',
+      expectedRPID: 'proofline.web.app',
+      expectedOrigin: 'https://proofline.web.app',
       storedPublicKey: STORED_PUBLIC_KEY,
       storedSignCount: 0,
       challengeStore: store,
@@ -380,8 +380,8 @@ describe('finishAssertion', () => {
     const store = new InMemoryChallengeStore();
     const result = await finishAssertion({
       response: makeAuthenticationResponse('ghost-challenge') as never,
-      expectedRPID: 'proofline.app',
-      expectedOrigin: 'https://proofline.app',
+      expectedRPID: 'proofline.web.app',
+      expectedOrigin: 'https://proofline.web.app',
       storedPublicKey: STORED_PUBLIC_KEY,
       storedSignCount: 0,
       challengeStore: store,

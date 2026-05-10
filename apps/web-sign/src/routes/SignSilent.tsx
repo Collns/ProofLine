@@ -160,7 +160,7 @@ export function SignSilent() {
       try {
         const assertion = await startAssertionCeremony({
           challenge: serverChallenge,
-          rpId: 'proofline.app', // TODO(PFL-RP-ID): align with server's rpId before stage demo.
+          rpId: 'proofline.web.app',
           allowCredentials: [{ type: 'public-key', id: params.credentialId }],
           userVerification: 'discouraged',
           timeout: 30_000,
