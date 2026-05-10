@@ -257,6 +257,13 @@ importers:
         version: 2.1.9(@types/node@25.6.2)(lightningcss@1.32.0)
 
   packages/kyb:
+    dependencies:
+      '@proofline/types':
+        specifier: workspace:*
+        version: link:../types
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
     devDependencies:
       typescript:
         specifier: 'catalog:'
