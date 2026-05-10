@@ -137,7 +137,7 @@ export function makeSignSilentHandler(ctx: PolicyContext) {
     const challengeId = uuidv7();
     const challenge: WebAuthnChallenge = {
       challenge: Buffer.from(canonicalBytes).toString("base64url"),
-      rpId: "proofline.app",
+      rpId: "proofline.web.app",
       allowCredentials: [{ type: "public-key", id: body.credentialId }],
       userVerification: "discouraged",  // ← the ONLY thing the session changes
       timeout: 30_000,                  // shorter — no user interaction needed

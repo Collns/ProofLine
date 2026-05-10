@@ -192,7 +192,7 @@ export function SignStart() {
       // userVerification: 'required' — the actual biometric prompt.
       const assertion = await startAssertionCeremony({
         challenge: serverChallenge,
-        rpId: 'proofline.app', // TODO(PFL-RP-ID): match server's rpId; needs real domain wiring before stage demo.
+        rpId: 'proofline.web.app',
         allowCredentials: [{ type: 'public-key', id: params.credentialId }],
         userVerification: 'required',
         timeout: 60_000,
