@@ -16,5 +16,8 @@
     "jsdom": "^25.0.1",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@proofline/types": "workspace:*"
   }
 }
