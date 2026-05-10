@@ -129,9 +129,6 @@ importers:
       '@proofline/email':
         specifier: workspace:*
         version: link:../../packages/email
-      '@proofline/onboarding':
-        specifier: workspace:*
-        version: link:../../packages/onboarding
       '@proofline/policy':
         specifier: workspace:*
         version: link:../../packages/policy
