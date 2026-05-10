@@ -4,3 +4,4 @@ export * from './bilateral.js';
 export * from './role-credential.js';
 export * from './envelope.js';
 export * from './session.js';
+export * from './signing.types.js';
