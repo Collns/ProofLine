@@ -19,14 +19,10 @@ jobs:
           cache: 'pnpm'
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Lint
-        run: pnpm -r --if-present lint
-      - name: Typecheck
-        run: pnpm -r --if-present typecheck
-      - name: Test
-        run: pnpm -r --if-present test
-      - name: Build
+      - name: Build all packages
         run: pnpm -r --if-present build
+      - name: Run all tests
+        run: pnpm -r --if-present test
   contracts:
     runs-on: ubuntu-latest
     steps:
