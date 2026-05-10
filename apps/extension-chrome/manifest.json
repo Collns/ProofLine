@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "ProofLine",
+  "version": "0.0.0",
+  "description": "Cryptographic identity layer for B2B email",
+  "permissions": ["storage", "scripting", "activeTab"],
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "https://app.proofline.web.app/*"
+  ],
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["dist/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
