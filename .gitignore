@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+.env
+.env*.local
+!.env.example
+.firebase/
+.runtimeconfig.json
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+apps/extension-chrome/dist/
