@@ -20,14 +20,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Lint
-        run: pnpm -r lint --if-present
+        run: pnpm -r --if-present lint
       - name: Typecheck
-        run: pnpm -r typecheck --if-present
+        run: pnpm -r --if-present typecheck
       - name: Test
-        run: pnpm -r test --if-present
+        run: pnpm -r --if-present test
       - name: Build
-        run: pnpm -r build --if-present
-
+        run: pnpm -r --if-present build
   contracts:
     runs-on: ubuntu-latest
     steps:
