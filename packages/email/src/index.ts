@@ -6,3 +6,4 @@ export * from './types.js';
 
 export * from './banner/render.js';
 export * from './banner/states.js';
+export * from './banner.js';
