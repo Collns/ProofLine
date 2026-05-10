@@ -309,9 +309,15 @@ importers:
       '@proofline/crypto':
         specifier: workspace:*
         version: link:../crypto
+      '@proofline/policy':
+        specifier: workspace:*
+        version: link:../policy
       '@proofline/types':
         specifier: workspace:*
         version: link:../types
+      '@proofline/webauthn':
+        specifier: workspace:*
+        version: link:../webauthn
       jose:
         specifier: 6.2.3
         version: 6.2.3

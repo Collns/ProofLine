@@ -18,7 +18,9 @@
     },
     "dependencies": {
         "@proofline/crypto": "workspace:*",
+        "@proofline/policy": "workspace:*",
         "@proofline/types": "workspace:*",
+        "@proofline/webauthn": "workspace:*",
         "jose": "6.2.3",
         "zod": "catalog:"
     }
