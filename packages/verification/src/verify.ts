@@ -1,5 +1,5 @@
 import type { SignedEnvelope } from '@proofline/types';
-import type { RegistryView, VerificationResult, CheckFailure, VerifiedSignerInfo } from './types.js';
+import type { RegistryView, VerificationResult, CheckFailure, VerifiedSignerInfo, Company } from './types.js';
 import type { ResolvedSigner } from './checks.js';
 import {
   checkPayloadIntegrity,
@@ -19,6 +19,19 @@ export interface VerifyEnvelopeInput {
 
 function rejected(failure: CheckFailure): VerificationResult {
   return { ok: false, state: 'rejected', code: failure.code, detail: failure.detail };
+}
+
+function suspectedSpoof(company: Company, detail: string): VerificationResult {
+  return {
+    ok: true,
+    state: 'suspected_spoof',
+    claimedCompany: {
+      companyId: company.companyId,
+      domain: company.domain,
+      legalName: company.legalName,
+    },
+    detail,
+  };
 }
 
 function toVerifiedSignerInfo(s: ResolvedSigner): VerifiedSignerInfo {
@@ -47,7 +60,15 @@ export async function verifyEnvelope(input: VerifyEnvelopeInput): Promise<Verifi
   if (!c2.ok) return rejected(c2);
 
   const c3 = await checkSignatures(envelope, c2.signers);
-  if (!c3.ok) return rejected(c3);
+  if (!c3.ok) {
+    // F-VER-07: signer identity resolved to a verified ProofLine company,
+    // but the signature itself didn't verify — treat as spoof attempt
+    // against a known domain rather than a generic rejection.
+    if (c3.code === 'SIGNATURE_INVALID' && c2.signers.length > 0) {
+      return suspectedSpoof(c2.signers[0].company, c3.detail);
+    }
+    return rejected(c3);
+  }
 
   const c4 = await checkRoleCredentials(envelope, c2.signers, c2.companies);
   if (!c4.ok) return rejected(c4);
