@@ -1,0 +1,19 @@
+﻿{
+    "name":  "@proofline/bilateral",
+    "version":  "0.0.0",
+    "private":  true,
+    "type":  "module",
+    "main":  "dist/index.js",
+    "types":  "dist/index.d.ts",
+    "scripts":  {
+                    "build":  "tsc",
+                    "typecheck":  "tsc --noEmit",
+                    "lint":  "tsc --noEmit",
+                    "test":  "vitest run",
+                    "clean":  "rm -rf dist"
+                },
+    "devDependencies":  {
+                            "typescript":  "catalog:",
+                            "vitest":  "catalog:"
+                        }
+}
