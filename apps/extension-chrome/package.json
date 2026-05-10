@@ -18,6 +18,8 @@
     "vitest": "catalog:"
   },
   "dependencies": {
-    "@proofline/types": "workspace:*"
+    "@proofline/canonical": "workspace:*",
+    "@proofline/types": "workspace:*",
+    "zod": "catalog:"
   }
 }

@@ -4,6 +4,19 @@
 // Discriminated by `type`. The content script sends; the SW responds.
 // New variants get added here so both sides stay in sync.
 
+import type { EmailPayload } from '@proofline/types';
+
+// Fields the content script can extract from Gmail's compose DOM.
+// `from` and `companyId` are filled by the background SW from auth
+// state — never trust the page DOM for the user's own identity.
+export type PartialEmailPayload = Omit<EmailPayload, 'from' | 'companyId'>;
+
+export type ExtractError =
+  | { code: 'EMPTY_TO' }
+  | { code: 'INVALID_EMAIL'; field: 'to' | 'cc' | 'bcc'; value: string }
+  | { code: 'EMPTY_SUBJECT' }
+  | { code: 'DOM_UNEXPECTED'; reason: string; domSnapshot: string };
+
 export interface SignButtonClickedMessage {
   type: 'SIGN_BUTTON_CLICKED';
   composeId: string | null;
@@ -13,13 +26,28 @@ export interface PingMessage {
   type: 'PING';
 }
 
+export interface PayloadExtractedMessage {
+  type: 'PAYLOAD_EXTRACTED';
+  composeId: string;
+  canonicalHashHex: string;
+  partialPayload: PartialEmailPayload;
+}
+
+export interface ExtractionFailedMessage {
+  type: 'EXTRACTION_FAILED';
+  composeId: string;
+  error: ExtractError;
+}
+
 export type ContentToBackgroundMessage =
   | SignButtonClickedMessage
-  | PingMessage;
+  | PingMessage
+  | PayloadExtractedMessage
+  | ExtractionFailedMessage;
 
 export interface BackgroundAck {
   ok: true;
-  stub?: boolean;
+  stub?: boolean | 'extracted';
   receivedType: ContentToBackgroundMessage['type'];
 }
 
@@ -33,6 +61,8 @@ export type BackgroundResponse = BackgroundAck | BackgroundError;
 const KNOWN_TYPES: ReadonlySet<ContentToBackgroundMessage['type']> = new Set([
   'SIGN_BUTTON_CLICKED',
   'PING',
+  'PAYLOAD_EXTRACTED',
+  'EXTRACTION_FAILED',
 ]);
 
 export function isContentToBackgroundMessage(
