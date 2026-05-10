@@ -54,3 +54,21 @@ this in after running the deploy script (PFL-008).
 - Technical spec: `docs/TDD.md`
 - Visual reference: `apps/design-prototype/` (run with 
   `pnpm --filter @proofline/design-prototype dev` → localhost:3100)
+
+## Deployed Contracts
+
+### Base Sepolia (testnet, current)
+
+| Contract | Address | Deploy Block | Tx |
+|---|---|---|---|
+| ProofLineAnchor | `0x079D64345af444Bc4cd89a298A00f8E5e302d7D0` | 41312740 | [view on Basescan](https://sepolia.basescan.org/tx/0xfe9d4e1ef70b109bac72ba08633e12846f49e1fc661805f84d119cb7b4f40549) |
+
+The deployer key is the contract owner and the only address authorized to call `anchorRoot()`. Engineers fetch the deployer key from the team's shared vault (1Password) and add the following to `.env.local`:
+ANCHOR_CONTRACT_ADDRESS=0x079D64345af444Bc4cd89a298A00f8E5e302d7D0
+ANCHOR_CHAIN_ID=84532
+ANCHOR_DEPLOY_BLOCK=41312740
+ANCHOR_DEPLOY_TX=0xfe9d4e1ef70b109bac72ba08633e12846f49e1fc661805f84d119cb7b4f40549
+DEPLOYER_PRIVATE_KEY=<from 1Password>
+BASE_SEPOLIA_RPC=https://sepolia.base.org
+
+**DO NOT redeploy.** This on-chain address is canonical for the team.
