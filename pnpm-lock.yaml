@@ -171,10 +171,50 @@ importers:
         version: 2.1.9(@types/node@25.6.2)(jsdom@25.0.1)(lightningcss@1.32.0)
 
   apps/web-admin:
+    dependencies:
+      '@proofline/webauthn':
+        specifier: workspace:*
+        version: link:../../packages/webauthn
+      '@stripe/stripe-js':
+        specifier: ^4.0.0
+        version: 4.10.0
+      react:
+        specifier: ^19.0.1
+        version: 19.2.6
+      react-dom:
+        specifier: ^19.0.1
+        version: 19.2.6(react@19.2.6)
+      react-router-dom:
+        specifier: 7.15.0
+        version: 7.15.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
     devDependencies:
+      '@tailwindcss/vite':
+        specifier: ^4.1.14
+        version: 4.3.0(vite@6.4.2(@types/node@25.6.2)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.21.0))
+      '@types/react':
+        specifier: 19.2.14
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: 19.2.3
+        version: 19.2.3(@types/react@19.2.14)
+      '@vitejs/plugin-react':
+        specifier: ^5.0.4
+        version: 5.2.0(vite@6.4.2(@types/node@25.6.2)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.21.0))
+      autoprefixer:
+        specifier: ^10.4.21
+        version: 10.5.0(postcss@8.5.14)
+      postcss:
+        specifier: 8.5.14
+        version: 8.5.14
+      tailwindcss:
+        specifier: ^4.1.14
+        version: 4.3.0
       typescript:
         specifier: 'catalog:'
         version: 5.8.3
+      vite:
+        specifier: ^6.2.3
+        version: 6.4.2(@types/node@25.6.2)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.21.0)
       vitest:
         specifier: 'catalog:'
         version: 2.1.9(@types/node@25.6.2)(jsdom@25.0.1)(lightningcss@1.32.0)
@@ -1832,6 +1872,10 @@ packages:
 
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
+
+  '@stripe/stripe-js@4.10.0':
+    resolution: {integrity: sha512-KrMOL+sH69htCIXCaZ4JluJ35bchuCCznyPyrbN8JXSGQfwBI1SuIEMZNwvy8L8ykj29t6sa5BAAiL7fNoLZ8A==}
+    engines: {node: '>=12.16'}
 
   '@tailwindcss/node@4.3.0':
     resolution: {integrity: sha512-aFb4gUhFOgdh9AXo4IzBEOzBkkAxm9VigwDJnMIYv3lcfXCJVesNfbEaBl4BNgVRyid92AmdviqwBUBRKSeY3g==}
@@ -4822,6 +4866,8 @@ snapshots:
   '@simplewebauthn/types@10.0.0': {}
 
   '@stablelib/base64@1.0.1': {}
+
+  '@stripe/stripe-js@4.10.0': {}
 
   '@tailwindcss/node@4.3.0':
     dependencies:
