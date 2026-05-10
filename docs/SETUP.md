@@ -34,6 +34,20 @@ Both engineers complete this before starting Phase 2 work.
 - Push, open PR, wait for CI green, squash merge
 - Pull main: `git fetch --prune && git checkout main && git pull`
 
+## Foundry / on-chain setup
+
+Foundry runs in WSL on Windows. After clone, both engineers run from 
+WSL inside the contracts/ directory:
+
+    cd /mnt/c/<path-to-repo>/contracts
+    forge install foundry-rs/forge-std
+    forge build
+    forge test
+
+All forge tests should pass green. The deployed Anchor contract 
+address is stored in .env.local as ANCHOR_CONTRACT_ADDRESS — fill 
+this in after running the deploy script (PFL-008).
+
 ## Help
 - Architecture rules: `docs/ARCHITECTURE.md`
 - Product spec: `docs/PRD.md`
