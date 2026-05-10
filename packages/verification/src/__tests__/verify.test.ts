@@ -33,12 +33,13 @@ describe('happy paths', () => {
     const result = await verifyEnvelope({ envelope, registry: s.registry });
 
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.state).toBe('verified');
+    if (result.ok && result.state === 'verified') {
       expect(result.signers).toHaveLength(1);
       expect(result.signers[0].userId).toBe('user-a');
       expect(result.signers[0].companyLegalName).toBe('Company A Inc.');
       expect(result.anchor.root).toBe(ANCHOR_ROOT);
+    } else {
+      throw new Error(`expected verified, got ${JSON.stringify(result)}`);
     }
   });
 
@@ -57,6 +58,8 @@ describe('happy paths', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.state).toBe('verified');
+    } else {
+      throw new Error(`expected verified, got ${JSON.stringify(result)}`);
     }
   });
 
@@ -77,9 +80,10 @@ describe('happy paths', () => {
     const result = await verifyEnvelope({ envelope, registry: s.registry });
 
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.state).toBe('verified');
+    if (result.ok && result.state === 'verified') {
       expect(result.signers).toHaveLength(2);
+    } else {
+      throw new Error(`expected verified, got ${JSON.stringify(result)}`);
     }
   });
 
@@ -102,9 +106,10 @@ describe('happy paths', () => {
     const result = await verifyEnvelope({ envelope, registry: s.registry });
 
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.state).toBe('bilateral');
+    if (result.ok && result.state === 'bilateral') {
       expect(result.signers).toHaveLength(2);
+    } else {
+      throw new Error(`expected bilateral, got ${JSON.stringify(result)}`);
     }
   });
 });
@@ -225,7 +230,7 @@ describe('CREDENTIAL_REVOKED', () => {
 });
 
 describe('SIGNATURE_INVALID', () => {
-  it('rejects when signature is over different bytes', async () => {
+  it('promotes to suspected_spoof when signature is over different bytes for a verified-domain signer', async () => {
     const s = buildScenario();
     const payload = makeEmailPayload();
     const envelope = buildEnvelope({
@@ -234,7 +239,8 @@ describe('SIGNATURE_INVALID', () => {
       signerSpecs: [{ userId: 'user-a', credentialId: 'cred-a', privateKey: s.userAKp.privateKey }],
       anchorRoot: ANCHOR_ROOT,
     });
-    // Replace sig with a sig over garbage bytes
+    // Replace sig with a sig over garbage bytes — signer identity still
+    // resolves to verified company-a, so per F-VER-07 result is suspected_spoof.
     const badSig = signBytes(s.userAKp.privateKey, new Uint8Array(32).fill(0));
     const tampered = {
       ...envelope,
@@ -243,8 +249,8 @@ describe('SIGNATURE_INVALID', () => {
 
     const result = await verifyEnvelope({ envelope: tampered as never, registry: s.registry });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe('SIGNATURE_INVALID');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.state).toBe('suspected_spoof');
   });
 });
 
