@@ -136,6 +136,9 @@ importers:
 
   apps/functions:
     dependencies:
+      '@proofline/anchoring':
+        specifier: workspace:*
+        version: link:../../packages/anchoring
       '@proofline/email':
         specifier: workspace:*
         version: link:../../packages/email

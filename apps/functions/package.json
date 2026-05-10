@@ -21,6 +21,7 @@
         "vitest": "catalog:"
     },
     "dependencies": {
+        "@proofline/anchoring": "workspace:*",
         "@proofline/email": "workspace:*",
         "@proofline/policy": "workspace:*",
         "@proofline/types": "workspace:*",
