@@ -27,7 +27,6 @@ jobs:
         run: pnpm -r --if-present test
       - name: Build
         run: pnpm -r --if-present build
-
   contracts:
     runs-on: ubuntu-latest
     steps:
