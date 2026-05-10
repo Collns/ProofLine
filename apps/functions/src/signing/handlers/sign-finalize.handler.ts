@@ -9,7 +9,7 @@ import * as express from "express";
 import { v7 as uuidv7 } from "uuid";
 
 import { validatePolicy } from "@proofline/policy";
-import { renderBannerFromEnvelope } from "@proofline/email/banner";
+import { renderBannerFromEnvelope } from "@proofline/email";
 import {
   EmailPayload,
   PolicyContext,
