@@ -17,6 +17,18 @@ export default defineConfig({
         __dirname,
         "../../packages/types/src/index.ts"
       ),
+      "@proofline/verification": path.resolve(
+        __dirname,
+        "../../packages/verification/src/index.ts"
+      ),
+      "@proofline/anchoring": path.resolve(
+        __dirname,
+        "../../packages/anchoring/src/index.ts"
+      ),
+      "@proofline/canonical": path.resolve(
+        __dirname,
+        "../../packages/canonical/src/index.ts"
+      ),
     },
   },
 });

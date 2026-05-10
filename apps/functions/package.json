@@ -21,9 +21,12 @@
         "vitest": "catalog:"
     },
     "dependencies": {
+        "@proofline/anchoring": "workspace:*",
+        "@proofline/canonical": "workspace:*",
         "@proofline/email": "workspace:*",
         "@proofline/policy": "workspace:*",
         "@proofline/types": "workspace:*",
+        "@proofline/verification": "workspace:*",
         "express": "^4.21.2",
         "firebase-admin": "13.9.0",
         "firebase-functions": "7.2.5",
