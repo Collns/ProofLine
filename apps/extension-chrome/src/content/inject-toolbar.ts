@@ -10,6 +10,8 @@ import {
   readComposeId,
 } from './shared.js';
 import { findToolbarWithSelector } from './gmail-detector.js';
+import { extractPayload } from './extract-payload.js';
+import { canonicalizeAndHash } from './canonical-bridge.js';
 
 const BUTTON_LABEL = 'Sign with ProofLine';
 const FALLBACK_TIMEOUT_MS = 3000;
@@ -37,20 +39,12 @@ function buildButton(compose: Element): HTMLButtonElement {
   btn.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    onClick(compose);
+    void onClick(compose);
   });
   return btn;
 }
 
-function onClick(compose: Element): void {
-  const message: ContentToBackgroundMessage = {
-    type: 'SIGN_BUTTON_CLICKED',
-    composeId: readComposeId(compose),
-  };
-  log('content', 'sign button clicked', message);
-
-  // Real signing wires later (PFL-044/047). For now we round-trip a
-  // message to the SW so we can prove the channel works in DevTools.
+function sendToBackground(message: ContentToBackgroundMessage): void {
   try {
     chrome.runtime.sendMessage(message, (response: BackgroundResponse) => {
       if (chrome.runtime.lastError) {
@@ -61,6 +55,59 @@ function onClick(compose: Element): void {
     });
   } catch (err) {
     warn('content', 'sendMessage threw', err);
+  }
+}
+
+async function onClick(compose: Element): Promise<void> {
+  // SIGN_BUTTON_CLICKED's composeId may be null (compose with no draft id
+  // yet). Extraction messages carry a non-null id, so synthesize one for
+  // routing if Gmail hasn't given us a draft id.
+  const detectedId = readComposeId(compose);
+  const correlationId =
+    detectedId ?? `synthetic-${crypto.randomUUID()}`;
+
+  // Keep SIGN_BUTTON_CLICKED for backwards compatibility with PFL-042.
+  // PFL-044 will collapse this once the live ceremony lands.
+  sendToBackground({
+    type: 'SIGN_BUTTON_CLICKED',
+    composeId: detectedId,
+  });
+
+  const result = extractPayload(compose);
+  if (!result.ok) {
+    warn('content', 'payload extraction failed', result.error.code);
+    sendToBackground({
+      type: 'EXTRACTION_FAILED',
+      composeId: correlationId,
+      error: result.error,
+    });
+    return;
+  }
+
+  try {
+    const { payloadHashHex } = await canonicalizeAndHash(result.payload);
+    log('content', 'payload extracted', {
+      composeId: correlationId,
+      payloadHashHex,
+      to: result.payload.to,
+    });
+    sendToBackground({
+      type: 'PAYLOAD_EXTRACTED',
+      composeId: correlationId,
+      canonicalHashHex: payloadHashHex,
+      partialPayload: result.payload,
+    });
+  } catch (err) {
+    warn('content', 'canonicalize/hash threw', err);
+    sendToBackground({
+      type: 'EXTRACTION_FAILED',
+      composeId: correlationId,
+      error: {
+        code: 'DOM_UNEXPECTED',
+        reason: `canonicalize/hash threw: ${String(err)}`,
+        domSnapshot: '',
+      },
+    });
   }
 }
 

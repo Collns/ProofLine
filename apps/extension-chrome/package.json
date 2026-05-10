@@ -16,5 +16,10 @@
     "jsdom": "^25.0.1",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@proofline/canonical": "workspace:*",
+    "@proofline/types": "workspace:*",
+    "zod": "catalog:"
   }
 }
