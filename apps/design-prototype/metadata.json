@@ -1,0 +1,6 @@
+{
+  "name": "ProofLine",
+  "description": "Cryptographic identity layer for B2B financial communications. Preventing wire fraud through hardware-backed signing and on-chain anchoring.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

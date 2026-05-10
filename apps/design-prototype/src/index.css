@@ -1,0 +1,60 @@
+@import "@fontsource/geist-sans";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-sans/600.css";
+@import "@fontsource/geist-mono";
+@import "@fontsource/instrument-serif";
+@import "@fontsource/instrument-serif/400-italic.css";
+@import "@fontsource/jetbrains-mono";
+
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Geist Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Instrument Serif", ui-serif, system-ui, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-navy-900: #0B1F3A;
+  --color-navy-800: #0F2747;
+  --color-navy-700: #16315A;
+  --color-navy-50: #EEF2F8;
+
+  --color-ink-900: #0A0E14;
+  --color-ink-800: #10151D;
+  --color-ink-700: #161C26;
+
+  --color-proof-blue-600: #0D6EFD;
+  --color-proof-blue-500: #2A82FF;
+  
+  --color-proof-teal-600: #0891B2;
+  
+  --color-proof-green-600: #0F9D58;
+  
+  --color-proof-emerald-700: #047857;
+  --color-proof-emerald-400: #34D399;
+  
+  --color-proof-amber-700: #B45309;
+  --color-proof-amber-500: #F59E0B;
+  
+  --color-proof-red-600: #D93025;
+  --color-proof-red-500: #EF4444;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+}
+
+@layer base {
+  body {
+    @apply bg-white text-gray-900 antialiased;
+    font-feature-settings: "ss01", "ss02", "cv01", "cv11";
+  }
+}
+
+.grid-background {
+  background-image: linear-gradient(to right, rgba(255,255,255,0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.05) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse at center, black, transparent 80%);
+}
+
