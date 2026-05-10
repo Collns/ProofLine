@@ -325,9 +325,6 @@ importers:
 
   packages/webauthn:
     dependencies:
-      '@proofline/crypto':
-        specifier: workspace:*
-        version: link:../crypto
       '@proofline/types':
         specifier: workspace:*
         version: link:../types

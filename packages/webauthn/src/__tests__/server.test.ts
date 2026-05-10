@@ -8,10 +8,11 @@ vi.mock('@simplewebauthn/server', () => ({
   verifyAuthenticationResponse: vi.fn(),
 }));
 
-// Mock @proofline/crypto so we control the generated challenge bytes
-vi.mock('@proofline/crypto', () => ({
-  randomBytes: vi.fn(),
-}));
+// Mock node:crypto so we control the generated challenge bytes
+vi.mock('node:crypto', async () => {
+  const actual = await vi.importActual<typeof import('node:crypto')>('node:crypto');
+  return { ...actual, randomBytes: vi.fn(actual.randomBytes) };
+});
 
 import {
   generateRegistrationOptions,
@@ -19,7 +20,7 @@ import {
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
 } from '@simplewebauthn/server';
-import { randomBytes } from '@proofline/crypto';
+import { randomBytes } from 'node:crypto';
 import { InMemoryChallengeStore } from '../challenges.js';
 import {
   startRegistration,
@@ -104,7 +105,7 @@ function mockVerifyAuthenticationSuccess(newCounter = 1) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(randomBytes).mockReturnValue(FIXED_BYTES);
+  vi.mocked(randomBytes as (size: number) => Buffer).mockReturnValue(Buffer.from(FIXED_BYTES));
   vi.mocked(generateRegistrationOptions).mockResolvedValue({
     challenge: FIXED_CHALLENGE,
     rp: { name: 'ProofLine', id: 'proofline.app' },

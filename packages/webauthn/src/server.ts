@@ -15,7 +15,11 @@ import type {
   AuthenticationResponseJSON,
   AuthenticatorDevice,
 } from '@simplewebauthn/types';
-import { randomBytes } from '@proofline/crypto';
+import { randomBytes as nodeRandomBytes } from 'node:crypto';
+
+function randomBytes(length: number): Uint8Array {
+  return new Uint8Array(nodeRandomBytes(length));
+}
 import type { ChallengeStore, RegistrationResult } from './types.js';
 
 const CHALLENGE_TTL_MS = 60_000;
