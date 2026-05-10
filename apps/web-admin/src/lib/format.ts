@@ -64,3 +64,29 @@ export function normalizeEin(input: string): string {
   if (digits.length !== 9) return input;
   return `${digits.slice(0, 2)}-${digits.slice(2)}`;
 }
+
+// ── Relative time ────────────────────────────────────────────────────────────
+
+const SECOND_MS = 1000;
+const MINUTE_MS = 60 * SECOND_MS;
+const HOUR_MS   = 60 * MINUTE_MS;
+const DAY_MS    = 24 * HOUR_MS;
+const MONTH_MS  = 30 * DAY_MS;
+const YEAR_MS   = 365 * DAY_MS;
+
+export function relativeTime(epochMs: number, now: number = Date.now()): string {
+  const diff = epochMs - now;
+  const abs  = Math.abs(diff);
+
+  let unit: Intl.RelativeTimeFormatUnit;
+  let value: number;
+  if (abs < MINUTE_MS)      { unit = 'second'; value = Math.round(diff / SECOND_MS); }
+  else if (abs < HOUR_MS)   { unit = 'minute'; value = Math.round(diff / MINUTE_MS); }
+  else if (abs < DAY_MS)    { unit = 'hour';   value = Math.round(diff / HOUR_MS);   }
+  else if (abs < MONTH_MS)  { unit = 'day';    value = Math.round(diff / DAY_MS);    }
+  else if (abs < YEAR_MS)   { unit = 'month';  value = Math.round(diff / MONTH_MS);  }
+  else                      { unit = 'year';   value = Math.round(diff / YEAR_MS);   }
+
+  const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+  return rtf.format(value, unit);
+}
