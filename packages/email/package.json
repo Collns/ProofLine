@@ -1,5 +1,5 @@
 {
-    "name": "@proofline/email",
+    "name": "@proofline/functions",
     "version": "0.0.0",
     "private": true,
     "type": "module",
@@ -13,12 +13,21 @@
         "clean": "rm -rf dist"
     },
     "devDependencies": {
+        "@types/express": "^4.17.25",
+        "@types/supertest": "7.2.0",
+        "@types/uuid": "11.0.0",
+        "supertest": "7.2.2",
         "typescript": "catalog:",
         "vitest": "catalog:"
     },
     "dependencies": {
+        "@proofline/email": "workspace:*",
+        "@proofline/policy": "workspace:*",
         "@proofline/types": "workspace:*",
-        "resend": "6.12.3",
-        "zod": "catalog:"
+        "express": "^4.21.2",
+        "firebase-admin": "13.9.0",
+        "firebase-functions": "7.2.5",
+        "uuid": "14.0.0",
+        "zod": "4.4.3"
     }
 }
