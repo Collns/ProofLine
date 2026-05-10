@@ -95,6 +95,12 @@ export type VerificationResult =
       anchor: Anchor;
     }
   | {
+      ok: true;
+      state: 'suspected_spoof';
+      claimedCompany: { companyId: string; domain: string; legalName: string };
+      detail: string;
+    }
+  | {
       ok: false;
       state: 'rejected';
       code: VerificationFailureCode;
