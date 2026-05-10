@@ -20,11 +20,13 @@
     },
     "dependencies": {
         "@proofline/email": "workspace:*",
+        "@proofline/onboarding": "workspace:*",
         "@proofline/policy": "workspace:*",
         "@proofline/types": "workspace:*",
         "express": "^4.21.2",
         "firebase-admin": "13.9.0",
         "firebase-functions": "7.2.5",
-        "uuid": "14.0.0"
+        "uuid": "14.0.0",
+        "zod": "catalog:"
     }
 }
