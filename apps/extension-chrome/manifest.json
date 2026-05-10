@@ -1,35 +1,28 @@
 {
   "manifest_version": 3,
   "name": "ProofLine",
-  "version": "0.1.0",
-  "description": "Cryptographic signatures for Gmail",
-  "permissions": ["storage", "scripting", "activeTab"],
+  "version": "0.0.0",
+  "description": "Cryptographic identity layer for B2B email",
+  "permissions": ["storage", "scripting", "activeTab", "tabs"],
   "host_permissions": [
     "https://mail.google.com/*",
     "https://app.proofline.web.app/*"
   ],
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "dist/background.js",
     "type": "module"
   },
   "content_scripts": [
     {
       "matches": ["https://mail.google.com/*"],
-      "js": ["content.js"],
+      "js": ["dist/content.js"],
       "run_at": "document_idle"
     }
   ],
   "action": {
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16": "icon-16.png",
-      "48": "icon-48.png",
-      "128": "icon-128.png"
-    }
+    "default_popup": "public/popup.html"
   },
-  "icons": {
-    "16": "icon-16.png",
-    "48": "icon-48.png",
-    "128": "icon-128.png"
+  "externally_connectable": {
+    "matches": ["https://app.proofline.web.app/*"]
   }
 }
