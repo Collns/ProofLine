@@ -38,8 +38,11 @@ describe('makeStubCryptoProvider', () => {
     const { handle, publicKey } = provider.generateKeyPair();
     const message = new TextEncoder().encode('hello proofline');
     const sig = await provider.sign(handle, message);
-    // Flip one character in the signature
-    const tampered = sig.slice(0, -1) + (sig.endsWith('A') ? 'B' : 'A');
+    // Flip a character at position 8, well inside the r-value of the DER
+    // structure (never in the base64url padding zone at the end of the string).
+    const pos = 8;
+    const replacement = sig[pos] === 'A' ? 'B' : 'A';
+    const tampered = sig.slice(0, pos) + replacement + sig.slice(pos + 1);
     const ok = await provider.verify(publicKey, message, tampered);
     expect(ok).toBe(false);
   });

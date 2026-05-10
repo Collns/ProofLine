@@ -11,3 +11,9 @@ coverage/
 .DS_Store
 Thumbs.db
 apps/extension-chrome/dist/
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/foundry.lock
