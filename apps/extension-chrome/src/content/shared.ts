@@ -8,15 +8,15 @@ export const TOOLBAR_NOT_FOUND_MARKER = 'data-proofline-toolbar-not-found';
 // "New Message" / "Reply" / etc — the substring "essage" is stable
 // across those (case-insensitive).
 export const COMPOSE_DIALOG_SELECTOR =
-  'div[role="dialog"][aria-label*="essage" i]';
+  'div[role="dialog"]';
 
 // Toolbar selector fallback chain (first match wins). Gmail rewrites
 // minified class names occasionally — semantic + aria-label fallbacks
 // keep us alive a little longer when that happens.
 export const TOOLBAR_SELECTORS: readonly string[] = [
-  'div.btC',
-  'div[gh="cm"] div[role="toolbar"]',
-  'div[aria-label*="ormatting" i]',
+  'tr.btC',
+  'td.gU.Up',
+  'div[role="dialog"] div[role="toolbar"]',
 ];
 
 export function alreadyInjected(compose: Element): boolean {

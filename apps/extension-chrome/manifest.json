@@ -6,23 +6,23 @@
   "permissions": ["storage", "scripting", "activeTab", "tabs"],
   "host_permissions": [
     "https://mail.google.com/*",
-    "https://app.proofline.web.app/*"
+    "https://proofline-sign.web.app/*"
   ],
   "background": {
-    "service_worker": "dist/background.js",
+    "service_worker": "background.js",
     "type": "module"
   },
   "content_scripts": [
     {
       "matches": ["https://mail.google.com/*"],
-      "js": ["dist/content.js"],
+      "js": ["content.js"],
       "run_at": "document_idle"
     }
   ],
   "action": {
-    "default_popup": "public/popup.html"
+    "default_popup": "popup.html"
   },
   "externally_connectable": {
-    "matches": ["https://app.proofline.web.app/*"]
+    "matches": ["https://proofline-sign.web.app/*"]
   }
 }
