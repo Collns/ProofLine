@@ -216,8 +216,15 @@ describe("popup-manager.runCeremony", () => {
     expect(typeof got?.iat).toBe("number");
     expect(typeof got?.exp).toBe("number");
 
+    // auth_success persists both the auth-token record AND a placeholder
+    // credentialId (replaced with the real value once PFL-AUTH-LOGIN ships).
+    // The placeholder unblocks the sign flow's resolveCredentialId guard.
     const dump = await store.dumpAll();
-    expect(Object.keys(dump)).toEqual(["proofline:auth-token"]);
+    expect(Object.keys(dump).sort()).toEqual([
+      "proofline:auth-token",
+      "proofline:credentialId",
+    ]);
+    expect(dump["proofline:credentialId"]).toBe("placeholder-credential-id");
   });
 
   it("ignores responses for unknown ceremonyIds without crashing", async () => {
