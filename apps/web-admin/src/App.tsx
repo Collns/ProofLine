@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { OnboardingWizard } from './routes/OnboardingWizard';
 import { DashboardHome } from './routes/DashboardHome';
+import { DemoHub } from './routes/DemoHub';
 import { InviteCounterparties } from './routes/invitations/InviteCounterparties';
 import { InvitationsList } from './routes/invitations/InvitationsList';
 import { InvitationDetail } from './routes/invitations/InvitationDetail';
@@ -11,7 +12,8 @@ export function App() {
   return (
     <ErrorBoundary>
       <Routes>
-        <Route path="/" element={<Navigate to="/onboarding" replace />} />
+        <Route path="/" element={<Navigate to="/demo" replace />} />
+        <Route path="/demo" element={<DemoHub />} />
         <Route path="/onboarding" element={<OnboardingWizard />} />
         <Route path="/dashboard" element={<DashboardHome />} />
         <Route path="/invitations" element={<InvitationsList />} />
