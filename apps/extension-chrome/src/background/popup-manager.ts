@@ -68,6 +68,15 @@ const SILENT_POPUP_HEIGHT = 1;
 // 30 days, in seconds. PRD §11.4 — extension auth tokens are long-lived.
 const AUTH_TOKEN_TTL_SEC = 30 * 24 * 60 * 60;
 
+// Storage key for the user's WebAuthn credentialId. The sign flow reads
+// this in resolveCredentialId() (background/index.ts). Until PFL-AUTH-LOGIN
+// wires the real /v1/extension/auth response (which will return a real
+// credentialId), we seed a placeholder on auth_success so the rest of
+// the flow can be exercised end-to-end. The placeholder is replaced —
+// not appended to — once a real credentialId arrives.
+const PLACEHOLDER_CREDENTIAL_KEY   = "proofline:credentialId";
+const PLACEHOLDER_CREDENTIAL_VALUE = "placeholder-credential-id";
+
 // ─── Internal state ───────────────────────────────────────────────────────────
 
 /**
@@ -204,6 +213,18 @@ export async function handleCeremonyMessage(
         iat:          nowSec,
         exp:          nowSec + AUTH_TOKEN_TTL_SEC,
       });
+      // Seed a placeholder credentialId so the sign flow can advance past
+      // the CREDENTIAL_MISSING guard in resolveCredentialId(). The real
+      // credentialId will be returned by the /v1/extension/auth response
+      // once PFL-AUTH-LOGIN ships — at which point this becomes the
+      // server-issued value rather than a stub.
+      const existing = await chrome.storage.local.get(PLACEHOLDER_CREDENTIAL_KEY);
+      if (typeof existing[PLACEHOLDER_CREDENTIAL_KEY] !== "string"
+          || existing[PLACEHOLDER_CREDENTIAL_KEY].length === 0) {
+        await chrome.storage.local.set({
+          [PLACEHOLDER_CREDENTIAL_KEY]: PLACEHOLDER_CREDENTIAL_VALUE,
+        });
+      }
     }
     // Session-token persistence is handled by the launcher (which knows
     // the recipientSetHash + hardCap). popup-manager intentionally does

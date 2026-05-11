@@ -5,9 +5,8 @@ const VALID_ID = 'abcdefghijklmnopabcdefghijklmnop'; // 32 chars in a–p
 const VALID_ORIGIN = `chrome-extension://${VALID_ID}`;
 
 describe('validateOpener', () => {
-  it('accepts a valid chrome-extension opener with matching extInstallId', () => {
+  it('accepts a valid extInstallId + matching returnOrigin', () => {
     const result = validateOpener({
-      hasOpener: true,
       extInstallId: VALID_ID,
       returnOrigin: VALID_ORIGIN,
     });
@@ -18,19 +17,18 @@ describe('validateOpener', () => {
     }
   });
 
-  it('rejects when window.opener is null (page surfed to directly)', () => {
+  it('accepts even when no window.opener exists (chrome.windows.create has none)', () => {
+    // The launcher uses chrome.windows.create(), which always gives the
+    // popup `window.opener === null`. Validation must still pass.
     const result = validateOpener({
-      hasOpener: false,
       extInstallId: VALID_ID,
       returnOrigin: VALID_ORIGIN,
     });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe('NO_OPENER');
+    expect(result.ok).toBe(true);
   });
 
   it('rejects http:// returnOrigin (only chrome-extension:// allowed)', () => {
     const result = validateOpener({
-      hasOpener: true,
       extInstallId: VALID_ID,
       returnOrigin: 'https://attacker.example.com',
     });
@@ -40,7 +38,6 @@ describe('validateOpener', () => {
 
   it('rejects extInstallId that does not match the 32-char a–p format', () => {
     const result = validateOpener({
-      hasOpener: true,
       extInstallId: 'too-short',
       returnOrigin: 'chrome-extension://too-short',
     });
@@ -51,7 +48,6 @@ describe('validateOpener', () => {
   it('rejects when returnOrigin extension id does not match extInstallId', () => {
     const otherId = 'ponmlkjihgfedcbaponmlkjihgfedcba';
     const result = validateOpener({
-      hasOpener: true,
       extInstallId: VALID_ID,
       returnOrigin: `chrome-extension://${otherId}`,
     });
@@ -61,7 +57,6 @@ describe('validateOpener', () => {
 
   it('rejects when extInstallId is missing', () => {
     const result = validateOpener({
-      hasOpener: true,
       extInstallId: null,
       returnOrigin: VALID_ORIGIN,
     });
@@ -78,11 +73,10 @@ describe('validateOpenerFromWindow', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('detects null opener via window.opener', () => {
+  it('passes even when window.opener is null (chrome.windows.create case)', () => {
     const fakeWindow = { opener: null } as unknown as Window;
     const search = `?extInstallId=${VALID_ID}&returnOrigin=${encodeURIComponent(VALID_ORIGIN)}`;
     const result = validateOpenerFromWindow(fakeWindow, search);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe('NO_OPENER');
+    expect(result.ok).toBe(true);
   });
 });
