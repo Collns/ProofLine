@@ -177,7 +177,7 @@ export function makeSignFinalizeHandler(ctx: PolicyContext) {
     const assertionValid = await verifyWebAuthnAssertion({
       assertion: body.assertion,
       expectedChallenge: buildCanonicalBytes(storedPayload),
-      expectedOrigin: "https://app.proofline.web.app",
+      expectedOrigin: "https://proofline-sign.web.app",
       publicKey: device.publicKey,
     });
 
