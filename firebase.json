@@ -33,9 +33,12 @@
   },
   "functions": [
     {
-      "source": "apps/functions",
+      "source": "apps/functions/dist",
       "codebase": "default",
       "runtime": "nodejs20",
+      "predeploy": [
+        "pnpm --filter @proofline/functions build"
+      ],
       "ignore": ["node_modules", ".git", "firebase-debug.*.log", "*.local"]
     }
   ],
