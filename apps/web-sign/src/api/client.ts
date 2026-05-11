@@ -11,11 +11,14 @@ import {
   type ApiErrorBody,
 } from './types';
 
-// Production: https://api.proofline.app (or per-env override).
-// In dev, we default to '' so fetch hits the same origin (Vite proxy
-// can forward /v1/* to the Firebase emulator if the operator sets one
-// up). Override at runtime with VITE_API_BASE.
-const API_BASE = ((import.meta.env?.VITE_API_BASE as string | undefined) ?? '').replace(/\/$/, '');
+// Default to the deployed Firebase Functions origin. Override at build
+// time with VITE_API_BASE for emulator runs or per-env staging URLs.
+// Trailing slashes get stripped so callers can concatenate `/v1/...`
+// without producing `//v1/...`.
+const DEFAULT_API_BASE = 'https://us-central1-proofline-cdabb.cloudfunctions.net/api';
+const API_BASE = (
+  (import.meta.env?.VITE_API_BASE as string | undefined) ?? DEFAULT_API_BASE
+).replace(/\/$/, '');
 
 // Auth: Bearer extension auth token. The popup receives this token from
 // the extension via URL param so it can call /v1/sign* on behalf of the

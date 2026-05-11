@@ -26,7 +26,7 @@ describe('cosign API client (live mode)', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('/v1/cosign/msg-A?token=a.b.c%3Fd%3D1');
+    expect(url).toMatch(/\/v1\/cosign\/msg-A\?token=a\.b\.c%3Fd%3D1$/);
     expect(init).toMatchObject({
       headers: { Accept: 'application/json' },
     });
@@ -51,7 +51,7 @@ describe('cosign API client (live mode)', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('/v1/cosign/msg-A/finalize');
+    expect(url).toMatch(/\/v1\/cosign\/msg-A\/finalize$/);
     expect(init.method).toBe('POST');
     expect(init.headers).toMatchObject({
       'Content-Type': 'application/json',
@@ -88,7 +88,7 @@ describe('cosign API client (live mode)', () => {
     );
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('/v1/cosign/msg-X/refresh');
+    expect(url).toMatch(/\/v1\/cosign\/msg-X\/refresh$/);
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body as string)).toEqual({ token: 'tok-Y' });
   });
