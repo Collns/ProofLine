@@ -31,6 +31,7 @@ import {
 import { openPopupCeremony } from "./popup-launcher.js";
 import {
   getAuthToken,
+  getOrIssueAuthToken,
 } from "./auth-token.js";
 import {
   clearAllSessions,
@@ -216,11 +217,14 @@ interface RunSignFlowInput {
  * back to the content script.
  */
 async function runSignFlow(input: RunSignFlowInput): Promise<void> {
+  // Try to get cached auth; if missing, open the auth ceremony popup.
+  const token = await getOrIssueAuthToken();
+  if (!token) {
+    throw new Error("AUTH_REQUIRED: user cancelled or auth failed");
+  }
   const auth = await getAuthToken();
   if (!auth) {
-    // openPopupCeremony will trigger an auth ceremony, but we fail
-    // closed if the user cancels — surface a clear error.
-    throw new Error("AUTH_REQUIRED: user not authenticated");
+    throw new Error("AUTH_REQUIRED: token issued but record missing");
   }
 
   const credentialId = await resolveCredentialId();
