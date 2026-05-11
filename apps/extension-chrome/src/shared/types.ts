@@ -45,6 +45,49 @@ export type ContentToBackgroundMessage =
   | PayloadExtractedMessage
   | ExtractionFailedMessage;
 
+// ── Background → content (injected via chrome.tabs.sendMessage) ──────────────
+
+export interface PayloadSignedMessage {
+  type: 'PAYLOAD_SIGNED';
+  composeId: string;
+  bannerHtml: string;
+}
+
+export interface PayloadNeedsCosignMessage {
+  type: 'PAYLOAD_NEEDS_COSIGN';
+  composeId: string;
+  approvers: string[];
+}
+
+export interface SignFailedMessage {
+  type: 'SIGN_FAILED';
+  composeId: string;
+  code: string;
+  message: string;
+}
+
+export type BackgroundToContentMessage =
+  | PayloadSignedMessage
+  | PayloadNeedsCosignMessage
+  | SignFailedMessage;
+
+const KNOWN_BG_TO_CONTENT: ReadonlySet<BackgroundToContentMessage['type']> = new Set([
+  'PAYLOAD_SIGNED',
+  'PAYLOAD_NEEDS_COSIGN',
+  'SIGN_FAILED',
+]);
+
+export function isBackgroundToContentMessage(
+  value: unknown,
+): value is BackgroundToContentMessage {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as { type?: unknown };
+  if (typeof candidate.type !== 'string') return false;
+  return KNOWN_BG_TO_CONTENT.has(
+    candidate.type as BackgroundToContentMessage['type'],
+  );
+}
+
 export interface BackgroundAck {
   ok: true;
   stub?: boolean | 'extracted';

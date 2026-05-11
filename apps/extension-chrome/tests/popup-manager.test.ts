@@ -2,101 +2,36 @@
  * @file popup-manager.test.ts
  * @module apps/extension-chrome/tests
  *
- * Unit / integration tests for the PFL-044 popup ceremony bridge.
+ * Unit tests for the popup ceremony state machine. Strategy:
+ *   - Mock chrome.* APIs with vi.fn() doubles backed by an in-memory
+ *     storage map (the same backend mocking pattern auth-token /
+ *     session-store / popup-launcher tests reuse via test-helpers).
+ *   - Drive runCeremony() and assert it opens a window with the right
+ *     URL / sizing / focus state.
+ *   - Simulate the popup posting a response via handleCeremonyMessage.
+ *   - Confirm the Promise resolves / rejects per the response kind.
+ *   - Confirm chrome.storage.local has the auth token under the new
+ *     proofline:auth-token key.
  *
  * These are NOT a real "clean Chrome profile" E2E — that requires
  * Playwright + a real browser, which lives in a separate harness.
- * What we cover here is the message wiring, ceremony state machine,
- * and chrome.storage.local persistence — everything that doesn't
- * need a real WebAuthn authenticator.
- *
- * Strategy:
- *   - Mock chrome.* APIs with vi.fn() doubles.
- *   - Drive runCeremony() and assert it opens a window.
- *   - Simulate the popup posting a response via handleCeremonyMessage.
- *   - Confirm the Promise resolves with the popup's payload.
- *   - Confirm chrome.storage.local has the auth token / session token.
- *   - Cover error paths: user closes popup, timeout, malformed messages.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { installChromeMock, type ChromeMock } from "./helpers/chrome-mock.js";
 
-// ─── chrome.* mocks ───────────────────────────────────────────────────────────
+// ─── Test fixtures ────────────────────────────────────────────────────────────
 
-interface ChromeStorageBackend {
-  store: Record<string, unknown>;
-}
-
-function makeChromeMock() {
-  const storage: ChromeStorageBackend = { store: {} };
-  const onMessageExternalListeners: Array<(...a: unknown[]) => unknown> = [];
-  const onMessageListeners:         Array<(...a: unknown[]) => unknown> = [];
-  const onWindowsRemovedListeners:  Array<(windowId: number) => void>   = [];
-
-  const chromeMock = {
-    runtime: {
-      id: "fakeextensionid0123456789abcdef",
-      onMessageExternal: { addListener: (fn: any) => onMessageExternalListeners.push(fn) },
-      onMessage:         { addListener: (fn: any) => onMessageListeners.push(fn) },
-      onInstalled:       { addListener: vi.fn() },
-    },
-    storage: {
-      local: {
-        get: vi.fn(async (keys: string | string[] | null) => {
-          if (keys === null) return { ...storage.store };
-          const list = Array.isArray(keys) ? keys : [keys];
-          const out: Record<string, unknown> = {};
-          for (const k of list) {
-            if (k in storage.store) out[k] = storage.store[k];
-          }
-          return out;
-        }),
-        set: vi.fn(async (kv: Record<string, unknown>) => {
-          Object.assign(storage.store, kv);
-        }),
-        remove: vi.fn(async (keys: string | string[]) => {
-          const list = Array.isArray(keys) ? keys : [keys];
-          for (const k of list) delete storage.store[k];
-        }),
-        clear: vi.fn(async () => {
-          for (const k of Object.keys(storage.store)) delete storage.store[k];
-        }),
-      },
-    },
-    windows: {
-      create: vi.fn(async (_opts: chrome.windows.CreateData) => ({
-        id: 99 as number,
-      } as chrome.windows.Window)),
-      remove: vi.fn(async (_id: number) => {}),
-      onRemoved: { addListener: (fn: any) => onWindowsRemovedListeners.push(fn) },
-    },
-    _backend: storage,
-    _fireWindowRemoved: (id: number) => onWindowsRemovedListeners.forEach((fn) => fn(id)),
-    _fireExternalMessage: (msg: unknown, sender: { url?: string }) => {
-      const responses: unknown[] = [];
-      onMessageExternalListeners.forEach((fn) => {
-        fn(msg, sender, (r: unknown) => responses.push(r));
-      });
-      return responses;
-    },
-  };
-
-  return chromeMock;
-}
-
-// Install a global chrome.* mock that resets between tests.
-let chromeMock: ReturnType<typeof makeChromeMock>;
+let chromeMock: ChromeMock;
 beforeEach(() => {
-  chromeMock = makeChromeMock();
-  (globalThis as any).chrome = chromeMock;
+  chromeMock = installChromeMock();
   vi.useFakeTimers();
 });
 afterEach(() => {
   vi.useRealTimers();
-  delete (globalThis as any).chrome;
+  chromeMock.uninstall();
 });
 
-// Lazy-import after chrome.* is in place (modules read chrome.runtime at load).
 async function importPopupManager() {
   vi.resetModules();
   return await import("../src/background/popup-manager.js");
@@ -106,160 +41,160 @@ async function importSessionStore() {
   return await import("../src/background/session-store.js");
 }
 
+// Flush enough microtasks to let an awaited call chain through
+// chrome.storage.local.get → chrome.windows.create → pendingCeremonies.set.
+async function flushMicrotasks(rounds = 10): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
+    await Promise.resolve();
+  }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe("session-store", () => {
-  it("returns null when no auth token is set", async () => {
-    const store = await importSessionStore();
-    expect(await store.getAuthToken()).toBeNull();
-  });
-
-  it("round-trips an auth token", async () => {
-    const store = await importSessionStore();
-    await store.setAuthToken({
-      token:     "jws-abc",
-      userId:    "user_1",
-      companyId: "co_1",
-      expiresAt: Date.now() + 60_000,
-    });
-    const got = await store.getAuthToken();
-    expect(got?.token).toBe("jws-abc");
-    expect(got?.userId).toBe("user_1");
-  });
-
-  it("clears expired auth tokens on read", async () => {
-    const store = await importSessionStore();
-    await store.setAuthToken({
-      token:     "jws-old",
-      userId:    "user_1",
-      companyId: "co_1",
-      expiresAt: Date.now() - 1_000,  // already expired
-    });
-    expect(await store.getAuthToken()).toBeNull();
-    // Verify it's actually gone from storage too:
-    expect(await store.dumpAll()).toEqual({});
-  });
-
-  it("logout() clears every key in storage", async () => {
-    const store = await importSessionStore();
-    await store.setAuthToken({
-      token: "t", userId: "u", companyId: "c",
-      expiresAt: Date.now() + 60_000,
-    });
-    await store.setSession({
-      token: "s", recipientSetHash: "rs1",
-      expiresAt: Date.now() + 60_000, createdAt: Date.now(),
-    });
-    expect(Object.keys(await store.dumpAll())).toHaveLength(5); // 4 auth + 1 session
-    await store.logout();
-    expect(Object.keys(await store.dumpAll())).toHaveLength(0);
-  });
-
-  it("sessions are scoped per recipient-set", async () => {
-    const store = await importSessionStore();
-    const now = Date.now();
-    await store.setSession({ token: "s1", recipientSetHash: "rsA", expiresAt: now + 60_000, createdAt: now });
-    await store.setSession({ token: "s2", recipientSetHash: "rsB", expiresAt: now + 60_000, createdAt: now });
-    expect((await store.getSession("rsA"))?.token).toBe("s1");
-    expect((await store.getSession("rsB"))?.token).toBe("s2");
-    expect(await store.getSession("rsZ")).toBeNull();
-  });
-});
-
 describe("popup-manager.runCeremony", () => {
-  it("opens a popup window with the correct URL and parameters", async () => {
+  it("opens a popup window with the full URL-param contract", async () => {
     const mgr = await importPopupManager();
 
-    // Kick off — don't await yet, we need to simulate the popup posting back.
     const promise = mgr.runCeremony({
       kind:             "fresh",
       recipientSetHash: "rs_abc",
       payloadHash:      "ph_xyz",
+      payloadB64:       "eyJrIjoidiJ9",
+      credentialId:     "cred_1",
+      extToken:         "tok_xyz",
     });
+    promise.catch(() => {}); // suppress
+    await flushMicrotasks();
 
-    // Verify chrome.windows.create was called with a /sign/start URL.
     expect(chromeMock.windows.create).toHaveBeenCalledOnce();
-    const createOpts = chromeMock.windows.create.mock.calls[0][0] as chrome.windows.CreateData;
-    expect(createOpts.type).toBe("popup");
-    expect(createOpts.url).toContain("https://app.proofline.web.app/sign/start");
-    expect(createOpts.url).toContain("recipientSetHash=rs_abc");
-    expect(createOpts.url).toContain("payloadHash=ph_xyz");
+    const opts = chromeMock.windows.create.mock.calls[0][0] as chrome.windows.CreateData;
+    expect(opts.type).toBe("popup");
+    expect(opts.state).toBe("normal");
+    expect(opts.focused).toBe(true);
 
-    // Extract the ceremonyId from the URL the manager generated.
-    const url   = new URL(createOpts.url as string);
+    const url = new URL(opts.url as string);
+    expect(url.pathname).toBe("/sign/start");
+    expect(url.searchParams.get("kind")).toBe("fresh");
+    expect(url.searchParams.get("ceremonyId")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(url.searchParams.get("extInstallId")).toBe("fakeextensionid0123456789abcdef");
+    expect(url.searchParams.get("returnOrigin")).toBe(
+      "chrome-extension://fakeextensionid0123456789abcdef",
+    );
+    expect(url.searchParams.get("recipientSetHash")).toBe("rs_abc");
+    expect(url.searchParams.get("payloadHash")).toBe("ph_xyz");
+    expect(url.searchParams.get("payloadB64")).toBe("eyJrIjoidiJ9");
+    expect(url.searchParams.get("credentialId")).toBe("cred_1");
+    expect(url.searchParams.get("extToken")).toBe("tok_xyz");
+
+    // Resolve so vitest doesn't hold a dangling pending promise.
     const ceremonyId = url.searchParams.get("ceremonyId")!;
-    expect(ceremonyId).toMatch(/^[0-9a-f-]{36}$/);
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    // Simulate the popup posting a sign_success response.
     await mgr.handleCeremonyMessage({
-      kind:        "sign_success",
+      kind:        "user_cancelled",
       ceremonyId,
-      envelope:    { v: 1, payloadHash: "ph_xyz" } as any,
-      banner:      "<table>...</table>",
-      sessionToken: "session-jws-789",
     });
+    await expect(promise).rejects.toThrow(/USER_CANCELLED/);
+  });
 
-    const result = await promise;
-    expect(result.kind).toBe("sign_success");
+  it("opens a 1x1 minimized window for kind='silent'", async () => {
+    const mgr = await importPopupManager();
 
-    // Popup window should be closed.
-    expect(chromeMock.windows.remove).toHaveBeenCalledWith(99);
+    const promise = mgr.runCeremony({
+      kind:             "silent",
+      recipientSetHash: "rs",
+      payloadHash:      "ph",
+      payloadB64:       "x",
+      credentialId:     "c",
+      extToken:         "t",
+      sessionToken:     "sess_jws",
+    });
+    promise.catch(() => {});
+    await flushMicrotasks();
+
+    const opts = chromeMock.windows.create.mock.calls[0][0] as chrome.windows.CreateData;
+    expect(opts.state).toBe("minimized");
+    expect(opts.focused).toBe(false);
+    expect(opts.width).toBe(1);
+    expect(opts.height).toBe(1);
+
+    const url = new URL(opts.url as string);
+    expect(url.pathname).toBe("/sign/silent");
+    expect(url.searchParams.get("sessionToken")).toBe("sess_jws");
+
+    const ceremonyId = url.searchParams.get("ceremonyId")!;
+    await mgr.handleCeremonyMessage({ kind: "user_cancelled", ceremonyId });
+    await expect(promise).rejects.toThrow();
   });
 
   it("rejects with USER_CANCELLED when the popup window is closed", async () => {
     const mgr = await importPopupManager();
     const promise = mgr.runCeremony({ kind: "auth" });
-
-    // Wait for chrome.windows.create to settle.
-    await Promise.resolve();
-    await Promise.resolve();
-
-    // Simulate user closing the popup.
+    await flushMicrotasks();
     mgr.handleWindowClosed(99);
-
     await expect(promise).rejects.toThrow(/USER_CANCELLED/);
   });
 
-   it("rejects with TIMEOUT when no response within the deadline", async () => {
+  it("rejects with TIMEOUT when no response within the deadline", async () => {
     const mgr = await importPopupManager();
     const promise = mgr.runCeremony({ kind: "auth" });
-    promise.catch(() => {}); // suppress unhandled rejection
-
-    await Promise.resolve();
-    await Promise.resolve();
-
+    promise.catch(() => {});
+    await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2 * 60 * 1000 + 1);
-
     await expect(promise).rejects.toThrow(/CEREMONY_TIMEOUT/);
   });
 
   it("rejects when the popup posts an error response", async () => {
     const mgr = await importPopupManager();
-    const promise = mgr.runCeremony({ kind: "fresh", recipientSetHash: "rs", payloadHash: "ph" });
-    await Promise.resolve(); await Promise.resolve();
+    const promise = mgr.runCeremony({
+      kind:             "fresh",
+      recipientSetHash: "rs",
+      payloadHash:      "ph",
+    });
+    promise.catch(() => {});
+    await flushMicrotasks();
 
     const url = chromeMock.windows.create.mock.calls[0][0] as chrome.windows.CreateData;
     const ceremonyId = new URL(url.url as string).searchParams.get("ceremonyId")!;
 
     await mgr.handleCeremonyMessage({
-      kind:       "error",
+      kind:    "error",
       ceremonyId,
-      code:       "POLICY_DENIED",
-      message:    "Co-sign required for amounts over $250k",
+      code:    "POLICY_DENIED",
+      message: "Co-sign required for amounts over $250k",
     });
-
     await expect(promise).rejects.toThrow(/POLICY_DENIED/);
   });
 
-  it("persists auth token to chrome.storage.local on auth_success", async () => {
+  it("closes the popup window after a sign_success response", async () => {
+    const mgr = await importPopupManager();
+    const promise = mgr.runCeremony({
+      kind:             "fresh",
+      recipientSetHash: "rs",
+      payloadHash:      "ph",
+    });
+    await flushMicrotasks();
+
+    const url = chromeMock.windows.create.mock.calls[0][0] as chrome.windows.CreateData;
+    const ceremonyId = new URL(url.url as string).searchParams.get("ceremonyId")!;
+
+    await mgr.handleCeremonyMessage({
+      kind:        "sign_success",
+      ceremonyId,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      envelope:    { v: 1, payloadHash: "ph" } as any,
+      banner:      "<table>...</table>",
+      sessionToken: "session-jws-789",
+    });
+
+    await promise;
+    expect(chromeMock.windows.remove).toHaveBeenCalledWith(99);
+  });
+
+  it("persists auth token to chrome.storage.local on auth_success under proofline:auth-token", async () => {
     const mgr   = await importPopupManager();
     const store = await importSessionStore();
 
     const promise = mgr.runCeremony({ kind: "auth" });
-    await Promise.resolve(); await Promise.resolve();
+    await flushMicrotasks();
 
     const url = chromeMock.windows.create.mock.calls[0][0] as chrome.windows.CreateData;
     const ceremonyId = new URL(url.url as string).searchParams.get("ceremonyId")!;
@@ -271,13 +206,18 @@ describe("popup-manager.runCeremony", () => {
       userId:    "user_42",
       companyId: "co_42",
     });
-
     await promise;
 
-    // Verify the token landed in storage.
     const got = await store.getAuthToken();
     expect(got?.token).toBe("ext-jws-abc");
     expect(got?.userId).toBe("user_42");
+    expect(got?.companyId).toBe("co_42");
+    expect(got?.extInstallId).toBe("fakeextensionid0123456789abcdef");
+    expect(typeof got?.iat).toBe("number");
+    expect(typeof got?.exp).toBe("number");
+
+    const dump = await store.dumpAll();
+    expect(Object.keys(dump)).toEqual(["proofline:auth-token"]);
   });
 
   it("ignores responses for unknown ceremonyIds without crashing", async () => {
@@ -285,10 +225,10 @@ describe("popup-manager.runCeremony", () => {
     const handled = await mgr.handleCeremonyMessage({
       kind:       "sign_success",
       ceremonyId: "nonexistent-uuid",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       envelope:   {} as any,
       banner:     "",
     });
-    // Returns true (recognized message format) but doesn't resolve anything.
     expect(handled).toBe(true);
   });
 
@@ -297,42 +237,5 @@ describe("popup-manager.runCeremony", () => {
     expect(await mgr.handleCeremonyMessage(null)).toBe(false);
     expect(await mgr.handleCeremonyMessage({ random: "stuff" })).toBe(false);
     expect(await mgr.handleCeremonyMessage({ kind: "weird" })).toBe(false);
-  });
-
-  it("token persists across simulated service-worker restart", async () => {
-    // First "lifetime": save a token.
-    {
-      const store = await importSessionStore();
-      await store.setAuthToken({
-        token: "persist-me", userId: "u", companyId: "c",
-        expiresAt: Date.now() + 60_000,
-      });
-    }
-
-    // Re-import module to simulate the SW being torn down and reloaded.
-    // chrome.storage.local survives because it's backed by the persistent store.
-    {
-      const store = await importSessionStore();
-      const got = await store.getAuthToken();
-      expect(got?.token).toBe("persist-me");
-    }
-  });
-
-  it("token is cleared on logout", async () => {
-    const store = await importSessionStore();
-
-    await store.setAuthToken({
-      token: "logout-me", userId: "u", companyId: "c",
-      expiresAt: Date.now() + 60_000,
-    });
-    await store.setSession({
-      token: "s", recipientSetHash: "rs",
-      expiresAt: Date.now() + 60_000, createdAt: Date.now(),
-    });
-
-    await store.logout();
-
-    expect(await store.getAuthToken()).toBeNull();
-    expect(await store.getSession("rs")).toBeNull();
   });
 });

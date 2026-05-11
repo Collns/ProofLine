@@ -3,16 +3,12 @@
 // before publishing.
 export const CONFIG = {
   // Backend HTTPS origin the extension calls for sign / verify / sessions.
-  // Production: https://api.proofline.web.app
-  // Local dev:  http://localhost:5001
   apiOrigin: 'https://app.proofline.web.app',
-
-  // WebAuthn relying-party id — must match the registered RP id on the
-  // verifier's side. Used by future signing flows; placeholder for now.
+  // Origin that hosts the web-sign popup (PFL-044).
+  signOrigin: 'https://proofline-sign.web.app',
+  // WebAuthn relying-party id — must match the actual Firebase Hosting URL.
   rpId: 'proofline-sign.web.app',
-
   // Verify-page base URL embedded in the inline HTML banner.
-  verifyBaseUrl: 'https://verify.proofline.web.app',
+  verifyBaseUrl: 'https://proofline-verify.web.app',
 } as const;
-
 export type Config = typeof CONFIG;
