@@ -66,9 +66,6 @@ class FakeKeyManagementServiceClient {
       versionName,
       privateKey,
       publicKey,
-      // Start "ready" — most production KMS calls return ENABLED before
-      // poll completes.  Tests that simulate the pending state can
-      // override this directly.
       state: "ENABLED",
     });
 
@@ -89,19 +86,19 @@ class FakeKeyManagementServiceClient {
   }
 
   async asymmetricSign(req: {
-    name:   string;
-    digest: { sha256: Uint8Array };
+    name: string;
+    data: Uint8Array;
   }): Promise<[{ signature: Buffer }]> {
     const key = this.keys.get(req.name);
     if (!key) throw new Error(`NOT_FOUND: ${req.name}`);
 
-    // Real KMS signs the *digest* directly using ECDSA without
-    // re-hashing.  Node's createSign always re-hashes, so we use
-    // the lower-level sign() with dsaEncoding: "der" to match.
-    const signature = nodeCrypto.sign(null, req.digest.sha256, {
-      key:         key.privateKey,
-      dsaEncoding: "der",
-    });
+    // Real KMS receives raw bytes and hashes internally with SHA256.
+    // Node's createSign('SHA256') does the same — hash then sign —
+    // so verifyEcdsaP256 (which also uses createVerify('SHA256')) round-trips correctly.
+    const signer = nodeCrypto.createSign("SHA256");
+    signer.update(req.data);
+    signer.end();
+    const signature = signer.sign({ key: key.privateKey, dsaEncoding: "der" });
 
     return [{ signature: Buffer.from(signature) }];
   }
@@ -124,7 +121,6 @@ describe("makeKmsCryptoProvider — integration", () => {
       projectId: "proofline-test",
       location:  "global",
       keyRing:   "proofline-roots",
-      // Cast — our fake implements the subset we use.
       client: fakeClient as unknown as import("@google-cloud/kms").KeyManagementServiceClient,
     });
   });
@@ -143,13 +139,13 @@ describe("makeKmsCryptoProvider — integration", () => {
 
     // 2. Export the public key (SPKI base64).
     const pubKeyB64 = await provider.exportPublicKey(handle);
-    expect(pubKeyB64).toMatch(/^[A-Za-z0-9+/=]+$/);   // base64
-    expect(pubKeyB64).not.toContain("-----BEGIN");    // PEM armor stripped
+    expect(pubKeyB64).toMatch(/^[A-Za-z0-9+/=]+$/);  // base64
+    expect(pubKeyB64).not.toContain("-----BEGIN");   // PEM armor stripped
 
     // 3. Sign an arbitrary message via KMS.
-    const message  = new TextEncoder().encode("ProofLine canonical bytes");
+    const message   = new TextEncoder().encode("ProofLine canonical bytes");
     const signature = await provider.sign(handle, message);
-    expect(signature).toMatch(/^[A-Za-z0-9_-]+$/);    // base64url
+    expect(signature).toMatch(/^[A-Za-z0-9_-]+$/);   // base64url
 
     // 4. Verify the signature with the exported pubkey.
     const ok = await verifyEcdsaP256(pubKeyB64, message, signature);
@@ -176,8 +172,8 @@ describe("makeKmsCryptoProvider — integration", () => {
     const signature = await provider.sign(handle, message);
 
     // Flip a base64url character in the middle.
-    const idx = 8;
-    const ch  = signature[idx];
+    const idx   = 8;
+    const ch    = signature[idx];
     const newCh = ch === "A" ? "B" : "A";
     const tampered = signature.slice(0, idx) + newCh + signature.slice(idx + 1);
     const ok = await verifyEcdsaP256(pubKeyB64, message, tampered);
