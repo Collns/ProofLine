@@ -10,6 +10,7 @@
  *     and live-demo triggers (TDD §6.3).
  *   - `api` (HTTP): public verify endpoint GET /v1/verify/:id (PFL-023).
  *
+ *    - `webhooks` (HTTP): POST /webhooks/stripe-identity (PFL-013).
  * Existing routers still pending HTTP wiring (live as code only):
  *   - /v1/onboard via api/onboarding/router.ts (PFL-017)
  *   - /v1/sign    via signing/handlers/* (PFL-021)
@@ -28,6 +29,7 @@ import { onSchedule } from "firebase-functions/v2/scheduler";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
+
 import {
   makeAnchorAdminRouter,
   makeAnchorRunDeps,
@@ -37,6 +39,9 @@ import {
 import type { RunAnchorDeps } from "./anchoring/index.js";
 
 import { makeVerifyRouter, makeVerifyService } from "./verify/index.js";
+
+// --- PFL-013: Stripe Identity webhook
+import { createStripeIdentityWebhookHandler } from "./webhooks/stripe-identity.js";
 
 // ─── Firebase Admin (idempotent — module may be re-imported across invokes) ─
 
@@ -182,6 +187,37 @@ export const api = onRequest(
   publicApp,
 );
 
+// ─── Webhooks — PFL-013: Stripe Identity ─────────────────────────────────────
+//
+// IMPORTANT: express.raw() MUST come before express.json() on this app.
+// Stripe's webhook signature check (stripe.webhooks.constructEvent) requires
+// the raw request body as a Buffer. If express.json() runs first it replaces
+// req.body with the parsed object and the HMAC check fails.
+//
+// This is a separate Firebase Function (webhooks) so the raw-body requirement
+// doesn't bleed into the public API function above.
+
+const webhooksApp = express();
+
+// Raw body for Stripe signature verification — scoped to this route only.
+webhooksApp.post(
+  "/webhooks/stripe-identity",
+  express.raw({ type: "application/json" }),
+  (() => {
+    let cachedHandler: ReturnType<typeof createStripeIdentityWebhookHandler> | null = null;
+    return (req: express.Request, res: express.Response) => {
+      if (!cachedHandler) {
+        cachedHandler = createStripeIdentityWebhookHandler();
+      }
+      return cachedHandler(req, res);
+    };
+  })(),
+);
+ 
+export const webhooks = onRequest(
+  { region: "us-central1", cors: false, memory: "256MiB" },
+  webhooksApp,
+);
 // ─── Factory kept for tests + future composition ─────────────────────────────
 
 import type { Firestore } from "firebase-admin/firestore";
