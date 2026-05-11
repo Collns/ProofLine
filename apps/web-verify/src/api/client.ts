@@ -1,7 +1,15 @@
 import type { VerificationResponse } from './types';
 import { FIXTURES, fixtureVerifiedWire } from './fixtures';
 
-const API_BASE = '/v1/verify';
+// Absolute origin of the deployed Firebase Functions `api` HTTP function.
+// The verify page is hosted on its own Firebase subdomain that has no
+// /v1/* rewrites, so we point straight at the function URL. Overridable
+// via VITE_API_BASE at build time for emulator / staging runs.
+const DEFAULT_API_BASE = 'https://us-central1-proofline-cdabb.cloudfunctions.net/api';
+const API_ORIGIN = (
+  (import.meta.env?.VITE_API_BASE as string | undefined) ?? DEFAULT_API_BASE
+).replace(/\/$/, '');
+const API_BASE = `${API_ORIGIN}/v1/verify`;
 
 export async function fetchVerification(
   id: string,
