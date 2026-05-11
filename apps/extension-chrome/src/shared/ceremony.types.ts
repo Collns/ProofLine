@@ -32,11 +32,23 @@ export type CeremonyKind =
 
 export interface CeremonyRequestParams {
   kind:              CeremonyKind;
-  ceremonyId:        string;          // uuid v7, used to correlate response
+  ceremonyId:        string;          // uuid v4, used to correlate response
   extInstallId:      string;          // chrome.runtime.id
-  recipientSetHash?: string;          // for fresh/silent only
-  payloadHash?:      string;          // hash of canonical email payload
   returnOrigin:      string;          // chrome-extension://<id>
+
+  // Payload-bound params — present for fresh/silent, absent for auth.
+  recipientSetHash?: string;          // sha256-hex of normalized recipient list
+  payloadHash?:      string;          // sha256-hex of canonical EmailPayload bytes
+  payloadB64?:       string;          // base64url(JSON.stringify(canonical EmailPayload))
+  credentialId?:     string;          // user's WebAuthn credentialId
+
+  // Bearer token for the popup to call /v1/sign* on the user's behalf —
+  // set for fresh/silent; absent for auth (auth's whole purpose is to
+  // mint one).
+  extToken?:         string;
+
+  // Silent ceremony only — proves an active sliding-window session.
+  sessionToken?:     string;
 }
 
 // ─── Response from popup → extension (via chrome.runtime.sendMessage) ─────────
