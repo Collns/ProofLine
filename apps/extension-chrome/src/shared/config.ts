@@ -9,7 +9,7 @@ export const CONFIG = {
 
   // WebAuthn relying-party id — must match the registered RP id on the
   // verifier's side. Used by future signing flows; placeholder for now.
-  rpId: 'proofline.web.app',
+  rpId: 'proofline-sign.web.app',
 
   // Verify-page base URL embedded in the inline HTML banner.
   verifyBaseUrl: 'https://verify.proofline.web.app',

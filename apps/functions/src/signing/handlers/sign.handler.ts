@@ -132,7 +132,7 @@ export function makeSignHandler(ctx: PolicyContext) {
     const challengeId = uuidv7();
     const challenge: WebAuthnChallenge = {
       challenge: Buffer.from(canonicalBytes).toString("base64url"),
-      rpId: "proofline.web.app",
+      rpId: "proofline-sign.web.app",
       allowCredentials: [{ type: "public-key", id: body.credentialId }],
       userVerification: "required",  // fresh path always requires UV
       timeout: 90_000,
