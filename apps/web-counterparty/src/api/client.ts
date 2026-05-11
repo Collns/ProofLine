@@ -6,7 +6,17 @@ import type {
 } from './types';
 import { FIXTURES, fixtureFinalizeOk, fixtureRefreshOk } from './fixtures';
 
-const API_BASE = '/v1/cosign';
+// Absolute origin of the deployed Firebase Functions `api` HTTP function.
+// The counterparty page is hosted on its own subdomain with no /v1/*
+// rewrites, so we point straight at the function URL. Note: the cosign
+// endpoints (/v1/cosign/*) are not yet implemented server-side — until
+// then, every non-fixture call here will 404, which is the intended
+// "wired but not yet shipped" state.
+const DEFAULT_API_BASE = 'https://us-central1-proofline-cdabb.cloudfunctions.net/api';
+const API_ORIGIN = (
+  (import.meta.env?.VITE_API_BASE as string | undefined) ?? DEFAULT_API_BASE
+).replace(/\/$/, '');
+const API_BASE = `${API_ORIGIN}/v1/cosign`;
 
 interface ClientOpts {
   /** Override transport mode (defaults: fixtures in DEV, live elsewhere). */
