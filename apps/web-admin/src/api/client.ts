@@ -33,14 +33,8 @@ const FIXTURE_LATENCY_MS = 800;
 // ── Mode detection ───────────────────────────────────────────────────────────
 
 function isFixtureMode(): boolean {
-  if (typeof window === 'undefined') return false;
-  const params = new URLSearchParams(window.location.search);
-  if (params.get('fixture') === 'happy-path') return true;
-  // Implicit fixture mode in DEV when no token is set.
-  if (import.meta.env.DEV && !window.localStorage.getItem('firebase-id-token')) {
-    return true;
-  }
-  return false;
+  // DEMO MODE: always use fixtures (no live backend deployed yet)
+  return true;
 }
 
 // ── Auth header (stub) ───────────────────────────────────────────────────────

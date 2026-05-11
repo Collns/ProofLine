@@ -19,7 +19,7 @@ function resolveMode(opts?: ClientOpts): 'live' | 'fixtures' {
   if (opts?.mode) return opts.mode;
   // import.meta.env is provided by vitest/vite; default safely if absent.
   const envDev = (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV;
-  return envDev ? 'fixtures' : 'live';
+  return 'fixtures';
 }
 
 function readFixtureKey(opts?: ClientOpts): string | null {

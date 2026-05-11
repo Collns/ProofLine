@@ -13,6 +13,9 @@
         ],
         "verify": [
           "proofline-verify"
+        ],
+        "sign": [
+          "proofline-sign"
         ]
       }
     }
