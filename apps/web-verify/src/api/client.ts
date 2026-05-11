@@ -10,7 +10,7 @@ export async function fetchVerification(
   const searchParams = new URLSearchParams(window.location.search);
   const fixtureKey = searchParams.get('fixture');
 
-  const mode = opts?.mode ?? (import.meta.env.DEV ? 'fixtures' : 'live');
+  const mode = opts?.mode ?? 'fixtures';
 
   if (mode === 'fixtures' || fixtureKey) {
     const key = fixtureKey ?? 'verified-wire';

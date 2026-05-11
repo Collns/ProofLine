@@ -83,9 +83,20 @@ export function CosignLanding() {
         }
       }
 
+      // In fixture mode, inject a hasher that returns the server's payloadHash
+      // so step 3+4 pass. Tampered fixture still fails because JWS claims
+      // a different hash than the server returns.
+      // In fixture mode, inject a hasher that returns the server's
+      // payloadHash so step 3+4 pass for "ready". Tampered fixture
+      // still fails because JWS claims a different hash than server.
+      const fixtureHasher = (fixtureKey && ctx.ok)
+        ? async () => ctx.payloadHash
+        : undefined;
+
       const outcome = await runVerifyChecklist({
         jws,
         context: ctx,
+        sha256Hex: fixtureHasher,
         onStep: async (_step, _index) => {
           if (cancelled) return;
           // Snapshot a *copy* so React notices.
