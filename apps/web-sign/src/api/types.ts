@@ -21,8 +21,14 @@ export interface SignRequest {
   freshBiometric: true;
 }
 
+// challengeId is the pending_challenges/{id} document key issued by the
+// server. The popup must echo it back as the X-ProofLine-Challenge-Id
+// REQUEST header on /v1/sign/finalize so the server can locate and
+// consume the matching record. (It's also set as a response header for
+// older callers, but cross-origin fetch can't read custom headers
+// without CORS exposure — so we rely on the body field.)
 export type SignResponse =
-  | { ok: true; challenge: WebAuthnChallenge; policyDecision: 'APPROVED' }
+  | { ok: true; challenge: WebAuthnChallenge; policyDecision: 'APPROVED'; challengeId: string }
   | { ok: true; policyDecision: 'COSIGN_REQUIRED'; approvers: string[] }
   | { ok: false; error: PolicyErrorCode };
 
@@ -36,7 +42,7 @@ export interface SignSilentRequest {
 }
 
 export type SignSilentResponse =
-  | { ok: true; challenge: WebAuthnChallenge }
+  | { ok: true; challenge: WebAuthnChallenge; challengeId: string }
   | { ok: false; error: PolicyErrorCode };
 
 // ── /v1/sign/finalize ────────────────────────────────────────────────────────

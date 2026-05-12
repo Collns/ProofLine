@@ -158,6 +158,11 @@ export function makeSignSilentHandler(ctx: PolicyContext) {
     });
 
     // ── 7. Return challenge ───────────────────────────────────────────────────
+    //
+    // challengeId is echoed in both the header and the response body — see
+    // the longer note in sign.handler.ts. The popup reads it from the body
+    // because cross-origin custom response headers require explicit CORS
+    // exposure (and we'd rather not depend on that for correctness).
 
     const response: SignSilentResponse = {
       ok: true,
@@ -165,7 +170,7 @@ export function makeSignSilentHandler(ctx: PolicyContext) {
     };
 
     res.setHeader("X-ProofLine-Challenge-Id", challengeId);
-    res.status(200).json(response);
+    res.status(200).json({ ...response, challengeId });
   };
 }
 

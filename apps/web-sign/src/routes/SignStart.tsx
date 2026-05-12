@@ -41,8 +41,8 @@ type Phase =
   | { kind: 'loading' }
   | { kind: 'tamper'; message: string }
   | { kind: 'opener-error'; reason: string }
-  | { kind: 'ready'; payload: EmailPayload; payloadHash: string; serverChallenge: string }
-  | { kind: 'signing'; payload: EmailPayload; payloadHash: string; serverChallenge: string }
+  | { kind: 'ready'; payload: EmailPayload; payloadHash: string; serverChallenge: string; challengeId: string }
+  | { kind: 'signing'; payload: EmailPayload; payloadHash: string; serverChallenge: string; challengeId: string }
   | { kind: 'finalize-error'; code: string; detail: string }
   | { kind: 'cancelled' }
   | { kind: 'success' };
@@ -168,6 +168,7 @@ export function SignStart() {
           payload,
           payloadHash: localHash,
           serverChallenge: signResp.challenge.challenge,
+          challengeId: signResp.challengeId,
         });
       } catch (e) {
         if (cancelled) return;
@@ -185,8 +186,8 @@ export function SignStart() {
   // ── Sign + finalize
   async function runCeremony(): Promise<void> {
     if (phase.kind !== 'ready' || !params) return;
-    const { payload, payloadHash, serverChallenge } = phase;
-    setPhase({ kind: 'signing', payload, payloadHash, serverChallenge });
+    const { payload, payloadHash, serverChallenge, challengeId } = phase;
+    setPhase({ kind: 'signing', payload, payloadHash, serverChallenge, challengeId });
 
     try {
       // userVerification: 'required' — the actual biometric prompt.
@@ -203,6 +204,10 @@ export function SignStart() {
         timeout: 60_000,
       });
 
+      // challengeId is the server's pending_challenges/{id} key, returned
+      // by POST /v1/sign in step "ready". It is NOT the extension's
+      // ceremonyId — passing the latter produced NONCE_REPLAYED because
+      // finalize couldn't locate the pending record.
       const finalizeResp = await signFinalize(
         {
           assertion: {
@@ -216,7 +221,7 @@ export function SignStart() {
           recipientSetHash: params.recipientSetHash,
           path:             'fresh',
         },
-        params.ceremonyId,
+        challengeId,
       );
 
       if (!finalizeResp.ok) {
