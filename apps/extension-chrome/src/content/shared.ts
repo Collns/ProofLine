@@ -10,6 +10,14 @@ export const TOOLBAR_NOT_FOUND_MARKER = 'data-proofline-toolbar-not-found';
 export const COMPOSE_DIALOG_SELECTOR =
   'div[role="dialog"]';
 
+// PFL-071: inline reply/forward compose containers live INSIDE the
+// message thread, not inside a `div[role="dialog"]`. They share the
+// same `tr.btC` send-button toolbar — so we anchor on the toolbar and
+// walk up to the smallest ancestor that holds both the toolbar AND a
+// contenteditable body. That ancestor is the compose container.
+export const INLINE_COMPOSE_BODY_SELECTOR =
+  'div[role="textbox"][aria-label*="Message Body" i], div[g_editable="true"][role="textbox"], div[contenteditable="true"]';
+
 // Toolbar selector fallback chain (first match wins). Gmail rewrites
 // minified class names occasionally — semantic + aria-label fallbacks
 // keep us alive a little longer when that happens.

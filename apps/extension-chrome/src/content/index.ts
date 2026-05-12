@@ -1,5 +1,5 @@
 import { log, warn } from '../shared/log.js';
-import { findComposeDialogs } from './gmail-detector.js';
+import { findComposeContainers } from './gmail-detector.js';
 import { tryInject } from './inject-toolbar.js';
 import { injectBannerIntoCompose } from './inject-banner.js';
 import { isBackgroundToContentMessage } from '../shared/types.js';
@@ -8,24 +8,25 @@ import { readComposeId } from './shared.js';
 // Content-script entry. Runs once per Gmail tab. We use a single
 // MutationObserver on document.body — cheaper than polling and catches
 // Gmail's SPA navigation events. Each mutation triggers a sweep that
-// walks current compose dialogs and idempotently injects the button.
+// walks current compose containers — both floating dialogs AND inline
+// reply/forward boxes (PFL-071) — and idempotently injects the button.
 
 function sweep(): void {
-  const dialogs = findComposeDialogs(document);
-  for (const compose of dialogs) {
+  const composes = findComposeContainers(document);
+  for (const compose of composes) {
     tryInject(compose);
   }
 }
 
 function findComposeByComposeId(composeId: string): Element | null {
-  for (const compose of findComposeDialogs(document)) {
+  const composes = findComposeContainers(document);
+  for (const compose of composes) {
     if (readComposeId(compose) === composeId) return compose;
   }
   // Fallback — synthetic ids used when Gmail hasn't assigned a draft id
   // yet; just take the first open compose. We expect at most one in the
-  // common case (Sarah clicking Sign on the dialog she just opened).
-  const dialogs = findComposeDialogs(document);
-  return dialogs.length === 1 ? dialogs[0]! : null;
+  // common case (Sarah clicking Sign on the container she just opened).
+  return composes.length === 1 ? composes[0]! : null;
 }
 
 function listenForBackgroundMessages(): void {

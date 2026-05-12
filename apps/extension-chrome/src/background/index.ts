@@ -281,12 +281,52 @@ async function runSignFlow(input: RunSignFlowInput): Promise<void> {
   }
 
   if (input.tabId != null) {
+    const bannerHtml = (response.banner ?? "").trim().length > 0
+      ? response.banner
+      : renderFallbackBanner({
+          signerEmail: fullPayload.from,
+          payloadHash,
+        });
     await postToTab(input.tabId, {
       type:       "PAYLOAD_SIGNED",
       composeId:  input.composeId,
-      bannerHtml: response.banner,
+      bannerHtml,
     });
   }
+}
+
+/**
+ * PFL-070 fallback: if /v1/sign/finalize ever returns without a rendered
+ * banner (server-side regression, empty render, future endpoint shape
+ * change), produce a minimal verified-by-ProofLine banner client-side
+ * so the recipient still sees a verify link. Table + inline styles only
+ * — same constraints email clients impose on the server renderer.
+ */
+function renderFallbackBanner(input: {
+  signerEmail: string;
+  payloadHash: string;
+}): string {
+  const verifyUrl = `https://proofline-verify.web.app/v/${encodeURIComponent(input.payloadHash)}`;
+  const signer    = escapeHtml(input.signerEmail || "an authenticated ProofLine user");
+  return [
+    '<table data-proofline-banner="true" class="proofline-banner" role="presentation" ',
+    'style="width:100%;border:1px solid #0F9D58;border-radius:8px;margin:0 0 16px 0;',
+    'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;border-collapse:collapse;">',
+    '<tr><td style="padding:12px 16px;background:#F0FDF4;">',
+    '<strong style="color:#0F9D58;">&#10003; Verified by ProofLine</strong><br/>',
+    `<span style="color:#374151;font-size:14px;">Signed by ${signer}<br/>`,
+    `<a href="${verifyUrl}" style="color:#0D6EFD;text-decoration:none;">Verify the signature &rarr;</a>`,
+    '</span></td></tr></table>',
+  ].join("");
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
