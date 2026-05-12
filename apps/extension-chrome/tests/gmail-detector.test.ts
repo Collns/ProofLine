@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
+  findComposeContainers,
   findComposeDialogs,
+  findInlineComposes,
   findToolbarWithSelector,
 } from '../src/content/gmail-detector.js';
 
@@ -89,5 +91,86 @@ describe('findToolbarWithSelector — fallback chain', () => {
     document.body.appendChild(compose);
 
     expect(findToolbarWithSelector(compose)).toBeNull();
+  });
+});
+
+// PFL-071 — inline reply/forward composes are NOT inside a role="dialog".
+// They live inside the thread tree, but share the tr.btC toolbar with the
+// new-compose dialog. findInlineComposes anchors on the toolbar and walks
+// up to the nearest ancestor that holds both the toolbar and a body.
+function makeInlineReply(opts: { containerClass?: string } = {}): HTMLElement {
+  const thread = document.createElement('div');
+  thread.id = 'thread-1';
+  const reply = document.createElement('div');
+  reply.className = opts.containerClass ?? 'ip iq';
+  reply.innerHTML = [
+    '<div role="textbox" aria-label="Message Body" contenteditable="true"></div>',
+    '<table><tr class="btC"><td>Send</td></tr></table>',
+  ].join('');
+  thread.appendChild(reply);
+  document.body.appendChild(thread);
+  return reply;
+}
+
+describe('findInlineComposes', () => {
+  it('returns inline reply containers that hold a tr.btC + contenteditable body', () => {
+    const reply = makeInlineReply();
+    expect(findInlineComposes(document)).toContain(reply);
+  });
+
+  it('ignores tr.btC toolbars that are already inside a role="dialog" (those go through findComposeDialogs)', () => {
+    document.body.innerHTML = '';
+    const dialog = makeCompose(
+      'New Message',
+      '<div role="textbox" aria-label="Message Body" contenteditable="true"></div>' +
+        '<table><tr class="btC"></tr></table>',
+    );
+    document.body.appendChild(dialog);
+    expect(findInlineComposes(document)).toHaveLength(0);
+  });
+
+  it('deduplicates when multiple toolbars resolve to the same ancestor', () => {
+    document.body.innerHTML = '';
+    const reply = document.createElement('div');
+    reply.className = 'ip iq';
+    reply.innerHTML = [
+      '<div role="textbox" aria-label="Message Body" contenteditable="true"></div>',
+      '<table><tr class="btC"></tr></table>',
+      '<table><tr class="btC"></tr></table>',
+    ].join('');
+    document.body.appendChild(reply);
+    expect(findInlineComposes(document)).toEqual([reply]);
+  });
+
+  it('returns empty when no inline composes exist', () => {
+    document.body.innerHTML = '<div>just a thread, no reply open</div>';
+    expect(findInlineComposes(document)).toEqual([]);
+  });
+});
+
+describe('findComposeContainers', () => {
+  it('returns the union of dialog composes and inline replies', () => {
+    document.body.innerHTML = '';
+    const dialog = makeCompose('New Message', '<tr class="btC"></tr>');
+    document.body.appendChild(dialog);
+    const reply = makeInlineReply();
+
+    const found = findComposeContainers(document);
+    expect(found).toContain(dialog);
+    expect(found).toContain(reply);
+    expect(found).toHaveLength(2);
+  });
+
+  it('returns just dialogs when no inline composes are present', () => {
+    document.body.innerHTML = '';
+    const dialog = makeCompose('New Message', '<tr class="btC"></tr>');
+    document.body.appendChild(dialog);
+    expect(findComposeContainers(document)).toEqual([dialog]);
+  });
+
+  it('returns just inline composes when no dialogs are present', () => {
+    document.body.innerHTML = '';
+    const reply = makeInlineReply();
+    expect(findComposeContainers(document)).toEqual([reply]);
   });
 });

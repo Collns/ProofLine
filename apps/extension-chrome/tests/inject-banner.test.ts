@@ -86,6 +86,26 @@ describe("injectBannerIntoCompose", () => {
     expect(result).toEqual({ ok: false, reason: "EMPTY_BANNER" });
   });
 
+  it("PFL-071: injects into an inline reply container (no role=\"dialog\" wrapper)", () => {
+    document.body.innerHTML = "";
+    const reply = document.createElement("div");
+    reply.className = "ip iq"; // Gmail's inline-compose marker classes
+    const body = document.createElement("div");
+    body.setAttribute("role", "textbox");
+    body.setAttribute("aria-label", "Message Body");
+    body.setAttribute("contenteditable", "true");
+    body.appendChild(document.createTextNode("Thanks for the update — "));
+    reply.appendChild(body);
+    document.body.appendChild(reply);
+
+    const result = injectBannerIntoCompose(reply, SAMPLE_BANNER);
+
+    expect(result.ok).toBe(true);
+    const banner = body.querySelector('[data-proofline-banner="true"]');
+    expect(banner).not.toBeNull();
+    expect(body.firstElementChild).toBe(banner);
+  });
+
   it("backfills the data-proofline-banner attribute if the upstream HTML omits it", () => {
     document.body.innerHTML = "";
     const compose = makeCompose();
