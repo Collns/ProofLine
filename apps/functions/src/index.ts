@@ -50,10 +50,8 @@ import { makeSignHandler }         from "./signing/handlers/sign.handler.js";
 import { makeSignSilentHandler }   from "./signing/handlers/sign-silent.handler.js";
 import { makeSignFinalizeHandler } from "./signing/handlers/sign-finalize.handler.js";
 import { makeOnboardingRouter }    from "./api/onboarding/router.js";
-import {
-  makeStubOnboardingDeps,
-  makeStubPolicyContext,
-} from "./wiring/stubs.js";
+import { makeStubOnboardingDeps } from "./wiring/stubs.js";
+import { makeFirestorePolicyContext } from "./wiring/firestore-policy-context.js";
 
 // --- PFL-025: bilateral HTTP wiring
 import { makeBilateralRouter }         from "./api/bilateral/router.js";
@@ -211,15 +209,14 @@ type SignHandlerFactory = (
 
 function withPerRequestPolicyCtx(factory: SignHandlerFactory): express.RequestHandler {
   return async (req, res, next) => {
-    const body = req.body as { credentialId?: unknown } | undefined;
-    const credentialId = typeof body?.credentialId === "string"
-      ? body.credentialId
-      : "stub-credential-id";
+    // PFL-086: PolicyContext now reads `users/{userId}` from Firestore for
+    // the device check. The body-derived credentialId fallback that the
+    // stub used is gone — validatePolicy / sign-finalize match against the
+    // pending_challenges record, not against per-request body fields.
     const user = (req as express.Request & {
       user?: { userId?: string; companyId?: string };
     }).user;
-    const ctx = makeStubPolicyContext({
-      credentialId,
+    const ctx = makeFirestorePolicyContext(getFirestore(), {
       userId:    user?.userId    ?? "dev-user",
       companyId: user?.companyId ?? "dev-company",
     });
