@@ -20,8 +20,14 @@
  *   webauthn_credentials/{credentialId} = { userId, companyId, publicKey,
  *                                           attestationObject, clientDataJSON,
  *                                           deviceName, createdAt }
- *   users/{userId}.credentialId         = credentialId  (set if currently
- *                                                        placeholder/empty)
+ *   users/{userId}.devices[]            = append DeviceRecord for this
+ *                                          credentialId if not already
+ *                                          present (PFL-084). The canonical
+ *                                          schema is `User.devices: DeviceRecord[]`
+ *                                          and validatePolicy/sign-finalize
+ *                                          both look up devices via
+ *                                          `user.devices.find(...)`. We do NOT
+ *                                          write a flat `user.credentialId`.
  *
  * Attestation verification is intentionally NOT performed here — the
  * hackathon slice trusts the platform authenticator to have produced a
@@ -33,6 +39,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { z } from "zod";
 import * as crypto from "node:crypto";
 
+import type { DeviceRecord } from "@proofline/types";
 import { ERR } from "../api/onboarding/http.helpers.js";
 
 // ─── Auth: decode + verify the extension auth JWS ────────────────────────────
@@ -106,8 +113,6 @@ export interface RegisterCredentialResponse {
   credentialId: string;
 }
 
-const PLACEHOLDER_CREDENTIAL_ID = "placeholder-credential-id";
-
 // ─── Handler ─────────────────────────────────────────────────────────────────
 
 export interface RegisterCredentialHandlerDeps {
@@ -179,17 +184,25 @@ export function makeRegisterCredentialHandler(
       createdAt:         now,
     });
 
-    // 5. Update users/{userId}.credentialId — but only when it's still
-    //    the placeholder or empty. Keeps multi-device futures sane: the
-    //    'primary' credential isn't quietly overwritten on subsequent
-    //    enrolments.
+    // 5. Append the new device to users/{userId}.devices[].
+    //    Idempotent: if a DeviceRecord with this credentialId already
+    //    exists on the user, leave it untouched. Multi-device: a new
+    //    credentialId is appended, never overwriting prior devices.
+    //    (PFL-084: the canonical schema is `User.devices: DeviceRecord[]`;
+    //    we do NOT write a flat `users/{userId}.credentialId` field.)
+    const newDevice: DeviceRecord = {
+      credentialId: body.credentialId,
+      publicKey:    body.publicKey,
+      enrolledAt:   now,
+    };
     const userRef  = firestore.collection("users").doc(decoded.userId);
     const userSnap = await userRef.get();
     if (userSnap.exists) {
-      const u = userSnap.data() as { credentialId?: string };
-      if (!u.credentialId || u.credentialId === PLACEHOLDER_CREDENTIAL_ID) {
+      const u = userSnap.data() as { devices?: DeviceRecord[] };
+      const devices = Array.isArray(u.devices) ? u.devices : [];
+      if (!devices.some((d) => d.credentialId === body.credentialId)) {
         await userRef.set(
-          { credentialId: body.credentialId, updatedAt: now },
+          { devices: [...devices, newDevice], updatedAt: now },
           { merge: true },
         );
       }
@@ -199,11 +212,11 @@ export function makeRegisterCredentialHandler(
       // already established the demo defaults.
       await userRef.set(
         {
-          userId:       decoded.userId,
-          companyId:    decoded.companyId,
-          credentialId: body.credentialId,
-          createdAt:    now,
-          updatedAt:    now,
+          userId:    decoded.userId,
+          companyId: decoded.companyId,
+          devices:   [newDevice],
+          createdAt: now,
+          updatedAt: now,
         },
         { merge: false },
       );

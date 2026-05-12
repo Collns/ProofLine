@@ -124,6 +124,14 @@ describe("POST /v1/extension/auth", () => {
     expect((store["users"]!["user-abc"] as { email: string }).email).toBe(
       "alice@example.com",
     );
+    // PFL-084: fresh user docs persist `devices: []`, NOT a flat
+    // `credentialId` placeholder string.
+    const userDoc = store["users"]!["user-abc"] as Record<string, unknown>;
+    expect(userDoc["credentialId"]).toBeUndefined();
+    expect(userDoc["devices"]).toEqual([]);
+    // Response still surfaces the placeholder so the popup knows it must
+    // run a WebAuthn registration before signing.
+    expect(res.body.credentialId).toBe("placeholder-credential-id");
   });
 
   it("returns 400 when idToken is missing from the body", async () => {
@@ -172,15 +180,23 @@ describe("POST /v1/extension/auth", () => {
     expect(res.headers["access-control-allow-headers"]).toContain("Content-Type");
   });
 
-  it("re-uses an existing users/{uid} record on subsequent calls", async () => {
+  it("re-uses an existing users/{uid} record and surfaces devices[0].credentialId", async () => {
+    // PFL-084: persisted user doc shape — devices is an array of
+    // DeviceRecord, not a flat credentialId field.
     store["users"] = {
       "user-existing": {
-        userId:       "user-existing",
-        email:        "carol@acme.com",
-        companyId:    "co-acme",
-        credentialId: "cred-real-abc",
-        createdAt:    1700000000000,
-        updatedAt:    1700000000000,
+        userId:    "user-existing",
+        email:     "carol@acme.com",
+        companyId: "co-acme",
+        devices:   [
+          {
+            credentialId: "cred-real-abc",
+            publicKey:    "spki-base64-existing",
+            enrolledAt:   1700000000000,
+          },
+        ],
+        createdAt: 1700000000000,
+        updatedAt: 1700000000000,
       },
     };
 
