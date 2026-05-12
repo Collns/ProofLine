@@ -117,19 +117,16 @@ async function postJsonWithHeaders<TReq, TRes>(
   return (await response.json()) as TRes;
 }
 
-// ── Extension auth (client-side stub) ────────────────────────────────────────
-// TODO(PFL-AUTH-LOGIN): replace with real fetch to /v1/extension/auth once
-// the server ships that endpoint. Today we just synthesize a token for the
-// install-flow demo; the extension treats it as opaque.
+// ── Extension auth ───────────────────────────────────────────────────────────
+// POST /v1/extension/auth — exchange a Firebase ID token for a 30-day JWS
+// extension auth token. Public endpoint (no Bearer); the Firebase ID
+// token in the body IS the auth.
 
-export async function stubExtensionAuth(
+export function requestExtensionAuth(
   input: ExtensionAuthRequest,
 ): Promise<ExtensionAuthResponse> {
-  await new Promise((r) => setTimeout(r, 600));
-  return {
-    ok: true,
-    extToken: `dev.${input.extInstallId}.${Math.random().toString(36).slice(2, 12)}`,
-    userId: 'dev-user',
-    companyId: 'dev-company',
-  };
+  return postJson<ExtensionAuthRequest, ExtensionAuthResponse>(
+    '/v1/extension/auth',
+    input,
+  );
 }

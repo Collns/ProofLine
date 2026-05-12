@@ -1,20 +1,22 @@
 import { useEffect, useState } from 'react';
+import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { ProofLineLogo } from '../components/ProofLineLogo';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { validateOpenerFromWindow } from '../lib/opener-validator';
-import { stubExtensionAuth } from '../api/client';
+import { getFirebaseAuth } from '../lib/firebase';
+import { requestExtensionAuth } from '../api/client';
 import { deliverToOpener } from '../api/postmessage';
 
-// First-time extension auth (TDD §11.4).
+// First-time extension auth (TDD §11.4, PFL-061).
 //
 // URL params: ?extInstallId=<id>&returnOrigin=chrome-extension://<id>
 //             &ceremonyId=<uuid>
 //
-// In production: runs Firebase Auth (email magic link / Google OAuth),
-// then POSTs to /v1/extension/auth which returns a 30-day extension-bound
-// JWS. For this slice the server endpoint doesn't exist and Firebase Auth
-// isn't wired — we render a placeholder "click to authenticate" stub
-// that simulates a successful sign-in. Real wiring is PFL-AUTH-LOGIN.
+// 1. User clicks "Continue with Google".
+// 2. Firebase Auth opens its Google sign-in popup; we get an ID token.
+// 3. POST { idToken, extInstallId } → /v1/extension/auth.
+// 4. Server returns a 30-day JWS authToken + credentialId.
+// 5. Deliver auth_success back to the extension via chrome.runtime.
 
 type Phase =
   | { kind: 'opener-error'; reason: string }
@@ -62,14 +64,20 @@ export function ExtensionAuth() {
     if (!params) return;
     setPhase({ kind: 'authenticating' });
     try {
-      // TODO(PFL-AUTH-LOGIN): replace stub with real Firebase Auth +
-      // POST /v1/extension/auth.
-      const resp = await stubExtensionAuth({ extInstallId: params.extInstallId });
+      const provider = new GoogleAuthProvider();
+      const credential = await signInWithPopup(getFirebaseAuth(), provider);
+      const idToken = await credential.user.getIdToken();
+
+      const resp = await requestExtensionAuth({
+        idToken,
+        extInstallId: params.extInstallId,
+      });
+
       const delivery = await deliverToOpener(
         {
           kind: 'auth_success',
           ceremonyId: params.ceremonyId,
-          authToken: resp.extToken,
+          authToken: resp.authToken,
           userId:    resp.userId,
           companyId: resp.companyId,
         },
@@ -124,9 +132,8 @@ export function ExtensionAuth() {
             <header className="space-y-2">
               <h1 className="text-2xl font-semibold text-[#0B1F3A]">Connect ProofLine to Gmail</h1>
               <p className="text-base text-gray-600">
-                Sign in to authorize the extension. We'll issue a token your browser
-                stores for 30 days. No password — your existing Google or email account
-                identifies you.
+                Sign in with Google to authorize the extension. We'll issue a token your
+                browser stores for 30 days. No password — your Google account identifies you.
               </p>
             </header>
             <button
@@ -138,11 +145,11 @@ export function ExtensionAuth() {
               {phase.kind === 'authenticating' && (
                 <span aria-hidden="true" className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
               )}
-              <span>{phase.kind === 'authenticating' ? 'Authenticating…' : 'Continue (placeholder)'}</span>
+              <span>{phase.kind === 'authenticating' ? 'Authenticating…' : 'Continue with Google'}</span>
             </button>
             <p className="text-xs text-gray-500">
-              Real Firebase Auth wiring lands in a separate ticket. This button currently
-              simulates a successful sign-in for the demo.
+              Your Google ID token is exchanged server-side for a ProofLine extension
+              token. We do not see your Google password.
             </p>
           </div>
         )}

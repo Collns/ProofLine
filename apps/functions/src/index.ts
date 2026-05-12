@@ -61,6 +61,9 @@ import { makeBilateralService }        from "@proofline/bilateral";
 import { makeFirestoreBilateralStore } from "./api/bilateral/firestore-store.js";
 import { makeStubEmailProvider } from "@proofline/email/stub";
 
+// --- PFL-061: extension auth HTTP wiring
+import { makeExtensionAuthHandler } from "./auth/extension-auth.handler.js";
+
 // ─── Firebase Admin (idempotent — module may be re-imported across invokes) ─
 
 if (getApps().length === 0) {
@@ -275,6 +278,35 @@ publicApp.use(
   stubAuthMiddleware,
   (req, res, next) => bilateralRouter()(req, res, next),
 );
+
+// ─── PFL-061: Extension auth (POST /v1/extension/auth) ───────────────────────
+//
+// Public endpoint — no Bearer token required. The Firebase ID token in the
+// request body IS the authentication. CORS is applied so the popup at
+// https://proofline-sign.web.app can call it from the browser.
+
+let cachedExtAuthHandler:
+  | ((req: express.Request, res: express.Response) => Promise<void>)
+  | null = null;
+function extensionAuthHandler(): (
+  req: express.Request,
+  res: express.Response,
+) => Promise<void> {
+  if (cachedExtAuthHandler) return cachedExtAuthHandler;
+  cachedExtAuthHandler = makeExtensionAuthHandler();
+  return cachedExtAuthHandler;
+}
+
+publicApp.post(
+  "/v1/extension/auth",
+  corsMiddleware,
+  (req, res, next) => {
+    extensionAuthHandler()(req, res).catch(next);
+  },
+);
+// Explicit OPTIONS — corsMiddleware short-circuits the preflight, but the
+// route must exist so Express doesn't fall through to a 404.
+publicApp.options("/v1/extension/auth", corsMiddleware);
 
 export const api = onRequest(
   { region: "us-central1", cors: false, memory: "256MiB" },

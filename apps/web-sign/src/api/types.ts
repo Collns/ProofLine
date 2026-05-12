@@ -53,20 +53,22 @@ export type SignFinalizeResponse =
   | { ok: true; envelope: SignedEnvelope; banner: string; sessionToken?: string }
   | { ok: false; error: PolicyErrorCode };
 
-// ── /v1/extension/auth (NOT YET ON SERVER — stubbed client-side) ─────────────
-// TODO(PFL-AUTH-LOGIN): server endpoint does not exist yet; this slice
-// runs the auth route as a client-only stub that simulates a successful
-// sign-in. Real wiring is a separate ticket.
+// ── /v1/extension/auth ───────────────────────────────────────────────────────
+// Exchanges a Firebase Auth ID token for a 30-day JWS extension token
+// (PFL-061). The popup runs Firebase Auth (Google sign-in), POSTs the
+// resulting ID token here, and forwards { authToken, credentialId } to
+// the extension via the auth_success ceremony reply.
 
 export interface ExtensionAuthRequest {
+  idToken: string;
   extInstallId: string;
 }
 
 export interface ExtensionAuthResponse {
-  ok: true;
-  extToken: string;
+  authToken: string;
   userId: string;
   companyId: string;
+  credentialId: string;
 }
 
 // ── Error envelope ───────────────────────────────────────────────────────────

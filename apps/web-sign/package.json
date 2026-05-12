@@ -17,6 +17,7 @@
     "@proofline/types": "workspace:*",
     "@proofline/ui": "workspace:*",
     "@proofline/webauthn": "workspace:*",
+    "firebase": "12.13.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "react-router-dom": "7.15.0"
