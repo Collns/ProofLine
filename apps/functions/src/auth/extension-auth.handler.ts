@@ -34,6 +34,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { z } from "zod";
 import * as crypto from "node:crypto";
 
+import type { DeviceRecord } from "@proofline/types";
 import { ERR } from "../api/onboarding/http.helpers.js";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -67,19 +68,24 @@ export interface ExtensionAuthResponse {
 // ─── Stored user record (subset we care about) ───────────────────────────────
 
 interface UserDoc {
-  userId:        string;
-  email:         string;
-  companyId:     string;
-  role?:         string;
-  credentialId?: string;
-  createdAt:     number;
-  updatedAt:     number;
+  userId:    string;
+  email:     string;
+  companyId: string;
+  role?:     string;
+  // Canonical schema (packages/types: User.devices: DeviceRecord[]). The
+  // signing read-path (validatePolicy, sign-finalize) calls
+  // `user.devices.find(...)` so the field MUST be an array, never a flat
+  // `credentialId` string. PFL-084 removed the legacy flat field.
+  devices:   DeviceRecord[];
+  createdAt: number;
+  updatedAt: number;
 }
 
-// Placeholder credentialId — matches popup-manager.ts so a freshly
-// onboarded user can call /v1/sign before they've enrolled a WebAuthn
-// credential. Real enrollment replaces this on first successful
-// passkey registration.
+// Placeholder credentialId returned in the auth response when the user
+// hasn't enrolled a WebAuthn credential yet — the extension popup uses
+// this sentinel to decide "register a credential first". We never persist
+// this string to the user document; the persisted shape is `devices: []`
+// until the first real enrolment lands in register-credential.handler.ts.
 const PLACEHOLDER_CREDENTIAL_ID = "placeholder-credential-id";
 
 // Hackathon-mode companyId for users who haven't completed onboarding.
@@ -177,12 +183,12 @@ export function makeExtensionAuthHandler(deps: ExtensionAuthHandlerDeps = {}) {
     } else {
       const now = Date.now();
       user = {
-        userId:        decoded.uid,
-        email:         decoded.email ?? "",
-        companyId:     DEMO_COMPANY_ID,
-        credentialId:  PLACEHOLDER_CREDENTIAL_ID,
-        createdAt:     now,
-        updatedAt:     now,
+        userId:    decoded.uid,
+        email:     decoded.email ?? "",
+        companyId: DEMO_COMPANY_ID,
+        devices:   [],
+        createdAt: now,
+        updatedAt: now,
       };
       await userRef.set(user, { merge: false });
     }
@@ -194,12 +200,18 @@ export function makeExtensionAuthHandler(deps: ExtensionAuthHandlerDeps = {}) {
       extInstallId,
     });
 
-    // 4. Return.
+    // 4. Return. The response surfaces the primary device's credentialId
+    //    (devices[0]) when one is enrolled, or PLACEHOLDER_CREDENTIAL_ID
+    //    when this is a brand-new user — the extension popup uses the
+    //    placeholder to know it needs to run a WebAuthn registration.
+    const primaryCredentialId = Array.isArray(user.devices) && user.devices.length > 0
+      ? (user.devices[0] as DeviceRecord).credentialId
+      : PLACEHOLDER_CREDENTIAL_ID;
     const response: ExtensionAuthResponse = {
       authToken:    token,
       userId:       user.userId,
       companyId:    user.companyId,
-      credentialId: user.credentialId ?? PLACEHOLDER_CREDENTIAL_ID,
+      credentialId: primaryCredentialId,
       email:        user.email ?? decoded.email ?? "",
     };
     res.status(200).json(response);

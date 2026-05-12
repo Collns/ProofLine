@@ -109,13 +109,14 @@ beforeEach(() => {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("POST /v1/extension/register-credential", () => {
-  it("stores the credential and updates users/{userId}.credentialId from placeholder", async () => {
+  it("stores the credential and appends a DeviceRecord to users/{userId}.devices", async () => {
+    // Fresh user shape per PFL-084: `devices: []` (no flat credentialId field).
     store["users"] = {
       "user-abc": {
-        userId:       "user-abc",
-        email:        "alice@example.com",
-        companyId:    "dev-company",
-        credentialId: "placeholder-credential-id",
+        userId:    "user-abc",
+        email:     "alice@example.com",
+        companyId: "dev-company",
+        devices:   [],
       },
     };
 
@@ -147,8 +148,18 @@ describe("POST /v1/extension/register-credential", () => {
     });
     expect(typeof cred["createdAt"]).toBe("number");
 
-    expect((store["users"]?.["user-abc"] as Record<string, unknown>)["credentialId"])
-      .toBe(validBody.credentialId);
+    // PFL-084: user.devices[] must contain a DeviceRecord for the new
+    // credentialId, and the flat user.credentialId field must NOT exist.
+    const userDoc = store["users"]?.["user-abc"] as Record<string, unknown>;
+    expect(userDoc["credentialId"]).toBeUndefined();
+    const devices = userDoc["devices"] as Array<Record<string, unknown>>;
+    expect(Array.isArray(devices)).toBe(true);
+    expect(devices).toHaveLength(1);
+    expect(devices[0]).toMatchObject({
+      credentialId: validBody.credentialId,
+      publicKey:    validBody.publicKey,
+    });
+    expect(typeof devices[0]?.["enrolledAt"]).toBe("number");
   });
 
   it("returns 401 when the Authorization header is missing", async () => {
@@ -257,7 +268,7 @@ describe("POST /v1/extension/register-credential", () => {
       .toBe("user-real");
   });
 
-  it("creates a minimal users/{userId} doc when none exists yet", async () => {
+  it("creates a minimal users/{userId} doc with devices:[deviceRecord] when none exists yet", async () => {
     const app = buildApp({
       verifyAuthBearer: () => ({
         userId: "user-fresh", companyId: "co-fresh", extInstallId: "e",
@@ -273,18 +284,31 @@ describe("POST /v1/extension/register-credential", () => {
 
     const u = store["users"]?.["user-fresh"] as Record<string, unknown>;
     expect(u).toMatchObject({
-      userId:       "user-fresh",
-      companyId:    "co-fresh",
+      userId:    "user-fresh",
+      companyId: "co-fresh",
+    });
+    expect(u["credentialId"]).toBeUndefined();
+    const devices = u["devices"] as Array<Record<string, unknown>>;
+    expect(devices).toHaveLength(1);
+    expect(devices[0]).toMatchObject({
       credentialId: validBody.credentialId,
+      publicKey:    validBody.publicKey,
     });
   });
 
-  it("does NOT overwrite an existing real credentialId on a fresh enrolment", async () => {
+  it("appends a second device on multi-device enrolment instead of overwriting", async () => {
+    // PFL-084 / multi-device: registering a new credentialId for a user
+    // who already has a device must APPEND, not overwrite.
+    const existingDevice = {
+      credentialId: "cred-existing-real-001",
+      publicKey:    "spki-existing",
+      enrolledAt:   NOW_SEC * 1000 - 86_400_000,
+    };
     store["users"] = {
       "user-multi": {
-        userId:       "user-multi",
-        companyId:    "co-multi",
-        credentialId: "cred-existing-real-001",
+        userId:    "user-multi",
+        companyId: "co-multi",
+        devices:   [existingDevice],
       },
     };
 
@@ -301,8 +325,44 @@ describe("POST /v1/extension/register-credential", () => {
       .send({ ...validBody, credentialId: "cred-second-device-002" })
       .expect(200);
 
-    expect((store["users"]?.["user-multi"] as Record<string, unknown>)["credentialId"])
-      .toBe("cred-existing-real-001");
+    const userDoc = store["users"]?.["user-multi"] as Record<string, unknown>;
+    expect(userDoc["credentialId"]).toBeUndefined();
+    const devices = userDoc["devices"] as Array<Record<string, unknown>>;
+    expect(devices).toHaveLength(2);
+    expect(devices.map((d) => d["credentialId"])).toEqual([
+      "cred-existing-real-001",
+      "cred-second-device-002",
+    ]);
     expect(store["webauthn_credentials"]?.["cred-second-device-002"]).toBeDefined();
+  });
+
+  // PFL-084 regression guard. The bug: register-credential used to write
+  // `users/{userId}.credentialId = X` as a flat string, but validatePolicy
+  // (and sign-finalize) call `user.devices.find(d => d.credentialId === ...)`
+  // — so the array was always undefined and DEVICE_INVALID fired. Confirm
+  // the persisted shape now satisfies the consumer's expectation.
+  it("PFL-084: user document is readable as UserRecord.devices by sign-finalize", async () => {
+    const app = buildApp({
+      verifyAuthBearer: () => ({
+        userId: "user-readable", companyId: "co-readable", extInstallId: "e",
+        iat: NOW_SEC, exp: NOW_SEC + 3600,
+      }),
+    });
+
+    await request(app)
+      .post("/v1/extension/register-credential")
+      .set("Authorization", "Bearer x")
+      .send(validBody)
+      .expect(200);
+
+    // Simulate what sign-finalize does after ctx.getUser(userId):
+    //   const device = user.devices.find((d) => d.credentialId === ...);
+    const userDoc = store["users"]?.["user-readable"] as {
+      devices?: Array<{ credentialId: string; publicKey: string; enrolledAt: number }>;
+    };
+    const device = userDoc.devices?.find((d) => d.credentialId === validBody.credentialId);
+    expect(device).toBeDefined();
+    expect(device?.publicKey).toBe(validBody.publicKey);
+    expect(typeof device?.enrolledAt).toBe("number");
   });
 });
