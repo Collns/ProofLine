@@ -144,6 +144,7 @@ export function makeSignHandler(ctx: PolicyContext) {
     // refuse any assertion whose challengeId is not present or is expired.
 
     await storePendingChallenge(challengeId, {
+      payload: body.payload,
       payloadHash,
       recipientSetHash: body.recipientSetHash,
       credentialId: body.credentialId,
