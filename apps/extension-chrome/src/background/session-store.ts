@@ -34,6 +34,7 @@ export interface AuthTokenRecord {
   token:        string;       // bearer / JWS extension auth token
   userId:       string;
   companyId:    string;
+  email:        string;       // user's email, used as payload.from on sign
   extInstallId: string;       // chrome.runtime.id at issuance time
   iat:          number;       // unix seconds — issued at
   exp:          number;       // unix seconds — expires at
@@ -90,6 +91,7 @@ function isAuthTokenRecord(value: unknown): value is AuthTokenRecord {
     typeof v.token === 'string' &&
     typeof v.userId === 'string' &&
     typeof v.companyId === 'string' &&
+    typeof v.email === 'string' &&
     typeof v.extInstallId === 'string' &&
     typeof v.iat === 'number' &&
     typeof v.exp === 'number'

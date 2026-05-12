@@ -23,6 +23,7 @@ export type CeremonyResponse =
       authToken: string;
       userId: string;
       companyId: string;
+      email: string;
     }
   | {
       kind: 'sign_success';

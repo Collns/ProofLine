@@ -117,6 +117,7 @@ describe("POST /v1/extension/auth", () => {
     expect(typeof res.body.companyId).toBe("string");
     expect(res.body.companyId.length).toBeGreaterThan(0);
     expect(typeof res.body.credentialId).toBe("string");
+    expect(res.body.email).toBe("alice@example.com");
 
     // The user record should have been auto-created in Firestore.
     expect(store["users"]?.["user-abc"]).toBeDefined();
@@ -195,5 +196,6 @@ describe("POST /v1/extension/auth", () => {
     expect(res.body.userId).toBe("user-existing");
     expect(res.body.companyId).toBe("co-acme");
     expect(res.body.credentialId).toBe("cred-real-abc");
+    expect(res.body.email).toBe("carol@acme.com");
   });
 });
