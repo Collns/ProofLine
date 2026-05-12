@@ -14,6 +14,7 @@
  * Existing routers still pending HTTP wiring (live as code only):
  *   - /v1/onboard via api/onboarding/router.ts (PFL-017)
  *   - /v1/sign    via signing/handlers/* (PFL-021)
+ *   - /v1/bilateral via api/bilateral/router.ts (PFL-025)
  *
  * Module-load principle:
  *   Anything that touches env-dependent config (anchor provider, chain
@@ -54,6 +55,12 @@ import {
   makeStubPolicyContext,
 } from "./wiring/stubs.js";
 
+// --- PFL-025: bilateral HTTP wiring
+import { makeBilateralRouter }         from "./api/bilateral/router.js";
+import { makeBilateralService }        from "@proofline/bilateral";
+import { makeFirestoreBilateralStore } from "./api/bilateral/firestore-store.js";
+import { makeStubEmailProvider } from "@proofline/email/stub";
+
 // ─── Firebase Admin (idempotent — module may be re-imported across invokes) ─
 
 if (getApps().length === 0) {
@@ -61,18 +68,12 @@ if (getApps().length === 0) {
 }
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
-//
-// The popup/admin/verify pages on web.app subdomains call these endpoints
-// cross-origin. We hand-roll a small allowlist middleware instead of
-// pulling in the `cors` npm dep — the surface is tiny and we want zero
-// surprise headers in the deployed bundle.
 
 const ALLOWED_ORIGINS: ReadonlySet<string> = new Set([
   "https://proofline-sign.web.app",
   "https://proofline-counterparty.web.app",
   "https://proofline-verify.web.app",
   "https://proofline-admin.web.app",
-  // Hosting also serves these under the .firebaseapp.com TLD.
   "https://proofline-sign.firebaseapp.com",
   "https://proofline-counterparty.firebaseapp.com",
   "https://proofline-verify.firebaseapp.com",
@@ -93,7 +94,7 @@ function corsMiddleware(
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Authorization, Content-Type, X-ProofLine-Challenge-Id",
+    "Authorization, Content-Type, X-ProofLine-Challenge-Id, X-ProofLine-Bilateral-Token",
   );
   res.setHeader("Access-Control-Max-Age", "86400");
 
@@ -104,13 +105,7 @@ function corsMiddleware(
   next();
 }
 
-// ─── Lazy dependency factory ─────────────────────────────────────────────────
-//
-// makeAnchorRunDeps() throws in NODE_ENV=production if BASE_SEPOLIA_RPC /
-// DEPLOYER_PRIVATE_KEY / ANCHOR_CONTRACT_ADDRESS aren't set. That's the
-// right behaviour at runtime, but blocks `firebase deploy` from analysing
-// the bundle when secrets aren't yet wired. Cache after the first
-// successful call so per-request cost is amortised.
+// ─── Lazy dependency factory ──────────────────────────────────────────────────
 
 let cachedAnchorDeps: RunAnchorDeps | null = null;
 function anchorDeps(): RunAnchorDeps {
@@ -119,7 +114,7 @@ function anchorDeps(): RunAnchorDeps {
   return cachedAnchorDeps;
 }
 
-// ─── Anchor scheduler (every 5 minutes) ───────────────────────────────────────
+// ─── Anchor scheduler (every 5 minutes) ──────────────────────────────────────
 
 export const anchorBatchScheduler = onSchedule(
   {
@@ -134,13 +129,12 @@ export const anchorBatchScheduler = onSchedule(
   },
 );
 
-// ─── Admin HTTP — POST /v1/admin/anchor/run ──────────────────────────────────
+// ─── Admin HTTP — POST /v1/admin/anchor/run ───────────────────────────────────
 
 const adminApp = express();
 adminApp.use(corsMiddleware);
 adminApp.use(express.json());
 
-// Lazy router so module load doesn't trip the prod-env check.
 let cachedAdminRouter: express.Router | null = null;
 adminApp.use("/v1/admin/anchor", (req, res, next) => {
   if (!cachedAdminRouter) {
@@ -154,13 +148,7 @@ export const anchorAdmin = onRequest(
   adminApp,
 );
 
-// ─── Public verify endpoint (PFL-023) ────────────────────────────────────────
-//
-// The verify router owns its own CORS policy (Access-Control-Allow-Origin: *)
-// because the verify endpoint is intentionally unauthenticated and meant
-// to be called from any web client. We deliberately DO NOT install the
-// allowlist `corsMiddleware` on this app — it would override the public-
-// access policy with the smaller subdomain allowlist.
+// ─── Public API (verify + sign + onboard + bilateral) ────────────────────────
 
 const publicApp = express();
 publicApp.use(express.json());
@@ -169,9 +157,6 @@ let cachedVerifyRouter: express.Router | null = null;
 function verifyRouter(): express.Router {
   if (cachedVerifyRouter) return cachedVerifyRouter;
   const firestore = getFirestore();
-  // For verify (read-only), prefer the stub chain reader when anchor env
-  // isn't wired. It reports "not anchored" rather than crashing — a
-  // hackathon-grade graceful degrade.
   let chainReader;
   try {
     const deps = anchorDeps();
@@ -187,35 +172,17 @@ function verifyRouter(): express.Router {
 
 publicApp.use("/v1/verify", (req, res, next) => verifyRouter()(req, res, next));
 
-// Liveness probe — useful for smoke tests / uptime checks without touching
-// Firestore or the chain reader.
 publicApp.get("/healthz", (_req, res) => {
   res.status(200).json({ ok: true, service: "proofline-api" });
 });
 
-// ─── PFL-060: signing routes (/v1/sign, /v1/sign-silent, /v1/sign/finalize) ─
-//
-// Mounted on the same `api` Function as /v1/verify so client integrators
-// only need one base URL. CORS is route-scoped (allowlist) — public
-// verify keeps its `*` policy, signing requires an allowlisted Origin.
-//
-// Auth is stubbed: we stamp `req.user` with a dev identity so the
-// handlers can destructure `req.user` without crashing. Real Bearer-token
-// validation lands once the extension auth ceremony issues server-side
-// JWS (PFL-AUTH-LOGIN).
-//
-// PolicyContext is built PER REQUEST so getUser can return a user whose
-// `devices[]` includes the credentialId from this request — without
-// that, every sign attempt would 403 with DEVICE_INVALID.
+// ─── Auth stub ────────────────────────────────────────────────────────────────
 
 function stubAuthMiddleware(
   req: express.Request,
   _res: express.Response,
   next: express.NextFunction,
 ): void {
-  // TODO(PFL-AUTH-LOGIN): verify the Bearer JWS and pull (userId, companyId)
-  // from its payload. The header is read here so the var doesn't drop out
-  // of the bundle's reachability graph once real auth is wired.
   const _bearer = typeof req.headers.authorization === "string"
     ? req.headers.authorization
     : "";
@@ -226,6 +193,8 @@ function stubAuthMiddleware(
   };
   next();
 }
+
+// ─── Signing routes (/v1/sign, /v1/sign-silent, /v1/sign/finalize) ───────────
 
 type SignHandlerFactory = (
   ctx: PolicyContext,
@@ -254,9 +223,6 @@ function withPerRequestPolicyCtx(factory: SignHandlerFactory): express.RequestHa
 }
 
 const signRouter = express.Router();
-// All three signing endpoints share the same dispatch shape. /finalize
-// is exposed BOTH at /v1/sign/finalize (legacy + ceremony URL) and as a
-// sibling of /v1/sign so the original client paths keep working.
 signRouter.post("/",         withPerRequestPolicyCtx(makeSignHandler));
 signRouter.post("/finalize", withPerRequestPolicyCtx(makeSignFinalizeHandler));
 
@@ -264,11 +230,7 @@ publicApp.use("/v1/sign",        corsMiddleware, stubAuthMiddleware, signRouter)
 publicApp.use("/v1/sign-silent", corsMiddleware, stubAuthMiddleware,
   withPerRequestPolicyCtx(makeSignSilentHandler));
 
-// ─── PFL-060: onboarding routes (/v1/onboard/*) ──────────────────────────────
-//
-// All sub-routes (start, verify-dns, verify-email, verify-email-code, kyb,
-// enroll-officer, finalize) are mounted via the existing router factory.
-// Deps are stubbed (Middesk/Stripe/KMS/Resend) — see wiring/stubs.ts.
+// ─── Onboarding routes (/v1/onboard/*) ───────────────────────────────────────
 
 let cachedOnboardingRouter: express.Router | null = null;
 function onboardingRouter(): express.Router {
@@ -284,24 +246,45 @@ publicApp.use(
   (req, res, next) => onboardingRouter()(req, res, next),
 );
 
+// ─── PFL-025: Bilateral routes (/v1/bilateral/*) ─────────────────────────────
+//
+// sign-as-counterparty is auth'd by the JWS token in the request header
+// rather than a Bearer token — stubAuthMiddleware is a pass-through so it
+// won't block it. X-ProofLine-Bilateral-Token is added to the CORS
+// allow-headers above.
+
+let cachedBilateralRouter: express.Router | null = null;
+function bilateralRouter(): express.Router {
+  if (cachedBilateralRouter) return cachedBilateralRouter;
+  cachedBilateralRouter = makeBilateralRouter({
+    bilateralService: makeBilateralService({
+      store: makeFirestoreBilateralStore(),
+      now:   () => Math.floor(Date.now() / 1000),
+    }),
+    email: makeStubEmailProvider(),
+    counterpartyPortalBaseUrl:
+      process.env["COUNTERPARTY_PORTAL_URL"]
+      ?? "https://counterparty.proofline.web.app",
+  });
+  return cachedBilateralRouter;
+}
+
+publicApp.use(
+  "/v1/bilateral",
+  corsMiddleware,
+  stubAuthMiddleware,
+  (req, res, next) => bilateralRouter()(req, res, next),
+);
+
 export const api = onRequest(
   { region: "us-central1", cors: false, memory: "256MiB" },
   publicApp,
 );
 
 // ─── Webhooks — PFL-013: Stripe Identity ─────────────────────────────────────
-//
-// IMPORTANT: express.raw() MUST come before express.json() on this app.
-// Stripe's webhook signature check (stripe.webhooks.constructEvent) requires
-// the raw request body as a Buffer. If express.json() runs first it replaces
-// req.body with the parsed object and the HMAC check fails.
-//
-// This is a separate Firebase Function (webhooks) so the raw-body requirement
-// doesn't bleed into the public API function above.
 
 const webhooksApp = express();
 
-// Raw body for Stripe signature verification — scoped to this route only.
 webhooksApp.post(
   "/webhooks/stripe-identity",
   express.raw({ type: "application/json" }),
@@ -315,26 +298,23 @@ webhooksApp.post(
     };
   })(),
 );
- 
+
 export const webhooks = onRequest(
   { region: "us-central1", cors: false, memory: "256MiB" },
   webhooksApp,
 );
-// ─── Factory kept for tests + future composition ─────────────────────────────
+
+// ─── Factory kept for tests + future composition ──────────────────────────────
 
 import type { Firestore } from "firebase-admin/firestore";
 import type { AnchorProvider } from "@proofline/anchoring";
 
 export interface AppDeps {
   firestore: Firestore;
-  /** Read-only chain reader used by the verify endpoint. */
   chainReader: Pick<AnchorProvider, "readAnchor">;
 }
 
 export function makeApp(deps: AppDeps): express.Express {
-  // Mirrors `publicApp` above: no allowlist CORS middleware — the verify
-  // router sets its own permissive headers because /v1/verify is intended
-  // for unauthenticated cross-origin reads.
   const app = express();
   app.use(express.json());
   const verifyService = makeVerifyService(deps);
