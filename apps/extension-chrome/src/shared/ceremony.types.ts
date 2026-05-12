@@ -54,7 +54,7 @@ export interface CeremonyRequestParams {
 // ─── Response from popup → extension (via chrome.runtime.sendMessage) ─────────
 
 export type CeremonyResponse =
-  | { kind: "auth_success";    ceremonyId: string; authToken: string;   userId: string; companyId: string }
+  | { kind: "auth_success";    ceremonyId: string; authToken: string;   userId: string; companyId: string; email: string }
   | { kind: "sign_success";    ceremonyId: string; envelope: SignedEnvelope; banner: string; sessionToken?: string }
   | { kind: "verify_success";  ceremonyId: string; result: VerificationResult }
   | { kind: "user_cancelled";  ceremonyId: string }

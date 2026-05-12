@@ -33,6 +33,7 @@ describe("auth-token", () => {
       token:        "cached-tok",
       userId:       "u1",
       companyId:    "c1",
+      email:        "u1@example.com",
       extInstallId: "ext_1",
       iat:          Math.floor(Date.now() / 1000),
       exp:          FAR_FUTURE_SEC,
@@ -46,7 +47,7 @@ describe("auth-token", () => {
     const store = await importStore();
     const nowSec = Math.floor(Date.now() / 1000);
     await store.setAuthToken({
-      token: "near-expiry", userId: "u", companyId: "c",
+      token: "near-expiry", userId: "u", companyId: "c", email: "u@example.com",
       extInstallId: "e", iat: nowSec, exp: nowSec + 30, // 30s away
     });
     const a = await importAuthToken();
@@ -58,7 +59,7 @@ describe("auth-token", () => {
   it("clearAuthToken removes the storage entry", async () => {
     const store = await importStore();
     await store.setAuthToken({
-      token: "byebye", userId: "u", companyId: "c",
+      token: "byebye", userId: "u", companyId: "c", email: "u@example.com",
       extInstallId: "e", iat: 1, exp: FAR_FUTURE_SEC,
     });
     const a = await importAuthToken();
@@ -70,7 +71,7 @@ describe("auth-token", () => {
   it("getOrIssueAuthToken returns the cached token without opening a popup", async () => {
     const store = await importStore();
     await store.setAuthToken({
-      token: "no-popup-needed", userId: "u", companyId: "c",
+      token: "no-popup-needed", userId: "u", companyId: "c", email: "u@example.com",
       extInstallId: "e", iat: 1, exp: FAR_FUTURE_SEC,
     });
     const a = await importAuthToken();

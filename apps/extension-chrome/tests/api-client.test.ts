@@ -26,6 +26,7 @@ async function seedAuthToken(token = "tok") {
     token,
     userId:       "u",
     companyId:    "c",
+    email:        "u@example.com",
     extInstallId: "e",
     iat:          Math.floor(Date.now() / 1000),
     exp:          Math.floor(Date.now() / 1000) + 3600,

@@ -209,6 +209,7 @@ export async function handleCeremonyMessage(
         token:        response.authToken,
         userId:       response.userId,
         companyId:    response.companyId,
+        email:        response.email,
         extInstallId: chrome.runtime.id,
         iat:          nowSec,
         exp:          nowSec + AUTH_TOKEN_TTL_SEC,

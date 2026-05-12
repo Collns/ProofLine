@@ -80,6 +80,7 @@ export function ExtensionAuth() {
           authToken: resp.authToken,
           userId:    resp.userId,
           companyId: resp.companyId,
+          email:     resp.email,
         },
         { extInstallId: params.extInstallId, returnOrigin: params.returnOrigin },
       );

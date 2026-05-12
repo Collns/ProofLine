@@ -58,7 +58,7 @@ describe("session-store auth lifecycle", () => {
     const store = await importStore();
     const past = Math.floor(Date.now() / 1000) - 10;
     await store.setAuthToken({
-      token: "expired", userId: "u", companyId: "c",
+      token: "expired", userId: "u", companyId: "c", email: "u@example.com",
       extInstallId: "e", iat: past - 100, exp: past,
     });
     expect(await store.getAuthToken()).toBeNull();
@@ -109,7 +109,7 @@ describe("session-store per-recipient sessions", () => {
     const now = Date.now();
     const nowSec = Math.floor(now / 1000);
     await store.setAuthToken({
-      token: "keep", userId: "u", companyId: "c",
+      token: "keep", userId: "u", companyId: "c", email: "u@example.com",
       extInstallId: "e", iat: nowSec, exp: nowSec + 3600,
     });
     await store.setSession({ token: "s1", recipientSetHash: "rsA", expiresAt: now + 60_000, hardCapAt: now + 1_000_000, storedAt: now });
@@ -125,7 +125,7 @@ describe("session-store per-recipient sessions", () => {
     const now = Date.now();
     const nowSec = Math.floor(now / 1000);
     await store.setAuthToken({
-      token: "t", userId: "u", companyId: "c",
+      token: "t", userId: "u", companyId: "c", email: "u@example.com",
       extInstallId: "e", iat: nowSec, exp: nowSec + 3600,
     });
     await store.setSession({ token: "s", recipientSetHash: "rs", expiresAt: now + 60_000, hardCapAt: now + 1_000_000, storedAt: now });

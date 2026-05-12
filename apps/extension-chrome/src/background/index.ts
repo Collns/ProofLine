@@ -234,12 +234,9 @@ async function runSignFlow(input: RunSignFlowInput): Promise<void> {
 
   const fullPayload: EmailPayload = {
     ...input.partialPayload,
-    from:      `${auth.userId}@${auth.companyId}`,  // placeholder — see TODO
+    from:      auth.email || `${auth.userId}@proofline.app`,
     companyId: auth.companyId,
   };
-  // TODO(PFL-AUTH-LOGIN): the auth-success record currently lacks a
-  // distinct `email` field, so we synthesize a placeholder. The real
-  // /extension/auth response will include the user's email.
 
   const canonicalBytes = canonicalize(fullPayload);
   const payloadHash    = await sha256Hex(canonicalBytes);

@@ -80,6 +80,7 @@ describe('deliverToOpener', () => {
         authToken: 't',
         userId: 'u',
         companyId: 'c',
+        email: 'u@example.com',
       },
       {
         kind: 'sign_success',

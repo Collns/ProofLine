@@ -61,6 +61,7 @@ export interface ExtensionAuthResponse {
   userId:       string;
   companyId:    string;
   credentialId: string;
+  email:        string;
 }
 
 // ─── Stored user record (subset we care about) ───────────────────────────────
@@ -199,6 +200,7 @@ export function makeExtensionAuthHandler(deps: ExtensionAuthHandlerDeps = {}) {
       userId:       user.userId,
       companyId:    user.companyId,
       credentialId: user.credentialId ?? PLACEHOLDER_CREDENTIAL_ID,
+      email:        user.email ?? decoded.email ?? "",
     };
     res.status(200).json(response);
   };
