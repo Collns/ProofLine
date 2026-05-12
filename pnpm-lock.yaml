@@ -151,12 +151,18 @@ importers:
       '@proofline/policy':
         specifier: workspace:*
         version: link:../../packages/policy
+      '@proofline/sessions':
+        specifier: workspace:*
+        version: link:../../packages/sessions
       '@proofline/types':
         specifier: workspace:*
         version: link:../../packages/types
       '@proofline/verification':
         specifier: workspace:*
         version: link:../../packages/verification
+      '@proofline/webauthn':
+        specifier: workspace:*
+        version: link:../../packages/webauthn
       express:
         specifier: ^4.21.2
         version: 4.22.1

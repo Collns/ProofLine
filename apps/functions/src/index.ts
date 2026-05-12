@@ -43,6 +43,17 @@ import { makeVerifyRouter, makeVerifyService } from "./verify/index.js";
 // --- PFL-013: Stripe Identity webhook
 import { createStripeIdentityWebhookHandler } from "./webhooks/stripe-identity.js";
 
+// --- PFL-060: signing + onboarding HTTP wiring
+import type { PolicyContext } from "@proofline/types";
+import { makeSignHandler }         from "./signing/handlers/sign.handler.js";
+import { makeSignSilentHandler }   from "./signing/handlers/sign-silent.handler.js";
+import { makeSignFinalizeHandler } from "./signing/handlers/sign-finalize.handler.js";
+import { makeOnboardingRouter }    from "./api/onboarding/router.js";
+import {
+  makeStubOnboardingDeps,
+  makeStubPolicyContext,
+} from "./wiring/stubs.js";
+
 // ─── Firebase Admin (idempotent — module may be re-imported across invokes) ─
 
 if (getApps().length === 0) {
@@ -181,6 +192,97 @@ publicApp.use("/v1/verify", (req, res, next) => verifyRouter()(req, res, next));
 publicApp.get("/healthz", (_req, res) => {
   res.status(200).json({ ok: true, service: "proofline-api" });
 });
+
+// ─── PFL-060: signing routes (/v1/sign, /v1/sign-silent, /v1/sign/finalize) ─
+//
+// Mounted on the same `api` Function as /v1/verify so client integrators
+// only need one base URL. CORS is route-scoped (allowlist) — public
+// verify keeps its `*` policy, signing requires an allowlisted Origin.
+//
+// Auth is stubbed: we stamp `req.user` with a dev identity so the
+// handlers can destructure `req.user` without crashing. Real Bearer-token
+// validation lands once the extension auth ceremony issues server-side
+// JWS (PFL-AUTH-LOGIN).
+//
+// PolicyContext is built PER REQUEST so getUser can return a user whose
+// `devices[]` includes the credentialId from this request — without
+// that, every sign attempt would 403 with DEVICE_INVALID.
+
+function stubAuthMiddleware(
+  req: express.Request,
+  _res: express.Response,
+  next: express.NextFunction,
+): void {
+  // TODO(PFL-AUTH-LOGIN): verify the Bearer JWS and pull (userId, companyId)
+  // from its payload. The header is read here so the var doesn't drop out
+  // of the bundle's reachability graph once real auth is wired.
+  const _bearer = typeof req.headers.authorization === "string"
+    ? req.headers.authorization
+    : "";
+  void _bearer;
+  (req as express.Request & { user: { userId: string; companyId: string } }).user = {
+    userId:    "dev-user",
+    companyId: "dev-company",
+  };
+  next();
+}
+
+type SignHandlerFactory = (
+  ctx: PolicyContext,
+) => (req: express.Request, res: express.Response) => Promise<void>;
+
+function withPerRequestPolicyCtx(factory: SignHandlerFactory): express.RequestHandler {
+  return async (req, res, next) => {
+    const body = req.body as { credentialId?: unknown } | undefined;
+    const credentialId = typeof body?.credentialId === "string"
+      ? body.credentialId
+      : "stub-credential-id";
+    const user = (req as express.Request & {
+      user?: { userId?: string; companyId?: string };
+    }).user;
+    const ctx = makeStubPolicyContext({
+      credentialId,
+      userId:    user?.userId    ?? "dev-user",
+      companyId: user?.companyId ?? "dev-company",
+    });
+    try {
+      await factory(ctx)(req, res);
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+const signRouter = express.Router();
+// All three signing endpoints share the same dispatch shape. /finalize
+// is exposed BOTH at /v1/sign/finalize (legacy + ceremony URL) and as a
+// sibling of /v1/sign so the original client paths keep working.
+signRouter.post("/",         withPerRequestPolicyCtx(makeSignHandler));
+signRouter.post("/finalize", withPerRequestPolicyCtx(makeSignFinalizeHandler));
+
+publicApp.use("/v1/sign",        corsMiddleware, stubAuthMiddleware, signRouter);
+publicApp.use("/v1/sign-silent", corsMiddleware, stubAuthMiddleware,
+  withPerRequestPolicyCtx(makeSignSilentHandler));
+
+// ─── PFL-060: onboarding routes (/v1/onboard/*) ──────────────────────────────
+//
+// All sub-routes (start, verify-dns, verify-email, verify-email-code, kyb,
+// enroll-officer, finalize) are mounted via the existing router factory.
+// Deps are stubbed (Middesk/Stripe/KMS/Resend) — see wiring/stubs.ts.
+
+let cachedOnboardingRouter: express.Router | null = null;
+function onboardingRouter(): express.Router {
+  if (cachedOnboardingRouter) return cachedOnboardingRouter;
+  cachedOnboardingRouter = makeOnboardingRouter(makeStubOnboardingDeps());
+  return cachedOnboardingRouter;
+}
+
+publicApp.use(
+  "/v1/onboard",
+  corsMiddleware,
+  stubAuthMiddleware,
+  (req, res, next) => onboardingRouter()(req, res, next),
+);
 
 export const api = onRequest(
   { region: "us-central1", cors: false, memory: "256MiB" },
