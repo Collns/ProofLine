@@ -81,6 +81,7 @@ describe('deliverToOpener', () => {
         userId: 'u',
         companyId: 'c',
         email: 'u@example.com',
+        credentialId: 'placeholder-credential-id',
       },
       {
         kind: 'sign_success',
