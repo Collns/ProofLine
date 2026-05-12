@@ -72,6 +72,23 @@ export interface ExtensionAuthResponse {
   email: string;
 }
 
+// ── /v1/extension/register-credential ────────────────────────────────────────
+// Enrols a freshly-created WebAuthn credential under the authenticated
+// user (PFL-069). Auth: Bearer authToken from /v1/extension/auth.
+
+export interface RegisterCredentialRequest {
+  credentialId:      string; // base64url(rawId)
+  publicKey:         string; // base64url(SPKI bytes)
+  attestationObject: string; // base64url(attestationObject)
+  clientDataJSON:    string; // base64url(clientDataJSON)
+  deviceName?:       string;
+}
+
+export interface RegisterCredentialResponse {
+  ok:           true;
+  credentialId: string;
+}
+
 // ── Error envelope ───────────────────────────────────────────────────────────
 
 export interface ApiErrorBody {

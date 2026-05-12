@@ -200,12 +200,13 @@ describe("popup-manager.runCeremony", () => {
     const ceremonyId = new URL(url.url as string).searchParams.get("ceremonyId")!;
 
     await mgr.handleCeremonyMessage({
-      kind:      "auth_success",
+      kind:         "auth_success",
       ceremonyId,
-      authToken: "ext-jws-abc",
-      userId:    "user_42",
-      companyId: "co_42",
-      email:     "user42@example.com",
+      authToken:    "ext-jws-abc",
+      userId:       "user_42",
+      companyId:    "co_42",
+      email:        "user42@example.com",
+      credentialId: "placeholder-credential-id",
     });
     await promise;
 
@@ -218,15 +219,72 @@ describe("popup-manager.runCeremony", () => {
     expect(typeof got?.iat).toBe("number");
     expect(typeof got?.exp).toBe("number");
 
-    // auth_success persists both the auth-token record AND a placeholder
-    // credentialId (replaced with the real value once PFL-AUTH-LOGIN ships).
-    // The placeholder unblocks the sign flow's resolveCredentialId guard.
+    // auth_success persists both the auth-token record AND a credentialId.
+    // When the popup couldn't enrol a passkey, the placeholder value is
+    // stored so the sign flow's resolveCredentialId guard still passes.
     const dump = await store.dumpAll();
     expect(Object.keys(dump).sort()).toEqual([
       "proofline:auth-token",
       "proofline:credentialId",
     ]);
     expect(dump["proofline:credentialId"]).toBe("placeholder-credential-id");
+  });
+
+  it("PFL-069: stores the real credentialId from auth_success, replacing any prior placeholder", async () => {
+    const mgr   = await importPopupManager();
+    const store = await importSessionStore();
+
+    // Simulate a prior auth ceremony that left the placeholder behind.
+    await chrome.storage.local.set({
+      "proofline:credentialId": "placeholder-credential-id",
+    });
+
+    const promise = mgr.runCeremony({ kind: "auth" });
+    await flushMicrotasks();
+    const url = chromeMock.windows.create.mock.calls[0][0] as chrome.windows.CreateData;
+    const ceremonyId = new URL(url.url as string).searchParams.get("ceremonyId")!;
+
+    await mgr.handleCeremonyMessage({
+      kind:         "auth_success",
+      ceremonyId,
+      authToken:    "ext-jws-real",
+      userId:       "user_real",
+      companyId:    "co_real",
+      email:        "real@example.com",
+      credentialId: "cred-real-touchid-001",
+    });
+    await promise;
+
+    const dump = await store.dumpAll();
+    expect(dump["proofline:credentialId"]).toBe("cred-real-touchid-001");
+  });
+
+  it("PFL-069: preserves a previously-stored real credentialId when auth_success carries the placeholder", async () => {
+    const mgr   = await importPopupManager();
+    const store = await importSessionStore();
+
+    await chrome.storage.local.set({
+      "proofline:credentialId": "cred-real-existing-002",
+    });
+
+    const promise = mgr.runCeremony({ kind: "auth" });
+    await flushMicrotasks();
+    const url = chromeMock.windows.create.mock.calls[0][0] as chrome.windows.CreateData;
+    const ceremonyId = new URL(url.url as string).searchParams.get("ceremonyId")!;
+
+    await mgr.handleCeremonyMessage({
+      kind:         "auth_success",
+      ceremonyId,
+      authToken:    "ext-jws-2",
+      userId:       "user_x",
+      companyId:    "co_x",
+      email:        "x@example.com",
+      credentialId: "placeholder-credential-id",
+    });
+    await promise;
+
+    const dump = await store.dumpAll();
+    expect(dump["proofline:credentialId"]).toBe("cred-real-existing-002");
   });
 
   it("ignores responses for unknown ceremonyIds without crashing", async () => {

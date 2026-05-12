@@ -64,6 +64,9 @@ import { makeStubEmailProvider } from "@proofline/email/stub";
 // --- PFL-061: extension auth HTTP wiring
 import { makeExtensionAuthHandler } from "./auth/extension-auth.handler.js";
 
+// --- PFL-069: WebAuthn credential registration
+import { makeRegisterCredentialHandler } from "./auth/register-credential.handler.js";
+
 // --- PFL-062: cosign HTTP wiring
 import { makeCosignRouter } from "./cosign/router.js";
 
@@ -310,6 +313,33 @@ publicApp.post(
 // Explicit OPTIONS — corsMiddleware short-circuits the preflight, but the
 // route must exist so Express doesn't fall through to a 404.
 publicApp.options("/v1/extension/auth", corsMiddleware);
+
+// ─── PFL-069: WebAuthn credential registration ───────────────────────────────
+//
+// Authenticated via the Bearer JWS issued by /v1/extension/auth — the
+// handler decodes it locally (HS256, EXT_AUTH_JWT_SECRET) rather than going
+// through stubAuthMiddleware, which lies and always returns the dev user.
+
+let cachedRegisterCredHandler:
+  | ((req: express.Request, res: express.Response) => Promise<void>)
+  | null = null;
+function registerCredentialHandler(): (
+  req: express.Request,
+  res: express.Response,
+) => Promise<void> {
+  if (cachedRegisterCredHandler) return cachedRegisterCredHandler;
+  cachedRegisterCredHandler = makeRegisterCredentialHandler();
+  return cachedRegisterCredHandler;
+}
+
+publicApp.post(
+  "/v1/extension/register-credential",
+  corsMiddleware,
+  (req, res, next) => {
+    registerCredentialHandler()(req, res).catch(next);
+  },
+);
+publicApp.options("/v1/extension/register-credential", corsMiddleware);
 
 // ─── PFL-062: Cosign routes (/v1/cosign/*) ───────────────────────────────────
 //
