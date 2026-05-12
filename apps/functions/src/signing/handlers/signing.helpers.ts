@@ -10,6 +10,7 @@
 import * as crypto from "crypto";
 import { v7 as uuidv7 } from "uuid";
 import { getFirestore } from "firebase-admin/firestore";
+import { generateKeyPair, type CryptoKey } from "jose";
 
 import {
   CompanyPolicy,
@@ -21,6 +22,9 @@ import {
 } from "@proofline/types";
 import type { SignerDisplayRecord } from "@proofline/email";
 import { canonicalize } from "@proofline/canonical";
+import { finishAssertion, InMemoryChallengeStore } from "@proofline/webauthn";
+import { makeJoseSigner, makeJoseVerifier } from "@proofline/sessions";
+import type { SessionTokenPayload as SessionsTokenPayload } from "@proofline/sessions";
 
 // ─── Local envelope type (mirrors signing.types.ts) ───────────────────────────
 // The shared SignedEnvelope predates email signing fields — use a local type.
@@ -54,27 +58,60 @@ export function hashPayload(canonicalBytes: Uint8Array): string {
 }
 
 // ─── Session token JWS ────────────────────────────────────────────────────────
+//
+// HACKATHON STUB: session-token signing/verification uses a lazily-generated
+// in-process ES256 keypair. Tokens issued by one function instance will NOT
+// verify on another instance, so the silent path is only reliable inside the
+// same warm container. The follow-up ticket needs to plumb a persistent key
+// (Cloud KMS or Secret Manager) through PolicyContext / DI.
+
+let sessionKeysPromise: Promise<{ privateKey: CryptoKey; publicKey: CryptoKey }> | undefined;
+
+function getSessionTokenKeys(): Promise<{ privateKey: CryptoKey; publicKey: CryptoKey }> {
+  if (!sessionKeysPromise) {
+    sessionKeysPromise = generateKeyPair("ES256");
+  }
+  return sessionKeysPromise;
+}
 
 export async function verifySessionTokenJWS(
   token: string
 ): Promise<SessionTokenPayload> {
-  // TODO(follow-up): @proofline/sessions does not currently export
-  // verifySessionToken — it exposes makeJoseVerifier({keys}).verify(token).
-  // The dynamic require below has always returned undefined here, so any
-  // silent-path finalize that reached this line throws. Tracked as a
-  // separate landmine — out of scope for the payload-storage fix.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { verifySessionToken } = require("@proofline/sessions");
-  return verifySessionToken(token);
+  const keys = await getSessionTokenKeys();
+  const verifier = makeJoseVerifier(keys);
+  const result = await verifier.verify(token);
+  if (!result.ok) {
+    throw new Error(`Session token rejected: ${result.error.code}`);
+  }
+  // @proofline/sessions stores the recipient-set hash under `recipientSetHash`;
+  // @proofline/types names the same field `recipientScope`. Map at the boundary
+  // so callers (validatePolicy, sign-finalize) keep using the types-pkg shape.
+  const v = result.value;
+  return {
+    v: v.v,
+    sessionId: v.sessionId,
+    userId: v.userId,
+    companyId: v.companyId,
+    recipientScope: v.recipientSetHash,
+    iat: v.iat,
+    exp: v.exp,
+  };
 }
 
 export async function issueSessionToken(session: SigningSession): Promise<string> {
-  // TODO(follow-up): see verifySessionTokenJWS — signSessionToken is not
-  // exported by @proofline/sessions today. Fresh-path finalize hits this
-  // after the payload-storage fix; needs a separate wiring PR.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { signSessionToken } = require("@proofline/sessions");
-  return signSessionToken(session);
+  const keys = await getSessionTokenKeys();
+  const signer = makeJoseSigner(keys);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const payload: SessionsTokenPayload = {
+    v: 1,
+    sessionId: session.sessionId,
+    userId: session.userId,
+    companyId: session.companyId,
+    recipientSetHash: session.recipientSetHash,
+    iat: nowSec,
+    exp: Math.floor(session.expiresAt / 1000),
+  };
+  return signer.sign(payload);
 }
 
 // ─── Pending challenge store ──────────────────────────────────────────────────
@@ -138,18 +175,52 @@ interface AssertionVerifyInput {
 export async function verifyWebAuthnAssertion(
   input: AssertionVerifyInput
 ): Promise<boolean> {
-  // TODO(follow-up): @proofline/webauthn does not export verifyAssertion —
-  // the server-side ceremony helpers are finishAssertion / finishRegistration.
-  // This require has historically returned undefined; the call only succeeds
-  // when stubbed. Tracked as a separate landmine.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { verifyAssertion } = require("@proofline/webauthn");
-  return verifyAssertion({
-    assertion: input.assertion,
-    expectedChallenge: Buffer.from(input.expectedChallenge).toString("base64url"),
-    expectedOrigin: input.expectedOrigin,
-    publicKey: input.publicKey,
+  // @proofline/webauthn drives the assertion ceremony via finishAssertion,
+  // which pulls the challenge from clientDataJSON and looks it up in a
+  // ChallengeStore. The sign-finalize handler already brokered the challenge
+  // (the canonical-payload bytes are what the client signed) so we seed a
+  // single-use in-memory store with that challenge before delegating.
+  const expectedChallenge = Buffer.from(input.expectedChallenge).toString("base64url");
+
+  const challengeStore = new InMemoryChallengeStore();
+  const now = Date.now();
+  await challengeStore.put({
+    challenge: expectedChallenge,
+    userId: "",        // unused by finishAssertion's verification path
+    purpose: "assertion",
+    rpId: "proofline-sign.web.app",
+    createdAt: now,
+    expiresAt: now + 60_000,
+    consumed: false,
   });
+
+  // Adapt flat WebAuthnAssertion → AuthenticationResponseJSON shape that
+  // @simplewebauthn/server expects.
+  const response = {
+    id: input.assertion.credentialId,
+    rawId: input.assertion.credentialId,
+    type: "public-key" as const,
+    clientExtensionResults: {},
+    response: {
+      clientDataJSON: input.assertion.clientDataJSON,
+      authenticatorData: input.assertion.authenticatorData,
+      signature: input.assertion.signature,
+      ...(input.assertion.userHandle ? { userHandle: input.assertion.userHandle } : {}),
+    },
+  };
+
+  const result = await finishAssertion({
+    // Cast: the local WebAuthnAssertion is a structural subset of
+    // AuthenticationResponseJSON; finishAssertion only reads the fields above.
+    response: response as Parameters<typeof finishAssertion>[0]["response"],
+    expectedRPID: "proofline-sign.web.app",
+    expectedOrigin: input.expectedOrigin,
+    storedPublicKey: input.publicKey,
+    storedSignCount: 0,
+    challengeStore,
+  });
+
+  return result.ok;
 }
 
 // ─── Envelope persistence ─────────────────────────────────────────────────────

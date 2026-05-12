@@ -96,12 +96,17 @@ vi.mock("firebase-admin/app", () => ({
   getApp:        vi.fn(),
 }));
 
-// @proofline/webauthn is wired via require() inside the finalize handler.
-// Stub it so tests don't pull a real WebAuthn verifier — they exercise the
-// "credential not indexed → soft failure" branch by default.
-vi.mock("@proofline/webauthn", () => ({
-  verifyAssertion: vi.fn(async () => true),
-}));
+// @proofline/webauthn is statically imported by cosign-finalize.handler.ts
+// (PFL-081). Stub finishAssertion so tests don't pull a real WebAuthn verifier
+// — they exercise the "credential not indexed → soft failure" branch by
+// default. InMemoryChallengeStore is re-exported untouched.
+vi.mock("@proofline/webauthn", async () => {
+  const actual = await vi.importActual<typeof import("@proofline/webauthn")>("@proofline/webauthn");
+  return {
+    ...actual,
+    finishAssertion: vi.fn(async () => ({ ok: true, signCount: 1, credentialId: "cred" })),
+  };
+});
 
 import { makeCosignRouter } from "../router.js";
 
