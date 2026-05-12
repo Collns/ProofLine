@@ -139,6 +139,9 @@ importers:
       '@proofline/anchoring':
         specifier: workspace:*
         version: link:../../packages/anchoring
+      '@proofline/bilateral':
+        specifier: workspace:*
+        version: link:../../packages/bilateral
       '@proofline/canonical':
         specifier: workspace:*
         version: link:../../packages/canonical
