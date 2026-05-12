@@ -214,17 +214,29 @@ export async function handleCeremonyMessage(
         iat:          nowSec,
         exp:          nowSec + AUTH_TOKEN_TTL_SEC,
       });
-      // Seed a placeholder credentialId so the sign flow can advance past
-      // the CREDENTIAL_MISSING guard in resolveCredentialId(). The real
-      // credentialId will be returned by the /v1/extension/auth response
-      // once PFL-AUTH-LOGIN ships — at which point this becomes the
-      // server-issued value rather than a stub.
-      const existing = await chrome.storage.local.get(PLACEHOLDER_CREDENTIAL_KEY);
-      if (typeof existing[PLACEHOLDER_CREDENTIAL_KEY] !== "string"
-          || existing[PLACEHOLDER_CREDENTIAL_KEY].length === 0) {
+      // PFL-069: persist the real credentialId from the popup's WebAuthn
+      // enrolment (registerPlatformAuthenticator → /v1/extension/
+      // register-credential). If the auth popup couldn't enrol (older
+      // browser, user cancelled Touch ID), the server falls back to the
+      // PLACEHOLDER value — keep the previous stored credentialId in that
+      // case so a prior enrolment isn't clobbered.
+      const incoming = response.credentialId;
+      if (typeof incoming === "string"
+          && incoming.length > 0
+          && incoming !== PLACEHOLDER_CREDENTIAL_VALUE) {
         await chrome.storage.local.set({
-          [PLACEHOLDER_CREDENTIAL_KEY]: PLACEHOLDER_CREDENTIAL_VALUE,
+          [PLACEHOLDER_CREDENTIAL_KEY]: incoming,
         });
+      } else {
+        // Seed the placeholder only if no credentialId is currently stored
+        // — preserves any real value from a prior successful enrolment.
+        const existing = await chrome.storage.local.get(PLACEHOLDER_CREDENTIAL_KEY);
+        if (typeof existing[PLACEHOLDER_CREDENTIAL_KEY] !== "string"
+            || existing[PLACEHOLDER_CREDENTIAL_KEY].length === 0) {
+          await chrome.storage.local.set({
+            [PLACEHOLDER_CREDENTIAL_KEY]: PLACEHOLDER_CREDENTIAL_VALUE,
+          });
+        }
       }
     }
     // Session-token persistence is handled by the launcher (which knows

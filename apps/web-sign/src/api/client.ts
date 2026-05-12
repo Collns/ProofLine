@@ -8,6 +8,8 @@ import {
   type SignFinalizeResponse,
   type ExtensionAuthRequest,
   type ExtensionAuthResponse,
+  type RegisterCredentialRequest,
+  type RegisterCredentialResponse,
   type ApiErrorBody,
 } from './types';
 
@@ -128,5 +130,21 @@ export function requestExtensionAuth(
   return postJson<ExtensionAuthRequest, ExtensionAuthResponse>(
     '/v1/extension/auth',
     input,
+  );
+}
+
+// ── Register WebAuthn credential ─────────────────────────────────────────────
+// POST /v1/extension/register-credential — uses the just-issued Bearer
+// auth token (PFL-069). Caller MUST setExtensionToken() with the auth
+// token before invoking.
+
+export function registerCredential(
+  input: RegisterCredentialRequest,
+  authToken: string,
+): Promise<RegisterCredentialResponse> {
+  return postJsonWithHeaders<RegisterCredentialRequest, RegisterCredentialResponse>(
+    '/v1/extension/register-credential',
+    input,
+    { Authorization: `Bearer ${authToken}` },
   );
 }

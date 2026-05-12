@@ -24,6 +24,7 @@ export type CeremonyResponse =
       userId: string;
       companyId: string;
       email: string;
+      credentialId: string;
     }
   | {
       kind: 'sign_success';
