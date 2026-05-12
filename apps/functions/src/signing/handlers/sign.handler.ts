@@ -154,6 +154,12 @@ export function makeSignHandler(ctx: PolicyContext) {
     });
 
     // ── 7. Return challenge ───────────────────────────────────────────────────
+    //
+    // challengeId is echoed in BOTH the header AND the response body. The
+    // header was the original transport but cross-origin fetch readers can't
+    // see custom response headers unless the server CORS-exposes them, so
+    // we duplicate into the body for the popup client. /v1/sign/finalize
+    // still consumes it from the X-ProofLine-Challenge-Id REQUEST header.
 
     const response: SignResponse = {
       ok: true,
@@ -161,9 +167,8 @@ export function makeSignHandler(ctx: PolicyContext) {
       policyDecision: "APPROVED",
     };
 
-    // Attach challengeId in a custom header so finalize can correlate.
     res.setHeader("X-ProofLine-Challenge-Id", challengeId);
-    res.status(200).json(response);
+    res.status(200).json({ ...response, challengeId });
   };
 }
 
