@@ -11,7 +11,6 @@ import { v7 as uuidv7 } from "uuid";
 import { validatePolicy } from "@proofline/policy";
 import { renderBannerFromEnvelope } from "@proofline/email";
 import {
-  EmailPayload,
   PolicyContext,
   SignFinalizeRequest,
   SignFinalizeRequestSchema,
@@ -128,7 +127,21 @@ export function makeSignFinalizeHandler(ctx: PolicyContext) {
 
     // ── 5. Re-run FULL policy pipeline — second pass (F-SIG-11) ──────────────
 
-    const storedPayload = pendingChallenge.payload as EmailPayload;
+    // Belt-and-suspenders: the type now requires `payload`, but a legacy
+    // in-flight record (deployed before this fix) could be missing it.
+    // Fail explicitly rather than crashing inside validatePolicy.
+    if (!pendingChallenge.payload) {
+      res.status(410).json(
+        makeRFC7807Error(
+          "https://proofline.app/errors/CHALLENGE_CORRUPT",
+          "CHALLENGE_CORRUPT",
+          410,
+          "Pending challenge is missing canonical payload; request a fresh challenge"
+        )
+      );
+      return;
+    }
+    const storedPayload = pendingChallenge.payload;
 
     const policyResult = await validatePolicy(
       {

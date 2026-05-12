@@ -1,0 +1,320 @@
+/**
+ * @file sign-finalize.handler.test.ts
+ * @module apps/functions/src/signing/tests
+ *
+ * End-to-end regression test for /v1/sign → /v1/sign/finalize.
+ *
+ * The bug this test guards against: prior to this PR, sign.handler.ts did
+ * not persist `payload` in pending_challenges, but sign-finalize.handler.ts
+ * read it (via an `as EmailPayload` cast over an optional field). The cast
+ * silenced TypeScript; production crashed inside validatePolicy with
+ * "Cannot read properties of undefined (reading 'isWireInstruction')".
+ *
+ * This test issues a real /v1/sign request, captures the challengeId, and
+ * runs /v1/sign/finalize against the same in-memory Firestore. It asserts
+ * 200 + that envelope.payload deep-equals the originally signed payload.
+ *
+ * Stubs (documented inline):
+ *   - firebase-admin/firestore: in-memory KV with transaction support.
+ *   - @proofline/webauthn: assertion verifier returns true (no real ECDSA
+ *     ceremony — the regression is independent of crypto).
+ *   - makeStubPolicyContext from production wiring: approves valid bodies
+ *     with permissive user/policy fixtures.
+ */
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import express from "express";
+import request from "supertest";
+
+// ─── In-memory Firestore mock (supports runTransaction) ──────────────────────
+
+interface DocRef {
+  __col: string;
+  __id:  string;
+}
+
+const store: Record<string, Record<string, unknown>> = {};
+
+function ensureCol(col: string): Record<string, unknown> {
+  if (!store[col]) store[col] = {};
+  return store[col];
+}
+
+function makeFirestoreMock() {
+  const db = {
+    collection(col: string) {
+      return {
+        doc(id: string) {
+          const ref: DocRef = { __col: col, __id: id };
+          return {
+            __col: col,
+            __id:  id,
+            async get() {
+              return {
+                exists: Boolean(store[col]?.[id]),
+                id,
+                data: () => store[col]?.[id] ?? null,
+              };
+            },
+            async set(data: Record<string, unknown>, opts?: { merge?: boolean }) {
+              const c = ensureCol(col);
+              if (opts?.merge) {
+                c[id] = { ...(c[id] as object ?? {}), ...data };
+              } else {
+                c[id] = data;
+              }
+            },
+            // Used internally to identify the ref shape inside transactions
+            _isRef: true as const,
+            _ref:   ref,
+          };
+        },
+        async add(data: Record<string, unknown>) {
+          const c  = ensureCol(col);
+          const id = `auto_${Object.keys(c).length + 1}`;
+          c[id] = data;
+          return { id };
+        },
+      };
+    },
+    async runTransaction<T>(fn: (tx: {
+      get:    (ref: { __col: string; __id: string }) => Promise<{ exists: boolean; data: () => unknown }>;
+      set:    (ref: { __col: string; __id: string }, data: Record<string, unknown>) => void;
+      update: (ref: { __col: string; __id: string }, patch: Record<string, unknown>) => void;
+      delete: (ref: { __col: string; __id: string }) => void;
+    }) => Promise<T>): Promise<T> {
+      const tx = {
+        async get(ref: { __col: string; __id: string }) {
+          const data = store[ref.__col]?.[ref.__id];
+          return { exists: Boolean(data), data: () => data ?? null };
+        },
+        set(ref: { __col: string; __id: string }, data: Record<string, unknown>) {
+          ensureCol(ref.__col)[ref.__id] = data;
+        },
+        update(ref: { __col: string; __id: string }, patch: Record<string, unknown>) {
+          const current = (store[ref.__col]?.[ref.__id] as Record<string, unknown>) ?? {};
+          ensureCol(ref.__col)[ref.__id] = { ...current, ...patch };
+        },
+        delete(ref: { __col: string; __id: string }) {
+          if (store[ref.__col]) delete store[ref.__col][ref.__id];
+        },
+      };
+      return fn(tx);
+    },
+  };
+  return db;
+}
+
+vi.mock("firebase-admin/firestore", () => ({
+  getFirestore: () => makeFirestoreMock(),
+}));
+
+vi.mock("firebase-admin/app", () => ({
+  initializeApp: vi.fn(),
+  getApps:       vi.fn(() => [{ name: "[DEFAULT]" }]),
+  getApp:        vi.fn(),
+}));
+
+// signing.helpers.ts wires @proofline/{webauthn,sessions} via dynamic
+// require() — none of the named functions (verifyAssertion / signSessionToken
+// / verifySessionToken) are actually exported by those packages today, so
+// real calls return undefined and throw. Tracked as separate landmines.
+// Stub the helpers wrappers directly so this regression test exercises the
+// payload write/read round-trip without depending on the broken adapters.
+vi.mock("../handlers/signing.helpers.js", async () => {
+  const actual = await vi.importActual<typeof import("../handlers/signing.helpers.js")>(
+    "../handlers/signing.helpers.js",
+  );
+  return {
+    ...actual,
+    verifyWebAuthnAssertion: vi.fn(async () => true),
+    issueSessionToken:       vi.fn(async () => "stub-session-token"),
+    verifySessionTokenJWS:   vi.fn(async () => ({
+      v:              1,
+      sessionId:      "stub-session-id",
+      userId:         "dev-user",
+      companyId:      "dev-company",
+      recipientScope: "stub-recipient-scope",
+      iat:            0,
+      exp:            Date.now() + 60_000,
+    })),
+  };
+});
+
+// ─── Imports under test (after vi.mock hoisting) ─────────────────────────────
+
+import { makeSignHandler } from "../handlers/sign.handler.js";
+import { makeSignFinalizeHandler } from "../handlers/sign-finalize.handler.js";
+import { makeStubPolicyContext } from "../../wiring/stubs.js";
+import type { EmailPayload } from "@proofline/types";
+
+// ─── Test fixtures ───────────────────────────────────────────────────────────
+
+const CREDENTIAL_ID = "cred-test-001";
+const RECIPIENT_SET_HASH = "a".repeat(64);
+
+function makePayload(overrides: Partial<EmailPayload> = {}): EmailPayload {
+  return {
+    v: 1,
+    from: "sarah@acme-title.com",
+    to: ["mark@scotiabank.com"],
+    cc: [],
+    bcc: [],
+    subject: "Closing documents for 123 Elm",
+    body: "Please find the documents attached.",
+    isWireInstruction: false,
+    issuedAt: 1_700_000_000_000,
+    expiresAt: 1_700_000_000_000 + 24 * 60 * 60 * 1000,
+    nonce: "y8f3k2m9p1q7r5s6t0v4w8x2",
+    companyId: "dev-company",
+    ...overrides,
+  };
+}
+
+function attachUser(req: express.Request, _res: express.Response, next: express.NextFunction): void {
+  (req as express.Request & { user: { userId: string; companyId: string } }).user = {
+    userId:    "dev-user",
+    companyId: "dev-company",
+  };
+  next();
+}
+
+function buildApp() {
+  const app = express();
+  app.use(express.json());
+  app.use(attachUser);
+
+  // Mirror index.ts withPerRequestPolicyCtx: per-request stub PolicyContext
+  // sourced from the request body's credentialId.
+  app.post("/v1/sign", async (req, res, next) => {
+    const credentialId = typeof req.body?.credentialId === "string" ? req.body.credentialId : "stub";
+    const ctx = makeStubPolicyContext({ credentialId, userId: "dev-user", companyId: "dev-company" });
+    try { await makeSignHandler(ctx)(req, res); } catch (e) { next(e); }
+  });
+  app.post("/v1/sign/finalize", async (req, res, next) => {
+    const ctx = makeStubPolicyContext({ credentialId: CREDENTIAL_ID, userId: "dev-user", companyId: "dev-company" });
+    try { await makeSignFinalizeHandler(ctx)(req, res); } catch (e) { next(e); }
+  });
+
+  // Surface handler errors as JSON so test failures show the real cause.
+  app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    // eslint-disable-next-line no-console
+    console.error("[test] handler error:", err);
+    res.status(500).json({ error: err.message, stack: err.stack });
+  });
+
+  return app;
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+describe("POST /v1/sign → /v1/sign/finalize", () => {
+  beforeEach(() => {
+    for (const k of Object.keys(store)) delete store[k];
+  });
+
+  it("round-trips the canonical payload through pending_challenges", async () => {
+    const app = buildApp();
+    const payload = makePayload();
+
+    // Step 1 — issue challenge.
+    const signRes = await request(app).post("/v1/sign").send({
+      payload,
+      recipientSetHash: RECIPIENT_SET_HASH,
+      credentialId:     CREDENTIAL_ID,
+      freshBiometric:   true,
+    });
+
+    expect(signRes.status).toBe(200);
+    expect(signRes.body.ok).toBe(true);
+    expect(signRes.body.policyDecision).toBe("APPROVED");
+    const challengeId: string = signRes.body.challengeId;
+    expect(typeof challengeId).toBe("string");
+    expect(challengeId.length).toBeGreaterThan(0);
+
+    // Confirm the write side now persists `payload` (the regression).
+    const pending = store["pending_challenges"]?.[challengeId] as { payload?: EmailPayload } | undefined;
+    expect(pending).toBeDefined();
+    expect(pending?.payload).toEqual(payload);
+
+    // Step 2 — finalize against the same in-memory store.
+    const payloadHash: string = signRes.body.challenge.challenge
+      ? // payloadHash is the hex sha256 of canonical bytes; recompute the same
+        // way the handlers do so we don't reach into private helpers.
+        await (async () => {
+          const { canonicalize } = await import("@proofline/canonical");
+          const crypto = await import("node:crypto");
+          return crypto.createHash("sha256").update(canonicalize(payload)).digest("hex");
+        })()
+      : "";
+
+    const finalizeRes = await request(app)
+      .post("/v1/sign/finalize")
+      .set("x-proofline-challenge-id", challengeId)
+      .send({
+        assertion: {
+          credentialId:      CREDENTIAL_ID,
+          clientDataJSON:    "stub-client-data",
+          authenticatorData: "stub-auth-data",
+          signature:         "stub-signature",
+        },
+        payloadHash,
+        recipientSetHash: RECIPIENT_SET_HASH,
+        path:             "fresh",
+      });
+
+    expect(finalizeRes.status).toBe(200);
+    expect(finalizeRes.body.ok).toBe(true);
+    expect(finalizeRes.body.envelope).toBeDefined();
+    expect(finalizeRes.body.envelope.payload).toEqual(payload);
+    expect(finalizeRes.body.envelope.status).toBe("SIGNED");
+    expect(typeof finalizeRes.body.banner).toBe("string");
+
+    // The pending challenge MUST be consumed after a successful finalize.
+    expect(store["pending_challenges"]?.[challengeId]).toBeUndefined();
+  });
+
+  it("returns 410 CHALLENGE_CORRUPT when a pending record has no payload (legacy/defensive)", async () => {
+    const app = buildApp();
+    const payload = makePayload();
+
+    const { canonicalize } = await import("@proofline/canonical");
+    const crypto = await import("node:crypto");
+    const canonicalBytes = canonicalize(payload);
+    const payloadHash    = crypto.createHash("sha256").update(canonicalBytes).digest("hex");
+
+    // Seed a pending_challenges record WITHOUT a payload to simulate a legacy
+    // in-flight doc from before this fix. The defensive guard must short-circuit
+    // before validatePolicy touches `.isWireInstruction`.
+    const challengeId = "legacy-no-payload-challenge";
+    ensureCol("pending_challenges")[challengeId] = {
+      challengeId,
+      payloadHash,
+      recipientSetHash: RECIPIENT_SET_HASH,
+      credentialId:     CREDENTIAL_ID,
+      userId:           "dev-user",
+      companyId:        "dev-company",
+      path:             "fresh",
+      expiresAt:        Date.now() + 60_000,
+      // payload: intentionally omitted
+    };
+
+    const res = await request(app)
+      .post("/v1/sign/finalize")
+      .set("x-proofline-challenge-id", challengeId)
+      .send({
+        assertion: {
+          credentialId:      CREDENTIAL_ID,
+          clientDataJSON:    "stub-client-data",
+          authenticatorData: "stub-auth-data",
+          signature:         "stub-signature",
+        },
+        payloadHash,
+        recipientSetHash: RECIPIENT_SET_HASH,
+        path:             "fresh",
+      });
+
+    expect(res.status).toBe(410);
+    expect(res.body.title).toBe("CHALLENGE_CORRUPT");
+  });
+});

@@ -9,6 +9,7 @@
 
 import * as crypto from "crypto";
 import { v7 as uuidv7 } from "uuid";
+import { getFirestore } from "firebase-admin/firestore";
 
 import {
   CompanyPolicy,
@@ -19,6 +20,7 @@ import {
   WebAuthnAssertion,
 } from "@proofline/types";
 import type { SignerDisplayRecord } from "@proofline/email";
+import { canonicalize } from "@proofline/canonical";
 
 // ─── Local envelope type (mirrors signing.types.ts) ───────────────────────────
 // The shared SignedEnvelope predates email signing fields — use a local type.
@@ -44,8 +46,6 @@ export type { EmailSignedEnvelope };
 // ─── Canonical bytes (delegates to @proofline/canonical) ─────────────────────
 
 export function buildCanonicalBytes(payload: EmailPayload): Uint8Array {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { canonicalize } = require("@proofline/canonical");
   return canonicalize(payload);
 }
 
@@ -58,12 +58,20 @@ export function hashPayload(canonicalBytes: Uint8Array): string {
 export async function verifySessionTokenJWS(
   token: string
 ): Promise<SessionTokenPayload> {
+  // TODO(follow-up): @proofline/sessions does not currently export
+  // verifySessionToken — it exposes makeJoseVerifier({keys}).verify(token).
+  // The dynamic require below has always returned undefined here, so any
+  // silent-path finalize that reached this line throws. Tracked as a
+  // separate landmine — out of scope for the payload-storage fix.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { verifySessionToken } = require("@proofline/sessions");
   return verifySessionToken(token);
 }
 
 export async function issueSessionToken(session: SigningSession): Promise<string> {
+  // TODO(follow-up): see verifySessionTokenJWS — signSessionToken is not
+  // exported by @proofline/sessions today. Fresh-path finalize hits this
+  // after the payload-storage fix; needs a separate wiring PR.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { signSessionToken } = require("@proofline/sessions");
   return signSessionToken(session);
@@ -81,15 +89,15 @@ export interface PendingChallenge {
   path: "fresh" | "silent";
   sessionId?: string;
   expiresAt: number;
-  payload?: EmailPayload;
+  // Required: finalize re-runs validatePolicy and rebuilds canonical bytes,
+  // both of which need the full payload. Omitting it caused PFL-sign-finalize-500.
+  payload: EmailPayload;
 }
 
 export async function storePendingChallenge(
   challengeId: string,
   record: Omit<PendingChallenge, "challengeId">
 ): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { getFirestore } = require("firebase-admin/firestore");
   const db = getFirestore();
   await db
     .collection("pending_challenges")
@@ -100,8 +108,6 @@ export async function storePendingChallenge(
 export async function consumePendingChallenge(
   challengeId: string
 ): Promise<PendingChallenge | null> {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { getFirestore } = require("firebase-admin/firestore");
   const db = getFirestore();
   const ref = db.collection("pending_challenges").doc(challengeId);
 
@@ -132,6 +138,10 @@ interface AssertionVerifyInput {
 export async function verifyWebAuthnAssertion(
   input: AssertionVerifyInput
 ): Promise<boolean> {
+  // TODO(follow-up): @proofline/webauthn does not export verifyAssertion —
+  // the server-side ceremony helpers are finishAssertion / finishRegistration.
+  // This require has historically returned undefined; the call only succeeds
+  // when stubbed. Tracked as a separate landmine.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { verifyAssertion } = require("@proofline/webauthn");
   return verifyAssertion({
@@ -147,8 +157,6 @@ export async function verifyWebAuthnAssertion(
 export async function recordSignedEnvelope(
   envelope: EmailSignedEnvelope
 ): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { getFirestore } = require("firebase-admin/firestore");
   const db = getFirestore();
   const ref = db.collection("signed_messages").doc(envelope.envelopeId);
   await db.runTransaction(async (tx: any) => {
@@ -193,8 +201,6 @@ export async function createSession(
     signCount: 1,
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { getFirestore } = require("firebase-admin/firestore");
   const db = getFirestore();
   await db.collection("sessions").doc(sessionId).set(session);
 
@@ -205,8 +211,6 @@ export async function extendSession(
   sessionId: string,
   ctx: PolicyContext
 ): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { getFirestore } = require("firebase-admin/firestore");
   const db = getFirestore();
   const ref = db.collection("sessions").doc(sessionId);
 
@@ -236,8 +240,6 @@ export async function queueAnchorBatch(
   envelopeId: string,
   payloadHash: string
 ): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { getFirestore } = require("firebase-admin/firestore");
   const db = getFirestore();
   await db.collection("anchor_queue").add({
     envelopeId,
@@ -252,8 +254,6 @@ export async function resolveEligibleCosigners(
   companyId: string,
   _ctx: PolicyContext
 ): Promise<string[]> {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { getFirestore } = require("firebase-admin/firestore");
   const db = getFirestore();
   const snap = await db
     .collection("users")
@@ -269,8 +269,6 @@ export async function resolveEligibleCosigners(
 export async function resolveSignerDisplayRecord(
   userId: string
 ): Promise<SignerDisplayRecord> {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { getFirestore } = require("firebase-admin/firestore");
   const db = getFirestore();
   const snap = await db.collection("users").doc(userId).get();
   if (!snap.exists) {
@@ -283,11 +281,16 @@ export async function resolveSignerDisplayRecord(
       signedAt: Date.now(),
     };
   }
-  const data = snap.data();
+  const data = (snap.data() ?? {}) as {
+    displayName?: string;
+    role?: string;
+    companyName?: string;
+    domain?: string;
+  };
   return {
     userId,
     name: data.displayName ?? userId,
-    role: data.role,
+    role: data.role ?? "Unknown",
     companyName: data.companyName ?? "",
     domain: data.domain ?? "",
     signedAt: Date.now(),

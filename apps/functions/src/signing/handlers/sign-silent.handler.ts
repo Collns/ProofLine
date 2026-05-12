@@ -147,6 +147,7 @@ export function makeSignSilentHandler(ctx: PolicyContext) {
 
     const payloadHash = Buffer.from(canonicalBytes).toString("hex");
     await storePendingChallenge(challengeId, {
+      payload: body.payload,
       payloadHash,
       recipientSetHash: body.recipientSetHash,
       credentialId: body.credentialId,
