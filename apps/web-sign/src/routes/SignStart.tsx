@@ -190,6 +190,11 @@ export function SignStart() {
 
     try {
       // userVerification: 'required' — the actual biometric prompt.
+      // allowCredentials[].id is the JSON form (Base64URLString) — the
+      // @simplewebauthn/browser layer decodes to a BufferSource itself
+      // before calling navigator.credentials.get. Passing a Uint8Array
+      // here breaks the lib's internal base64URLStringToBuffer (it
+      // calls .replace on a non-string) → "l.replace is not a function".
       const assertion = await startAssertionCeremony({
         challenge: serverChallenge,
         rpId: 'proofline-sign.web.app',
