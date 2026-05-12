@@ -20,3 +20,6 @@ contracts/foundry.lock
 
 # Claude Code local config
 .claude/
+kanban-import.json
+kanban-export-*.json
+kanban-delta-*.json
