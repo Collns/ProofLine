@@ -64,6 +64,9 @@ import { makeStubEmailProvider } from "@proofline/email/stub";
 // --- PFL-061: extension auth HTTP wiring
 import { makeExtensionAuthHandler } from "./auth/extension-auth.handler.js";
 
+// --- PFL-062: cosign HTTP wiring
+import { makeCosignRouter } from "./cosign/router.js";
+
 // ─── Firebase Admin (idempotent — module may be re-imported across invokes) ─
 
 if (getApps().length === 0) {
@@ -97,7 +100,7 @@ function corsMiddleware(
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Authorization, Content-Type, X-ProofLine-Challenge-Id, X-ProofLine-Bilateral-Token",
+    "Authorization, Content-Type, X-ProofLine-Challenge-Id, X-ProofLine-Bilateral-Token, X-ProofLine-Cosign-Token",
   );
   res.setHeader("Access-Control-Max-Age", "86400");
 
@@ -307,6 +310,25 @@ publicApp.post(
 // Explicit OPTIONS — corsMiddleware short-circuits the preflight, but the
 // route must exist so Express doesn't fall through to a 404.
 publicApp.options("/v1/extension/auth", corsMiddleware);
+
+// ─── PFL-062: Cosign routes (/v1/cosign/*) ───────────────────────────────────
+//
+// Public endpoints — the JWS in the URL (or X-ProofLine-Cosign-Token header)
+// is the auth. CORS allows proofline-counterparty.web.app, which is in the
+// shared ALLOWED_ORIGINS set above.
+
+let cachedCosignRouter: express.Router | null = null;
+function cosignRouter(): express.Router {
+  if (cachedCosignRouter) return cachedCosignRouter;
+  cachedCosignRouter = makeCosignRouter();
+  return cachedCosignRouter;
+}
+
+publicApp.use(
+  "/v1/cosign",
+  corsMiddleware,
+  (req, res, next) => cosignRouter()(req, res, next),
+);
 
 export const api = onRequest(
   { region: "us-central1", cors: false, memory: "256MiB" },
