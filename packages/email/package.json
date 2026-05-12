@@ -6,23 +6,24 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js",
-    "./banner": "./dist/banner.js"
+    ".":        "./dist/index.js",
+    "./banner": "./dist/banner.js",
+    "./stub":   "./dist/providers/stub.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build":     "tsc",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
-    "clean": "rm -rf dist"
+    "lint":      "tsc --noEmit",
+    "test":      "vitest run --passWithNoTests",
+    "clean":     "rm -rf dist"
   },
   "devDependencies": {
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest":     "catalog:"
   },
   "dependencies": {
     "@proofline/types": "workspace:*",
-    "resend": "6.12.3",
-    "zod": "catalog:"
+    "resend":           "6.12.3",
+    "zod":              "catalog:"
   }
 }
