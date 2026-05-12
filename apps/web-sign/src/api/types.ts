@@ -69,6 +69,7 @@ export interface ExtensionAuthResponse {
   userId: string;
   companyId: string;
   credentialId: string;
+  email: string;
 }
 
 // ── Error envelope ───────────────────────────────────────────────────────────

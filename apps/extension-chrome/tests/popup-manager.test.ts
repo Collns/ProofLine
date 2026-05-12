@@ -205,6 +205,7 @@ describe("popup-manager.runCeremony", () => {
       authToken: "ext-jws-abc",
       userId:    "user_42",
       companyId: "co_42",
+      email:     "user42@example.com",
     });
     await promise;
 
@@ -212,6 +213,7 @@ describe("popup-manager.runCeremony", () => {
     expect(got?.token).toBe("ext-jws-abc");
     expect(got?.userId).toBe("user_42");
     expect(got?.companyId).toBe("co_42");
+    expect(got?.email).toBe("user42@example.com");
     expect(got?.extInstallId).toBe("fakeextensionid0123456789abcdef");
     expect(typeof got?.iat).toBe("number");
     expect(typeof got?.exp).toBe("number");
