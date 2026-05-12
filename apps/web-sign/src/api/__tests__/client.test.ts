@@ -46,7 +46,7 @@ describe('client.signFresh', () => {
   it('POSTs /v1/sign with the spec body shape and Bearer token', async () => {
     const fetchMock = mockFetch({
       ok: true,
-      body: { ok: true, policyDecision: 'APPROVED', challenge: { challenge: 'c', rpId: 'r', allowCredentials: [], userVerification: 'required', timeout: 60000 } },
+      body: { ok: true, policyDecision: 'APPROVED', challengeId: 'chal-uuid-1', challenge: { challenge: 'c', rpId: 'r', allowCredentials: [], userVerification: 'required', timeout: 60000 } },
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -83,7 +83,7 @@ describe('client.signSilent', () => {
   it('POSTs /v1/sign-silent with sessionToken in the body', async () => {
     const fetchMock = mockFetch({
       ok: true,
-      body: { ok: true, challenge: { challenge: 'c', rpId: 'r', allowCredentials: [], userVerification: 'discouraged', timeout: 60000 } },
+      body: { ok: true, challengeId: 'chal-uuid-2', challenge: { challenge: 'c', rpId: 'r', allowCredentials: [], userVerification: 'discouraged', timeout: 60000 } },
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 

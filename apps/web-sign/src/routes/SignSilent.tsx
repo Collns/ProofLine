@@ -113,6 +113,7 @@ export function SignSilent() {
 
       // Re-validate session + re-issue challenge.
       let serverChallenge: string;
+      let challengeId:     string;
       try {
         const resp = await signSilent({
           sessionToken:     params.sessionToken,
@@ -134,6 +135,7 @@ export function SignSilent() {
           return;
         }
         serverChallenge = resp.challenge.challenge;
+        challengeId     = resp.challengeId;
       } catch (e) {
         if (cancelled) return;
         const err = e instanceof ApiError ? e : null;
@@ -166,6 +168,8 @@ export function SignSilent() {
           timeout: 30_000,
         });
 
+        // Use the server-issued challengeId (not ceremonyId) — finalize
+        // looks up pending_challenges/{challengeId}.
         const finalize = await signFinalize(
           {
             assertion: {
@@ -180,7 +184,7 @@ export function SignSilent() {
             path:             'silent',
             sessionToken:     params.sessionToken,
           },
-          params.ceremonyId,
+          challengeId,
         );
 
         if (!finalize.ok) {
