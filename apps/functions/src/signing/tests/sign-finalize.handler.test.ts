@@ -115,28 +115,37 @@ vi.mock("firebase-admin/app", () => ({
   getApp:        vi.fn(),
 }));
 
-// signing.helpers.ts wires @proofline/{webauthn,sessions} via dynamic
-// require() — none of the named functions (verifyAssertion / signSessionToken
-// / verifySessionToken) are actually exported by those packages today, so
-// real calls return undefined and throw. Tracked as separate landmines.
-// Stub the helpers wrappers directly so this regression test exercises the
-// payload write/read round-trip without depending on the broken adapters.
-vi.mock("../handlers/signing.helpers.js", async () => {
-  const actual = await vi.importActual<typeof import("../handlers/signing.helpers.js")>(
-    "../handlers/signing.helpers.js",
-  );
+// PFL-081 fixed signing.helpers.ts to use static imports of finishAssertion
+// (from @proofline/webauthn) and makeJoseSigner/makeJoseVerifier (from
+// @proofline/sessions). The helpers themselves are no longer stubbed —
+// instead we mock the LEAF packages so the helper's real call paths run and
+// any future regression to the wiring will fail this test.
+vi.mock("@proofline/webauthn", async () => {
+  const actual = await vi.importActual<typeof import("@proofline/webauthn")>("@proofline/webauthn");
   return {
     ...actual,
-    verifyWebAuthnAssertion: vi.fn(async () => true),
-    issueSessionToken:       vi.fn(async () => "stub-session-token"),
-    verifySessionTokenJWS:   vi.fn(async () => ({
-      v:              1,
-      sessionId:      "stub-session-id",
-      userId:         "dev-user",
-      companyId:      "dev-company",
-      recipientScope: "stub-recipient-scope",
-      iat:            0,
-      exp:            Date.now() + 60_000,
+    finishAssertion: vi.fn(async () => ({ ok: true, signCount: 1, credentialId: "cred-test-001" })),
+  };
+});
+
+vi.mock("@proofline/sessions", async () => {
+  const actual = await vi.importActual<typeof import("@proofline/sessions")>("@proofline/sessions");
+  return {
+    ...actual,
+    makeJoseSigner: vi.fn(() => ({ sign: vi.fn(async () => "stub-session-token") })),
+    makeJoseVerifier: vi.fn(() => ({
+      verify: vi.fn(async () => ({
+        ok:    true,
+        value: {
+          v:                1,
+          sessionId:        "stub-session-id",
+          userId:           "dev-user",
+          companyId:        "dev-company",
+          recipientSetHash: "stub-recipient-scope",
+          iat:              0,
+          exp:              Math.floor(Date.now() / 1000) + 60,
+        },
+      })),
     })),
   };
 });
@@ -147,6 +156,8 @@ import { makeSignHandler } from "../handlers/sign.handler.js";
 import { makeSignFinalizeHandler } from "../handlers/sign-finalize.handler.js";
 import { makeStubPolicyContext } from "../../wiring/stubs.js";
 import type { EmailPayload } from "@proofline/types";
+import { finishAssertion } from "@proofline/webauthn";
+import { makeJoseSigner } from "@proofline/sessions";
 
 // ─── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -316,5 +327,61 @@ describe("POST /v1/sign → /v1/sign/finalize", () => {
 
     expect(res.status).toBe(410);
     expect(res.body.title).toBe("CHALLENGE_CORRUPT");
+  });
+
+  // Guards against the PFL-081 regression: signing.helpers.ts used to wire
+  // @proofline/{webauthn,sessions} via dynamic require() under names that
+  // didn't exist, so the call sites threw `TypeError: ... is not a function`
+  // in prod. The earlier round-trip test would pass even with that bug
+  // because it mocked the helpers module itself. This test mocks ONLY the
+  // leaf packages — if the helper's static-import wiring breaks again, the
+  // call counts below drop to 0 and the test fails.
+  it("invokes finishAssertion + makeJoseSigner through the real helper code (PFL-081 wiring guard)", async () => {
+    const finishAssertionMock = vi.mocked(finishAssertion);
+    const makeJoseSignerMock   = vi.mocked(makeJoseSigner);
+    finishAssertionMock.mockClear();
+    makeJoseSignerMock.mockClear();
+
+    const app = buildApp();
+    const payload = makePayload();
+
+    const signRes = await request(app).post("/v1/sign").send({
+      payload,
+      recipientSetHash: RECIPIENT_SET_HASH,
+      credentialId:     CREDENTIAL_ID,
+      freshBiometric:   true,
+    });
+    expect(signRes.status).toBe(200);
+
+    const { canonicalize } = await import("@proofline/canonical");
+    const nodeCrypto = await import("node:crypto");
+    const payloadHash = nodeCrypto.createHash("sha256")
+      .update(canonicalize(payload))
+      .digest("hex");
+
+    const finalizeRes = await request(app)
+      .post("/v1/sign/finalize")
+      .set("x-proofline-challenge-id", signRes.body.challengeId)
+      .send({
+        assertion: {
+          credentialId:      CREDENTIAL_ID,
+          clientDataJSON:    "stub-client-data",
+          authenticatorData: "stub-auth-data",
+          signature:         "stub-signature",
+        },
+        payloadHash,
+        recipientSetHash: RECIPIENT_SET_HASH,
+        path:             "fresh",
+      });
+
+    expect(finalizeRes.status).toBe(200);
+    expect(finishAssertionMock).toHaveBeenCalledTimes(1);
+    expect(makeJoseSignerMock).toHaveBeenCalledTimes(1);
+
+    // Sanity: the call site passed real arguments derived from the request.
+    const finishArg = finishAssertionMock.mock.calls[0]![0];
+    expect(finishArg.expectedRPID).toBe("proofline-sign.web.app");
+    expect(finishArg.expectedOrigin).toBe("https://proofline-sign.web.app");
+    expect(typeof finishArg.storedPublicKey).toBe("string");
   });
 });

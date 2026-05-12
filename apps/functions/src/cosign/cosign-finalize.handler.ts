@@ -27,6 +27,7 @@ import { z } from "zod";
 
 import { decodeCosignJws } from "./cosign.helpers.js";
 import type { FinalizeCosignResponse } from "./cosign.types.js";
+import { finishAssertion, InMemoryChallengeStore } from "@proofline/webauthn";
 
 // ─── Request body schema ─────────────────────────────────────────────────────
 //
@@ -61,18 +62,69 @@ async function tryVerifyAssertion(
     if (typeof publicKey !== "string") {
       return { ok: false, reason: "PUBKEY_MISSING" };
     }
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { verifyAssertion } = require("@proofline/webauthn");
-    const ok = await verifyAssertion({
-      assertion,
-      expectedChallenge: challenge,
-      expectedOrigin:    "https://proofline-counterparty.web.app",
-      publicKey,
+
+    // The popup posts the assertion as a structural subset of
+    // AuthenticationResponseJSON; finishAssertion reads clientDataJSON to pull
+    // the challenge, then looks it up in the ChallengeStore we seed below.
+    const response = adaptAssertionForFinish(assertion);
+    if (!response) {
+      return { ok: false, reason: "ASSERTION_SHAPE_INVALID" };
+    }
+
+    const challengeStore = new InMemoryChallengeStore();
+    const now = Date.now();
+    await challengeStore.put({
+      challenge,
+      userId: "",
+      purpose: "assertion",
+      rpId: "proofline-counterparty.web.app",
+      createdAt: now,
+      expiresAt: now + 60_000,
+      consumed: false,
     });
-    return { ok: Boolean(ok) };
+
+    const result = await finishAssertion({
+      response,
+      expectedRPID: "proofline-counterparty.web.app",
+      expectedOrigin: "https://proofline-counterparty.web.app",
+      storedPublicKey: publicKey,
+      storedSignCount: 0,
+      challengeStore,
+    });
+    return { ok: result.ok, ...(result.ok ? {} : { reason: result.reason }) };
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : "VERIFY_THREW" };
   }
+}
+
+function adaptAssertionForFinish(
+  assertion: unknown,
+): Parameters<typeof finishAssertion>[0]["response"] | null {
+  if (!assertion || typeof assertion !== "object") return null;
+  const a = assertion as Record<string, unknown>;
+  const id = (a["id"] ?? a["credentialId"]) as string | undefined;
+  const inner = a["response"];
+  if (!id || !inner || typeof inner !== "object") return null;
+  const r = inner as Record<string, unknown>;
+  if (
+    typeof r["clientDataJSON"] !== "string" ||
+    typeof r["authenticatorData"] !== "string" ||
+    typeof r["signature"] !== "string"
+  ) {
+    return null;
+  }
+  return {
+    id,
+    rawId: id,
+    type: "public-key",
+    clientExtensionResults: {},
+    response: {
+      clientDataJSON: r["clientDataJSON"] as string,
+      authenticatorData: r["authenticatorData"] as string,
+      signature: r["signature"] as string,
+      ...(typeof r["userHandle"] === "string" ? { userHandle: r["userHandle"] as string } : {}),
+    },
+  } as Parameters<typeof finishAssertion>[0]["response"];
 }
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
