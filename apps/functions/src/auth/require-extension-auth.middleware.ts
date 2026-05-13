@@ -11,7 +11,7 @@
  *   header:  { alg: "HS256", typ: "JWT" }
  *   payload: { v: 1, iss: "proofline-extension-auth",
  *              userId, companyId, extInstallId, iat, exp }
- *   sig:     HMAC-SHA256(header.payload, EXT_AUTH_JWT_SECRET)
+ *   sig:     HMAC-SHA256(header.payload, PROOFLINE_AUTH_JWT_SECRET)
  *
  * Why a new middleware lives here (not just upgrading stubAuthMiddleware
  * in index.ts): /v1/onboard and /v1/bilateral still rely on the pass-
@@ -20,7 +20,7 @@
  * ticket). Sign routes are the only place that needs the real user UID
  * threaded through to PolicyContext.getUser.
  *
- * HACKATHON CAVEAT: the HMAC secret is process.env.EXT_AUTH_JWT_SECRET
+ * HACKATHON CAVEAT: the HMAC secret is process.env.PROOFLINE_AUTH_JWT_SECRET
  * with a hardcoded dev fallback. Same secret as the issuer; same single-
  * instance limitation. A persistent secret / KMS rotation lands later.
  */
@@ -35,7 +35,7 @@ import { makeRFC7807Error } from "../api/onboarding/http.helpers.js";
 const EXPECTED_ISSUER = "proofline-extension-auth";
 
 function getSecret(): string {
-  return (process.env["EXT_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod").trim();
+  return (process.env["PROOFLINE_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod").trim();
 }
 
 // ─── Result type ─────────────────────────────────────────────────────────────
