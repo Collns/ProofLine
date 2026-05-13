@@ -27,6 +27,15 @@
 import express from "express";
 import { onRequest } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
+import { defineSecret } from "firebase-functions/params";
+
+// Functions v2 secret binding: the three call sites that HMAC-verify the
+// extension auth JWS (extension-auth.handler, register-credential.handler,
+// require-extension-auth.middleware) all read process.env on each request.
+// Without this binding the env var is undefined at runtime even when the
+// secret is set via `firebase functions:secrets:set EXT_AUTH_JWT_SECRET`.
+// Only the `api` export needs this — anchorAdmin/webhooks don't touch it.
+const EXT_AUTH_JWT_SECRET = defineSecret("EXT_AUTH_JWT_SECRET");
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -371,7 +380,12 @@ publicApp.use(
 );
 
 export const api = onRequest(
-  { region: "us-central1", cors: false, memory: "256MiB" },
+  {
+    region:  "us-central1",
+    cors:    false,
+    memory:  "256MiB",
+    secrets: [EXT_AUTH_JWT_SECRET],
+  },
   publicApp,
 );
 
