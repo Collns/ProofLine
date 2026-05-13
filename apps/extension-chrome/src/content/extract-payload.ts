@@ -241,31 +241,62 @@ function readChipAddresses(compose: Element, field: FieldName): string[] {
 }
 
 function readReplyFallbackForTo(compose: Element): string[] {
-  // Try the compose element we were handed first.
-  const inNarrow = scanForToChipsExcludingBodyAndQuote(compose);
-  if (inNarrow.length > 0) return inNarrow;
+  // Tier 1: scan the narrow compose itself (what extractPayload was handed).
+  const tier1 = scanForToChipsExcludingBodyAndQuote(compose);
+  // eslint-disable-next-line no-console
+  console.log('[ProofLine extract] S4 tier1 (narrow):', tier1.length);
+  if (tier1.length > 0) return tier1;
 
-  // PFL-098.1: the `compose` the content script hands us is the smallest
-  // ancestor of `tr.btC` (the toolbar) that ALSO contains the body
-  // editable — see `findInlineComposes` in `gmail-detector.ts`. In Gmail
-  // inline reply, that "smallest body+toolbar wrapper" is a SIBLING of
-  // the recipients-chip subtree, both nested under a wider
-  // `[role="region"][data-compose-id]` container. The chip is therefore
-  // NOT a descendant of `compose` — Strategy 4a/4b/4c on the narrow
-  // compose all see zero candidates and we return EMPTY_TO even though
-  // the chip is one ancestor away.
-  //
-  // The cheapest robust fix: walk up to the wider compose-region
-  // ancestor and re-scan with the same body+blockquote exclusion. The
-  // exclusion is what keeps in-body @mentions / quoted-thread chips
-  // from leaking in. If no `[role="region"][data-compose-id]` ancestor
-  // exists (e.g. floating compose dialog where `compose` already IS the
-  // top-level container), `.closest()` returns the narrow compose itself
-  // and we skip — no harm done.
-  const wider = compose.closest('[role="region"][data-compose-id]');
-  if (wider && wider !== compose) {
-    return scanForToChipsExcludingBodyAndQuote(wider);
+  // Tier 2 (PFL-098.1): the `compose` the content script hands us is the
+  // smallest ancestor of `tr.btC` (the toolbar) that ALSO contains the
+  // body editable — see `findInlineComposes` in `gmail-detector.ts`. In
+  // many Gmail inline-reply layouts that "smallest body+toolbar wrapper"
+  // is a descendant of a wider `[role="region"][data-compose-id]`
+  // container that ALSO contains the recipients-chip subtree as a
+  // sibling. Walk up to the wider container and re-scan with the same
+  // body+blockquote exclusion.
+  const ancestorRegion = compose.closest('[role="region"][data-compose-id]');
+  if (ancestorRegion && ancestorRegion !== compose) {
+    const tier2 = scanForToChipsExcludingBodyAndQuote(ancestorRegion);
+    // eslint-disable-next-line no-console
+    console.log('[ProofLine extract] S4 tier2 (ancestor region):', tier2.length);
+    if (tier2.length > 0) return tier2;
+  } else {
+    // eslint-disable-next-line no-console
+    console.log('[ProofLine extract] S4 tier2: no ancestor region');
   }
+
+  // Tier 3 (PFL-098.2): compose has NO `[role="region"][data-compose-id]`
+  // ancestor (i.e. .closest() returned null or compose itself), but the
+  // chip-bearing region exists in a SIBLING subtree under some shared
+  // higher ancestor. Walk up compose's parent chain; at each level, look
+  // for `[role="region"][data-compose-id]` descendants that are NOT
+  // ancestors of compose. The first level that exposes such candidate
+  // regions is the level where the sibling region lives. Scan each
+  // candidate; return on the first hit. We do NOT walk further up after
+  // finding candidates — going higher would only let us see regions
+  // belonging to other, unrelated open composes, which would be wrong.
+  let cursor: Element | null = compose.parentElement;
+  let depth = 0;
+  while (cursor && depth < 20) {
+    const candidates = Array.from(
+      cursor.querySelectorAll('[role="region"][data-compose-id]'),
+    ).filter((r) => r !== compose && !r.contains(compose));
+    if (candidates.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log('[ProofLine extract] S4 tier3 sibling candidates:', candidates.length);
+      for (const region of candidates) {
+        const tier3 = scanForToChipsExcludingBodyAndQuote(region);
+        if (tier3.length > 0) return tier3;
+      }
+      break;
+    }
+    cursor = cursor.parentElement;
+    depth += 1;
+  }
+
+  // eslint-disable-next-line no-console
+  console.log('[ProofLine extract] S4 all tiers empty — returning []');
   return [];
 }
 
