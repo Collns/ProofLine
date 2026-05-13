@@ -13,6 +13,12 @@
  *   All four are base64url strings produced by the browser:
  *     credentialId       = base64url(rawId)
  *     publicKey          = base64url(response.getPublicKey())  // SPKI bytes
+ *                          NOTE (PFL-094): the client still sends this for
+ *                          backward compatibility, but the server IGNORES
+ *                          the value. SimpleWebAuthn's assertion verifier
+ *                          requires COSE-encoded keys, not SPKI — so we
+ *                          extract COSE from attestationObject below and
+ *                          store THAT as the canonical publicKey.
  *     attestationObject  = base64url(response.attestationObject)
  *     clientDataJSON     = base64url(response.clientDataJSON)
  *
@@ -20,6 +26,8 @@
  *   webauthn_credentials/{credentialId} = { userId, companyId, publicKey,
  *                                           attestationObject, clientDataJSON,
  *                                           deviceName, createdAt }
+ *                                          publicKey is now COSE (base64) — see
+ *                                          PFL-094 note above.
  *   users/{userId}.devices[]            = append DeviceRecord for this
  *                                          credentialId if not already
  *                                          present (PFL-084). The canonical
@@ -29,18 +37,21 @@
  *                                          `user.devices.find(...)`. We do NOT
  *                                          write a flat `user.credentialId`.
  *
- * Attestation verification is intentionally NOT performed here — the
- * hackathon slice trusts the platform authenticator to have produced a
- * real assertion. Real attestation lives in a follow-up ticket.
+ * Attestation verification IS performed here (PFL-094) — `verifyRegistrationResponse`
+ * from @simplewebauthn/server parses the attestationObject and gives us the
+ * COSE public key bytes. The trust caveat: see `extractChallengeFromClientDataJSON`
+ * below — we don't currently issue the registration challenge server-side, so
+ * the challenge match is structural only. PFL-095 closes that hole.
  */
 
 import type * as express from "express";
 import { getFirestore } from "firebase-admin/firestore";
 import { z } from "zod";
 import * as crypto from "node:crypto";
+import { verifyRegistrationResponse } from "@simplewebauthn/server";
 
 import type { DeviceRecord } from "@proofline/types";
-import { ERR } from "../api/onboarding/http.helpers.js";
+import { ERR, makeRFC7807Error } from "../api/onboarding/http.helpers.js";
 
 // ─── Auth: decode + verify the extension auth JWS ────────────────────────────
 
@@ -113,17 +124,117 @@ export interface RegisterCredentialResponse {
   credentialId: string;
 }
 
+// ─── COSE-from-attestation extraction (PFL-094) ─────────────────────────────
+//
+// SimpleWebAuthn's assertion verifier requires the COSE-encoded public key
+// (CBOR map, byte prefix 0xa5 …). The browser's `response.getPublicKey()`
+// returns SPKI/DER (ASN.1, byte prefix 0x30 0x59 …). Same EC P-256 key,
+// completely different binary encodings — verifyAuthenticationResponse
+// returns false when fed SPKI.
+//
+// To get the right bytes we hand the attestationObject (which the client
+// already sends) to `verifyRegistrationResponse`. The library parses the
+// CBOR-encoded authenticatorData inside, and returns
+// `registrationInfo.credentialPublicKey` as raw COSE bytes. We base64-
+// encode those and store them as the canonical `publicKey` everywhere.
+//
+// HACKATHON CAVEAT — TRUSTED CHALLENGE:
+//
+// `verifyRegistrationResponse` requires `expectedChallenge` so it can
+// reject ceremonies where the authenticator signed a value the server
+// didn't issue. Today the client (apps/web-sign/src/lib/webauthn-register.ts)
+// generates its own challenge locally and the server never sees it ahead
+// of time. As a stop-gap we parse the challenge OUT of clientDataJSON
+// below and feed THAT back as the expected challenge.
+//
+// This defeats the security purpose of the challenge — an attacker who
+// can supply clientDataJSON also controls "the expected value", so the
+// check is structural only. We're trading proper attestation verification
+// for shipping the demo. PFL-095 fixes this with a server-issued
+// registration challenge (mirrors the /v1/sign challenge endpoint).
+//
+// TODO(PFL-095): issue registration challenges from the server, persist
+// in pending_registration_challenges, then verify against that record
+// here instead of trusting clientDataJSON.
+
+function extractChallengeFromClientDataJSON(b64url: string): string {
+  const json = Buffer.from(b64url, "base64url").toString("utf8");
+  const parsed = JSON.parse(json) as { challenge: string };
+  return parsed.challenge;
+}
+
+// ─── Default COSE extractor (calls SimpleWebAuthn) ──────────────────────────
+
+export interface CoseExtractInput {
+  credentialId:      string;
+  attestationObject: string;
+  clientDataJSON:    string;
+}
+
+export type CoseExtractResult =
+  | { ok: true;  coseB64: string }
+  | { ok: false; reason: string };
+
+async function defaultExtractCose(input: CoseExtractInput): Promise<CoseExtractResult> {
+  let expectedChallenge: string;
+  try {
+    expectedChallenge = extractChallengeFromClientDataJSON(input.clientDataJSON);
+  } catch {
+    return { ok: false, reason: "Malformed clientDataJSON — cannot extract challenge" };
+  }
+
+  try {
+    const verification = await verifyRegistrationResponse({
+      response: {
+        id:                     input.credentialId,
+        rawId:                  input.credentialId,
+        type:                   "public-key",
+        response: {
+          attestationObject: input.attestationObject,
+          clientDataJSON:    input.clientDataJSON,
+        },
+        clientExtensionResults: {},
+      } as Parameters<typeof verifyRegistrationResponse>[0]["response"],
+      expectedChallenge,                       // hackathon: trusted from client (PFL-095)
+      expectedRPID:            "proofline-sign.web.app",
+      expectedOrigin:          "https://proofline-sign.web.app",
+      requireUserVerification: true,
+    });
+
+    if (!verification.verified || !verification.registrationInfo) {
+      return { ok: false, reason: "Could not verify the attestation object" };
+    }
+
+    return {
+      ok:      true,
+      coseB64: Buffer.from(verification.registrationInfo.credentialPublicKey).toString("base64"),
+    };
+  } catch (err) {
+    return {
+      ok:     false,
+      reason: err instanceof Error ? err.message : "Attestation verification failed",
+    };
+  }
+}
+
 // ─── Handler ─────────────────────────────────────────────────────────────────
 
 export interface RegisterCredentialHandlerDeps {
   /** Injectable for tests; defaults to the HMAC JWS decoder above. */
   verifyAuthBearer?: (bearer: string) => DecodedAuthToken | null;
+  /**
+   * Override the COSE-from-attestation step for tests that don't supply
+   * real attestation bytes. Default: SimpleWebAuthn's
+   * verifyRegistrationResponse against the live attestationObject.
+   */
+  extractCose?: (input: CoseExtractInput) => Promise<CoseExtractResult>;
 }
 
 export function makeRegisterCredentialHandler(
   deps: RegisterCredentialHandlerDeps = {},
 ) {
-  const verify = deps.verifyAuthBearer ?? verifyAuthBearer;
+  const verify     = deps.verifyAuthBearer ?? verifyAuthBearer;
+  const extractCose = deps.extractCose      ?? defaultExtractCose;
 
   return async function registerCredentialHandler(
     req: express.Request,
@@ -171,28 +282,68 @@ export function makeRegisterCredentialHandler(
       return;
     }
 
-    // 4. Store credential.
+    // 4. Verify the attestation and extract COSE public key bytes (PFL-094).
+    //    The client-supplied `body.publicKey` is SPKI/DER and incompatible
+    //    with SimpleWebAuthn's assertion verifier — we ignore it and pull
+    //    the COSE-encoded key out of the attestationObject instead via
+    //    the injected extractor (default uses verifyRegistrationResponse).
+    //    Heads-up: the default extractor reads `expectedChallenge` from
+    //    clientDataJSON, NOT from a server-issued record — see the block
+    //    comment above `extractChallengeFromClientDataJSON` + PFL-095.
+    if (body.publicKey) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[register-credential] received body.publicKey (SPKI) for credential " +
+          `${body.credentialId.slice(0, 16)}… — ignoring; storing COSE from attestationObject instead`,
+      );
+    }
+
+    const coseResult = await extractCose({
+      credentialId:      body.credentialId,
+      attestationObject: body.attestationObject,
+      clientDataJSON:    body.clientDataJSON,
+    });
+
+    if (!coseResult.ok) {
+      // eslint-disable-next-line no-console
+      console.warn(`[register-credential] attestation rejected: ${coseResult.reason}`);
+      res.status(400).json(
+        makeRFC7807Error(
+          "https://proofline.app/errors/ATTESTATION_INVALID",
+          "ATTESTATION_INVALID",
+          400,
+          coseResult.reason,
+        ),
+      );
+      return;
+    }
+
+    const coseB64 = coseResult.coseB64;
+
+    // 5. Store credential — `publicKey` is now COSE bytes (base64), not SPKI.
     const now = Date.now();
     await credRef.set({
       credentialId:      body.credentialId,
       userId:            decoded.userId,
       companyId:         decoded.companyId,
-      publicKey:         body.publicKey,
+      publicKey:         coseB64,
       attestationObject: body.attestationObject,
       clientDataJSON:    body.clientDataJSON,
       deviceName:        body.deviceName ?? "Unknown device",
       createdAt:         now,
     });
 
-    // 5. Append the new device to users/{userId}.devices[].
+    // 6. Append the new device to users/{userId}.devices[].
     //    Idempotent: if a DeviceRecord with this credentialId already
     //    exists on the user, leave it untouched. Multi-device: a new
     //    credentialId is appended, never overwriting prior devices.
     //    (PFL-084: the canonical schema is `User.devices: DeviceRecord[]`;
     //    we do NOT write a flat `users/{userId}.credentialId` field.)
+    //    publicKey here is the SAME COSE bytes written above — never the
+    //    client's SPKI value.
     const newDevice: DeviceRecord = {
       credentialId: body.credentialId,
-      publicKey:    body.publicKey,
+      publicKey:    coseB64,
       enrolledAt:   now,
     };
     const userRef  = firestore.collection("users").doc(decoded.userId);
