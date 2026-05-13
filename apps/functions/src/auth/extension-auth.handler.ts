@@ -45,7 +45,7 @@ const EXT_AUTH_TTL_SEC = 30 * 24 * 60 * 60;
 const ISSUER = "proofline-extension-auth";
 
 function getSecret(): string {
-  return process.env["EXT_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod";
+  return (process.env["EXT_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod").trim();
 }
 
 // ─── Request schema ───────────────────────────────────────────────────────────

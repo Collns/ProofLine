@@ -53,7 +53,7 @@ interface DecodedAuthToken {
 }
 
 function getSecret(): string {
-  return process.env["EXT_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod";
+  return (process.env["EXT_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod").trim();
 }
 
 function verifyAuthBearer(bearer: string): DecodedAuthToken | null {
