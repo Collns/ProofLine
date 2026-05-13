@@ -6,7 +6,7 @@
  * WebAuthn credential for an authenticated user (PFL-069).
  *
  * Auth: Bearer JWS issued by /v1/extension/auth (PFL-061). We verify
- * structure + HMAC + exp against EXT_AUTH_JWT_SECRET so a stolen
+ * structure + HMAC + exp against PROOFLINE_AUTH_JWT_SECRET so a stolen
  * sign-flow Bearer can't be used to enroll a credential for someone else.
  *
  * Body: { credentialId, publicKey, attestationObject, clientDataJSON }
@@ -53,7 +53,7 @@ interface DecodedAuthToken {
 }
 
 function getSecret(): string {
-  return (process.env["EXT_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod").trim();
+  return (process.env["PROOFLINE_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod").trim();
 }
 
 function verifyAuthBearer(bearer: string): DecodedAuthToken | null {

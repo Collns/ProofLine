@@ -85,7 +85,7 @@ function mintRealAuthJws(claims: {
   iat: number;
   exp: number;
 }): string {
-  const secret = process.env["EXT_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod";
+  const secret = process.env["PROOFLINE_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod";
   const header  = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
   const payload = Buffer.from(JSON.stringify({ v: 1, iss: "proofline-extension-auth", ...claims })).toString("base64url");
   const sig = crypto.createHmac("sha256", secret).update(`${header}.${payload}`).digest("base64url");
