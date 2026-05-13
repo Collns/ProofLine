@@ -13,7 +13,7 @@
  *      email from the verified token. This makes "any Google account
  *      can demo the extension" true without forcing a full onboarding
  *      flow first.
- *   3. Mint a JWS extension auth token (HS256, EXT_AUTH_JWT_SECRET).
+ *   3. Mint a JWS extension auth token (HS256, PROOFLINE_AUTH_JWT_SECRET).
  *   4. Return { authToken, userId, companyId, credentialId }.
  *
  * Token format (HS256 JWS) — mirrors api/bilateral/jws.helpers.ts so we
@@ -21,7 +21,7 @@
  *
  *   header:  { alg: "HS256", typ: "JWT" }
  *   payload: { v: 1, userId, companyId, extInstallId, iss, iat, exp }
- *   sig:     HMAC-SHA256(header.payload, EXT_AUTH_JWT_SECRET)
+ *   sig:     HMAC-SHA256(header.payload, PROOFLINE_AUTH_JWT_SECRET)
  *
  * Verification of this token by /v1/sign* is intentionally NOT wired here
  * — that lives in a follow-up ticket that swaps the stub auth middleware
@@ -45,7 +45,7 @@ const EXT_AUTH_TTL_SEC = 30 * 24 * 60 * 60;
 const ISSUER = "proofline-extension-auth";
 
 function getSecret(): string {
-  return (process.env["EXT_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod").trim();
+  return (process.env["PROOFLINE_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod").trim();
 }
 
 // ─── Request schema ───────────────────────────────────────────────────────────

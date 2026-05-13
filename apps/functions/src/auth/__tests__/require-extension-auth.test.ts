@@ -24,7 +24,7 @@ import {
 
 // ─── Test helpers ───────────────────────────────────────────────────────────
 
-const SECRET   = process.env["EXT_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod";
+const SECRET   = process.env["PROOFLINE_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod";
 const ISSUER   = "proofline-extension-auth";
 const NOW_SEC  = Math.floor(Date.now() / 1000);
 
