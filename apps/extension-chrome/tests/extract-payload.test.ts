@@ -244,6 +244,148 @@ describe('extractPayload — failure modes', () => {
     }
   });
 
+  it('PFL-098: extracts the chipped recipient from a collapsed reply compose, ignoring the quoted blockquote', () => {
+    // Simulates Gmail reply DOM with the recipients row collapsed:
+    //   - NO role="listbox" / role="region" with aria-label="To"
+    //   - NO input[name="to"] (would only appear after user clicks To)
+    //   - One [email] chip in a bare header div
+    //   - A blockquote.gmail_quote inside the body containing the
+    //     prior message's From: chip — also [email]-attributed — which
+    //     MUST NOT be picked up as a recipient of the reply.
+    document.body.innerHTML = '';
+    const reply = document.createElement('div');
+    reply.setAttribute('role', 'dialog');
+    reply.setAttribute('aria-label', 'Reply');
+
+    const header = document.createElement('div');
+    header.className = 'iw';     // arbitrary; mirrors Gmail's collapsed-row class shape
+    const chip = document.createElement('span');
+    chip.setAttribute('email', 'mark@scotiabank.com');
+    chip.setAttribute('data-hovercard-id', 'mark@scotiabank.com');
+    chip.textContent = 'Mark';
+    header.appendChild(chip);
+    reply.appendChild(header);
+
+    const body = document.createElement('div');
+    body.setAttribute('role', 'textbox');
+    body.setAttribute('aria-label', 'Message Body');
+    body.setAttribute('contenteditable', 'true');
+    body.textContent = 'Thanks Mark, see attached.';
+
+    const quote = document.createElement('blockquote');
+    quote.className = 'gmail_quote';
+    const quotedFrom = document.createElement('span');
+    quotedFrom.setAttribute('email', 'sarah@acme-title.com');
+    quotedFrom.textContent = 'Sarah Chen';
+    quote.appendChild(quotedFrom);
+    body.appendChild(quote);
+    reply.appendChild(body);
+
+    document.body.appendChild(reply);
+
+    const result = extractPayload(reply, { now: fixedNow, generateNonce: fixedNonce });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // The chipped recipient is extracted.
+      expect(result.payload.to).toEqual(['mark@scotiabank.com']);
+      // The quoted From: chip is excluded — would otherwise pollute To.
+      expect(result.payload.to).not.toContain('sarah@acme-title.com');
+      expect(result.payload.body).toContain('Thanks Mark');
+    }
+  });
+
+  it('PFL-098: extracts a mailto-only recipient from reply compose (no [email] chips at all)', () => {
+    // Worst-case reply DOM: the recipient is rendered as plain
+    // <a href="mailto:..."> without any [email] / data-hovercard-id
+    // attributes. Strategy 4c should still find it.
+    document.body.innerHTML = '';
+    const reply = document.createElement('div');
+    reply.setAttribute('role', 'dialog');
+
+    const header = document.createElement('div');
+    const link = document.createElement('a');
+    link.setAttribute('href', 'mailto:mark@scotiabank.com');
+    link.textContent = 'mark@scotiabank.com';
+    header.appendChild(link);
+    reply.appendChild(header);
+
+    const body = document.createElement('div');
+    body.setAttribute('role', 'textbox');
+    body.setAttribute('aria-label', 'Message Body');
+    body.setAttribute('contenteditable', 'true');
+    body.textContent = 'Reply body.';
+    // Quoted block has its own mailto links — exclude these.
+    const quote = document.createElement('blockquote');
+    quote.className = 'gmail_quote';
+    const noisy = document.createElement('a');
+    noisy.setAttribute('href', 'mailto:sarah@acme-title.com');
+    noisy.textContent = 'sarah@acme-title.com';
+    quote.appendChild(noisy);
+    body.appendChild(quote);
+    reply.appendChild(body);
+
+    document.body.appendChild(reply);
+
+    const result = extractPayload(reply, { now: fixedNow, generateNonce: fixedNonce });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.to).toEqual(['mark@scotiabank.com']);
+      expect(result.payload.to).not.toContain('sarah@acme-title.com');
+    }
+  });
+
+  it('PFL-098: regression guard — fresh-compose Strategy 2 still wins when an input is present', () => {
+    // When the user EXPANDS the reply's To row (or in a fresh compose),
+    // an input[name="to"] is present alongside the chip. Strategy 2's
+    // input-anchored ancestor walk must keep working and Strategy 4
+    // must not run — otherwise we'd risk attributing chips from outside
+    // the field row.
+    document.body.innerHTML = '';
+    const reply = document.createElement('div');
+    reply.setAttribute('role', 'dialog');
+
+    // Per-field row holding both the chip and the editable input —
+    // matches the modern Gmail DOM the existing extractor docs.
+    const row = document.createElement('div');
+    row.className = 'agP aFw';
+    const chip = document.createElement('div');
+    chip.setAttribute('email', 'mark@scotiabank.com');
+    chip.setAttribute('role', 'option');
+    chip.textContent = 'Mark';
+    row.appendChild(chip);
+    const input = document.createElement('input');
+    input.setAttribute('name', 'to');
+    input.setAttribute('aria-label', 'To recipients');
+    row.appendChild(input);
+    reply.appendChild(row);
+
+    // Body editable + a quoted block whose [email] chip MUST NOT leak in.
+    const body = document.createElement('div');
+    body.setAttribute('role', 'textbox');
+    body.setAttribute('aria-label', 'Message Body');
+    body.setAttribute('contenteditable', 'true');
+    body.textContent = 'body';
+    const quote = document.createElement('blockquote');
+    quote.className = 'gmail_quote';
+    const noisy = document.createElement('span');
+    noisy.setAttribute('email', 'leak@example.com');
+    quote.appendChild(noisy);
+    body.appendChild(quote);
+    reply.appendChild(body);
+
+    document.body.appendChild(reply);
+
+    const result = extractPayload(reply, { now: fixedNow, generateNonce: fixedNonce });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.to).toEqual(['mark@scotiabank.com']);
+      expect(result.payload.to).not.toContain('leak@example.com');
+    }
+  });
+
   it('returns DOM_UNEXPECTED when neither subject nor body matches any selector', () => {
     document.body.innerHTML = '';
     const dialog = document.createElement('div');

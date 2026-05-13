@@ -194,19 +194,96 @@ function readChipAddresses(compose: Element, field: FieldName): string[] {
       if (chips.length > 0) return chips;
       ancestor = ancestor.parentElement;
     }
+  }
 
-    // Strategy 3 (last-ditch): no chips rendered yet (user is still
-    // typing). Split the underlying input value on commas/semicolons.
-    if ('value' in input) {
-      const raw = String((input as HTMLInputElement).value ?? '');
-      return raw
-        .split(/[,;]/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
-    }
+  // Strategy 3 (last-ditch): no chips rendered yet (user is still
+  // typing). Split the underlying input value on commas/semicolons.
+  // Only meaningful when an input exists AND has user-entered text.
+  if (input && 'value' in input) {
+    const raw = String((input as HTMLInputElement).value ?? '');
+    const split = raw
+      .split(/[,;]/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (split.length > 0) return split;
+  }
+
+  // Strategy 4 (PFL-098): reply-compose fallback for `to`.
+  //
+  // Gmail's reply compose collapses the recipients row when the To field
+  // isn't focused. Concretely:
+  //   - No `role="listbox"` / `role="region"` wraps the recipients
+  //     (Strategy 1 misses)
+  //   - No `input[name="to"]` / `input[aria-label^="To recipients"]`
+  //     exists until the user clicks to expand (Strategies 2 + 3 miss)
+  //   - The original recipient is still in the DOM, just rendered as a
+  //     bare chip OR as an `<a href="mailto:…">` inside a header div
+  //     with no field-specific aria semantics.
+  //
+  // Without a fallback the extractor returned EMPTY_TO for every reply,
+  // silently breaking the Sign-with-ProofLine flow.
+  //
+  // We scan the WHOLE compose for chips / mailto links, but exclude:
+  //   - the body editable (user-typed text — picking up addresses from
+  //     in-body @mentions or quoted-text-inside-body would be wrong)
+  //   - any <blockquote> (Gmail's `gmail_quote` block, which holds the
+  //     prior message including its From: chip with `[email]`)
+  //
+  // Only the `to` field gets this fallback. Reply doesn't render Cc/Bcc
+  // until the user expands them — once expanded those have proper
+  // inputs and Strategy 2 picks them up correctly. Fanning out to
+  // Cc/Bcc here would risk attributing To chips to Cc.
+  if (field === 'to') {
+    return readReplyFallbackForTo(compose);
   }
 
   return [];
+}
+
+function readReplyFallbackForTo(compose: Element): string[] {
+  // Build the exclusion set: body editable + every <blockquote>. The
+  // blockquote check handles both top-level quoted blocks and
+  // `body > blockquote.gmail_quote` (Gmail's normal placement).
+  const excluded: Element[] = [];
+  const body = querySelectorChain(compose, BODY_SELECTORS);
+  if (body) excluded.push(body);
+  for (const bq of Array.from(compose.querySelectorAll('blockquote'))) {
+    excluded.push(bq);
+  }
+  const isExcluded = (el: Element): boolean =>
+    excluded.some((ex) => ex === el || ex.contains(el));
+
+  const out: string[] = [];
+
+  // 4a: chips with [email] attribute (the canonical machine-readable
+  // form Gmail uses for first-class recipient chips).
+  for (const chip of Array.from(compose.querySelectorAll('[email]'))) {
+    if (isExcluded(chip)) continue;
+    const value = chipEmail(chip);
+    if (value && EMAIL_RE.test(value)) out.push(value);
+  }
+  if (out.length > 0) return Array.from(new Set(out));
+
+  // 4b: chips with only [data-hovercard-id] (no `email=`). Some reply
+  // chip renderers drop the email attribute but keep the hovercard.
+  for (const chip of Array.from(compose.querySelectorAll('[data-hovercard-id*="@"]'))) {
+    if (isExcluded(chip)) continue;
+    const value = (chip.getAttribute('data-hovercard-id') ?? '').trim();
+    if (value && EMAIL_RE.test(value)) out.push(value);
+  }
+  if (out.length > 0) return Array.from(new Set(out));
+
+  // 4c: <a href="mailto:..."> — recipient lines may render as plain
+  // anchor tags when no chip is materialized at all.
+  for (const a of Array.from(compose.querySelectorAll('a[href^="mailto:"]'))) {
+    if (isExcluded(a)) continue;
+    const href = a.getAttribute('href') ?? '';
+    const rawAddr = href.slice('mailto:'.length).split('?')[0] ?? '';
+    let addr = rawAddr.trim();
+    try { addr = decodeURIComponent(addr); } catch { /* keep raw */ }
+    if (addr && EMAIL_RE.test(addr)) out.push(addr);
+  }
+  return Array.from(new Set(out));
 }
 
 function readThreadId(compose: Element): string | undefined {
