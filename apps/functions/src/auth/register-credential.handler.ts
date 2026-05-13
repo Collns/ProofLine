@@ -208,15 +208,21 @@ export function makeRegisterCredentialHandler(
       }
     } else {
       // Edge case: user record removed between auth and register. Create
-      // a minimal record so /v1/sign* finds something — auth handler
-      // already established the demo defaults.
+      // a minimal record so /v1/sign* finds something. PFL-088: seed the
+      // same policy defaults extension-auth.handler.ts writes on first-
+      // auth so this re-created doc has matching wire/daily limits — the
+      // user would otherwise hit POLICY_AUTHORITY_EXCEEDED on any wire.
       await userRef.set(
         {
-          userId:    decoded.userId,
-          companyId: decoded.companyId,
-          devices:   [newDevice],
-          createdAt: now,
-          updatedAt: now,
+          userId:        decoded.userId,
+          companyId:     decoded.companyId,
+          role:          "owner",
+          status:        "active",
+          wireLimitUsd:  500_000,
+          dailyLimitUsd: 2_000_000,
+          devices:       [newDevice],
+          createdAt:     now,
+          updatedAt:     now,
         },
         { merge: false },
       );

@@ -288,6 +288,14 @@ describe("POST /v1/extension/register-credential", () => {
       companyId: "co-fresh",
     });
     expect(u["credentialId"]).toBeUndefined();
+    // PFL-088: the edge-case path that creates a brand-new user doc from
+    // register-credential must seed the same policy fields that
+    // extension-auth.handler.ts writes on first-auth — otherwise this
+    // user would hit POLICY_AUTHORITY_EXCEEDED on any wire instruction.
+    expect(u["role"]).toBe("owner");
+    expect(u["status"]).toBe("active");
+    expect(u["wireLimitUsd"]).toBe(500_000);
+    expect(u["dailyLimitUsd"]).toBe(2_000_000);
     const devices = u["devices"] as Array<Record<string, unknown>>;
     expect(devices).toHaveLength(1);
     expect(devices[0]).toMatchObject({

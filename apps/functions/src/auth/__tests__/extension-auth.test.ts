@@ -129,6 +129,13 @@ describe("POST /v1/extension/auth", () => {
     const userDoc = store["users"]!["user-abc"] as Record<string, unknown>;
     expect(userDoc["credentialId"]).toBeUndefined();
     expect(userDoc["devices"]).toEqual([]);
+    // PFL-088: fresh user docs persist policy fields so validatePolicy
+    // doesn't have to apply the firestore-policy-context.ts safety-net
+    // defaults — and so the wire path doesn't trip at $0.
+    expect(userDoc["role"]).toBe("owner");
+    expect(userDoc["status"]).toBe("active");
+    expect(userDoc["wireLimitUsd"]).toBe(500_000);
+    expect(userDoc["dailyLimitUsd"]).toBe(2_000_000);
     // Response still surfaces the placeholder so the popup knows it must
     // run a WebAuthn registration before signing.
     expect(res.body.credentialId).toBe("placeholder-credential-id");
@@ -213,5 +220,15 @@ describe("POST /v1/extension/auth", () => {
     expect(res.body.companyId).toBe("co-acme");
     expect(res.body.credentialId).toBe("cred-real-abc");
     expect(res.body.email).toBe("carol@acme.com");
+
+    // PFL-088 regression guard: the existing-user path must NEVER overwrite
+    // policy fields. The seeded fixture has no role/wireLimitUsd — the
+    // doc should still lack them after the auth refresh (would-be-clobber
+    // would surface as the defaults sneaking into a customized doc).
+    const userDoc = store["users"]!["user-existing"] as Record<string, unknown>;
+    expect(userDoc["role"]).toBeUndefined();
+    expect(userDoc["wireLimitUsd"]).toBeUndefined();
+    expect(userDoc["dailyLimitUsd"]).toBeUndefined();
+    expect(userDoc["status"]).toBeUndefined();
   });
 });
