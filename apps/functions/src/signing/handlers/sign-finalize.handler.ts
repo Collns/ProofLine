@@ -211,22 +211,31 @@ export function makeSignFinalizeHandler(ctx: PolicyContext) {
     const envelopeId = uuidv7();
     const now = ctx.now();
 
+    // PFL-094-followup: only attach sessionId when a real session backs this
+    // signature. The fresh path has no session at this point (one is created
+    // below), so the prior `sessionId: parsedSessionToken?.sessionId` wrote
+    // `undefined`, which Firestore's WriteBatch.set rejects with
+    // "Cannot use \"undefined\" as a Firestore value (found in field
+    // signatures.`0`.sessionId)". The correct on-disk representation is to
+    // omit the key entirely — sessionId is `?:` in EmailSignedEnvelope.
+    const signatureRecord: EmailSignedEnvelope["signatures"][number] = {
+      signerId:     userId,
+      credentialId: pendingChallenge.credentialId,
+      sig:          body.assertion.signature,
+      signedAt:     now,
+      path:         body.path,
+    };
+    if (parsedSessionToken?.sessionId) {
+      signatureRecord.sessionId = parsedSessionToken.sessionId;
+    }
+
     const envelope: EmailSignedEnvelope = {
       envelopeId,
-      payload: storedPayload,
+      payload:     storedPayload,
       payloadHash: body.payloadHash,
-      signatures: [
-        {
-          signerId: userId,
-          credentialId: pendingChallenge.credentialId,
-          sig: body.assertion.signature,
-          signedAt: now,
-          sessionId: parsedSessionToken?.sessionId,
-          path: body.path,
-        },
-      ],
-      status: "SIGNED",
-      createdAt: now,
+      signatures:  [signatureRecord],
+      status:      "SIGNED",
+      createdAt:   now,
     };
 
     await recordSignedEnvelope(envelope);
