@@ -446,6 +446,140 @@ describe('extractPayload — failure modes', () => {
     }
   });
 
+  it('PFL-098.2: Tier 3 — compose has NO ancestor [role="region"][data-compose-id]; chip is in a sibling-subtree region', () => {
+    // Production failure shape PFL-098.1 did NOT cover:
+    // `findInlineComposes` hands extractPayload a body+toolbar wrapper
+    // that is a SIBLING (not a descendant) of the
+    // [role="region"][data-compose-id] container holding the chip. Both
+    // sit under some unattributed shared ancestor. PFL-098.1's
+    // `.closest('[role="region"][data-compose-id]')` returns null → the
+    // ancestor-region tier is skipped → we return EMPTY_TO even though
+    // the chip is one ancestor-up + one subtree-over.
+    //
+    // Tier 3 walks up compose's parent chain and at each level scans
+    // for [role="region"][data-compose-id] descendants that are NOT
+    // ancestors of compose. First hit wins.
+    document.body.innerHTML = '';
+
+    // Shared ancestor — bare div, no compose-attribution semantics.
+    const outer = document.createElement('div');
+    outer.className = 'thread-container';
+
+    // ── Sibling A: the [role="region"][data-compose-id] holding the chip.
+    const region = document.createElement('div');
+    region.setAttribute('role', 'region');
+    region.setAttribute('data-compose-id', 'r99');
+    region.setAttribute('aria-label', 'Re:');
+    const chipCell = document.createElement('td');
+    chipCell.className = 'Iy';
+    const chip = document.createElement('span');
+    chip.setAttribute('email', 'danievwe@gmail.com');
+    chip.textContent = 'danievwe@gmail.com';
+    chipCell.appendChild(chip);
+    region.appendChild(chipCell);
+    outer.appendChild(region);
+
+    // ── Sibling B: the body+toolbar wrapper that findInlineComposes
+    // returns as `compose`. NOT a descendant of `region`.
+    const composeWrapper = document.createElement('div');
+    composeWrapper.className = 'composeWrap';
+    const subj = document.createElement('input');
+    subj.setAttribute('name', 'subjectbox');
+    subj.value = 'Re: hello';
+    composeWrapper.appendChild(subj);
+    const body = document.createElement('div');
+    body.setAttribute('role', 'textbox');
+    body.setAttribute('aria-label', 'Message Body');
+    body.setAttribute('contenteditable', 'true');
+    body.textContent = 'reply body';
+    composeWrapper.appendChild(body);
+    const toInput = document.createElement('input');
+    toInput.setAttribute('aria-label', 'To recipients');
+    toInput.setAttribute('role', 'combobox');
+    toInput.value = '';
+    composeWrapper.appendChild(toInput);
+    outer.appendChild(composeWrapper);
+
+    document.body.appendChild(outer);
+
+    // Sanity: compose has NO [role="region"][data-compose-id] ancestor.
+    expect(composeWrapper.closest('[role="region"][data-compose-id]')).toBeNull();
+    // …but the chip IS reachable from outer (one level above compose).
+    expect(outer.querySelectorAll('[email]')).toHaveLength(1);
+    expect(composeWrapper.querySelectorAll('[email]')).toHaveLength(0);
+
+    const result = extractPayload(composeWrapper, { now: fixedNow, generateNonce: fixedNonce });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.to).toEqual(['danievwe@gmail.com']);
+    }
+  });
+
+  it('PFL-098.2: Tier 3 does NOT pick up chips from another open compose region nearby', () => {
+    // Guard against the obvious failure mode of Tier 3: if a user has
+    // two reply composes open in the same thread, the sibling-region
+    // walk could match the wrong region. Tier 3 stops at the first
+    // ancestor level that exposes candidate regions — so chips from a
+    // region two levels up (under a different shared ancestor) are NOT
+    // confused with the active compose's chips.
+    //
+    // Layout:
+    //   <document.body>
+    //     <div.thread>
+    //       <div.thread-pane-other>
+    //         <div role="region" data-compose-id="other">
+    //           <span email="wrong@example.com">  ← MUST NOT be picked up
+    //     <div.active-thread>
+    //       <div role="region" data-compose-id="active">
+    //         <span email="right@example.com">
+    //       <div.composeWrap>  ← passed to extractPayload
+    document.body.innerHTML = '';
+    const otherPane = document.createElement('div');
+    otherPane.className = 'thread-pane-other';
+    const otherRegion = document.createElement('div');
+    otherRegion.setAttribute('role', 'region');
+    otherRegion.setAttribute('data-compose-id', 'other');
+    const otherChip = document.createElement('span');
+    otherChip.setAttribute('email', 'wrong@example.com');
+    otherChip.textContent = 'wrong';
+    otherRegion.appendChild(otherChip);
+    otherPane.appendChild(otherRegion);
+    document.body.appendChild(otherPane);
+
+    const active = document.createElement('div');
+    active.className = 'active-thread';
+    const region = document.createElement('div');
+    region.setAttribute('role', 'region');
+    region.setAttribute('data-compose-id', 'active');
+    const chip = document.createElement('span');
+    chip.setAttribute('email', 'right@example.com');
+    chip.textContent = 'right';
+    region.appendChild(chip);
+    active.appendChild(region);
+
+    const composeWrapper = document.createElement('div');
+    composeWrapper.className = 'composeWrap';
+    const subj = document.createElement('input');
+    subj.setAttribute('name', 'subjectbox');
+    subj.value = 'Re: hello';
+    composeWrapper.appendChild(subj);
+    const body = document.createElement('div');
+    body.setAttribute('role', 'textbox');
+    body.setAttribute('aria-label', 'Message Body');
+    body.setAttribute('contenteditable', 'true');
+    body.textContent = 'reply body';
+    composeWrapper.appendChild(body);
+    active.appendChild(composeWrapper);
+    document.body.appendChild(active);
+
+    const result = extractPayload(composeWrapper, { now: fixedNow, generateNonce: fixedNonce });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.to).toEqual(['right@example.com']);
+      expect(result.payload.to).not.toContain('wrong@example.com');
+    }
+  });
+
   it('PFL-098: extracts the chipped recipient from a collapsed reply compose, ignoring the quoted blockquote', () => {
     // Simulates Gmail reply DOM with the recipients row collapsed:
     //   - NO role="listbox" / role="region" with aria-label="To"
