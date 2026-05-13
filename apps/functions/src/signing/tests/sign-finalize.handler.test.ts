@@ -40,6 +40,29 @@ function ensureCol(col: string): Record<string, unknown> {
   return store[col];
 }
 
+// PFL-094-followup: real Firestore (validateUserInput) refuses any
+// `undefined` value at any depth on WriteBatch.set / Transaction.set —
+// the prior stub silently accepted them, masking the bug that took down
+// the live demo. Mirror the real strictness here so a future regression
+// of the same shape fails CI instead of prod.
+function assertNoUndefined(value: unknown, path: string): void {
+  if (value === undefined) {
+    throw new Error(
+      `Cannot use "undefined" as a Firestore value (found in field "${path}").`,
+    );
+  }
+  if (value === null) return;
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => assertNoUndefined(v, `${path}.\`${i}\``));
+    return;
+  }
+  if (typeof value === "object") {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      assertNoUndefined(v, path ? `${path}.${k}` : k);
+    }
+  }
+}
+
 function makeFirestoreMock() {
   const db = {
     collection(col: string) {
@@ -57,6 +80,7 @@ function makeFirestoreMock() {
               };
             },
             async set(data: Record<string, unknown>, opts?: { merge?: boolean }) {
+              assertNoUndefined(data, `${col}/${id}`);
               const c = ensureCol(col);
               if (opts?.merge) {
                 c[id] = { ...(c[id] as object ?? {}), ...data };
@@ -89,9 +113,11 @@ function makeFirestoreMock() {
           return { exists: Boolean(data), data: () => data ?? null };
         },
         set(ref: { __col: string; __id: string }, data: Record<string, unknown>) {
+          assertNoUndefined(data, `${ref.__col}/${ref.__id}`);
           ensureCol(ref.__col)[ref.__id] = data;
         },
         update(ref: { __col: string; __id: string }, patch: Record<string, unknown>) {
+          assertNoUndefined(patch, `${ref.__col}/${ref.__id}`);
           const current = (store[ref.__col]?.[ref.__id] as Record<string, unknown>) ?? {};
           ensureCol(ref.__col)[ref.__id] = { ...current, ...patch };
         },
@@ -383,5 +409,169 @@ describe("POST /v1/sign → /v1/sign/finalize", () => {
     expect(finishArg.expectedRPID).toBe("proofline-sign.web.app");
     expect(finishArg.expectedOrigin).toBe("https://proofline-sign.web.app");
     expect(typeof finishArg.storedPublicKey).toBe("string");
+  });
+
+  // PFL-094-followup regression guards. Prior to the fix, the fresh path
+  // wrote `sessionId: parsedSessionToken?.sessionId` — i.e. literal
+  // `undefined` — into the persisted envelope, which real Firestore
+  // rejects in WriteBatch.set with `validateUserInput`. The in-memory
+  // Firestore stub above now mirrors that strictness via
+  // `assertNoUndefined`, so the bug shape will fail CI in future too.
+
+  it("PFL-094-followup: fresh sign omits sessionId from the persisted signature (no undefined into Firestore)", async () => {
+    const app = buildApp();
+    const payload = makePayload();
+
+    const signRes = await request(app).post("/v1/sign").send({
+      payload,
+      recipientSetHash: RECIPIENT_SET_HASH,
+      credentialId:     CREDENTIAL_ID,
+      freshBiometric:   true,
+    });
+    expect(signRes.status).toBe(200);
+
+    const { canonicalize } = await import("@proofline/canonical");
+    const nodeCrypto = await import("node:crypto");
+    const payloadHash = nodeCrypto.createHash("sha256")
+      .update(canonicalize(payload))
+      .digest("hex");
+
+    const finalizeRes = await request(app)
+      .post("/v1/sign/finalize")
+      .set("x-proofline-challenge-id", signRes.body.challengeId)
+      .send({
+        assertion: {
+          credentialId:      CREDENTIAL_ID,
+          clientDataJSON:    "stub-client-data",
+          authenticatorData: "stub-auth-data",
+          signature:         "stub-signature",
+        },
+        payloadHash,
+        recipientSetHash: RECIPIENT_SET_HASH,
+        path:             "fresh",
+      });
+
+    // No 500 — the prior bug surfaced exactly here.
+    expect(finalizeRes.status).toBe(200);
+
+    // Find the persisted envelope (the handler picks a uuidv7 ID so we
+    // scan the collection instead of guessing). Exactly one expected.
+    const envelopes = Object.values(store["signed_messages"] ?? {}) as Array<{
+      signatures: Array<Record<string, unknown>>;
+    }>;
+    expect(envelopes).toHaveLength(1);
+    const sig = envelopes[0]!.signatures[0]!;
+
+    // The key must be ABSENT (not `null`, not `undefined`-as-property).
+    expect(Object.prototype.hasOwnProperty.call(sig, "sessionId")).toBe(false);
+    // Sanity: the other signature fields are present.
+    expect(sig).toMatchObject({
+      signerId:     "dev-user",
+      credentialId: CREDENTIAL_ID,
+      signedAt:     expect.any(Number),
+      path:         "fresh",
+    });
+    expect(typeof sig["sig"]).toBe("string");
+
+    // The response envelope mirrors the persisted shape — no sessionId key.
+    const responseSig = finalizeRes.body.envelope.signatures[0];
+    expect(Object.prototype.hasOwnProperty.call(responseSig, "sessionId")).toBe(false);
+  });
+
+  it("PFL-094-followup: silent sign attaches sessionId from the verified token", async () => {
+    const payload = makePayload();
+
+    // ── Step 1 — issue the challenge via /v1/sign on the standard buildApp ──
+    const signApp = buildApp();
+    const signRes = await request(signApp).post("/v1/sign").send({
+      payload,
+      recipientSetHash: RECIPIENT_SET_HASH,
+      credentialId:     CREDENTIAL_ID,
+      freshBiometric:   true,
+    });
+    expect(signRes.status).toBe(200);
+    const challengeId: string = signRes.body.challengeId;
+
+    // Flip the persisted pending challenge from "fresh" to "silent" so
+    // the finalize handler takes the session-token branch. Easier than
+    // wiring sign-silent end-to-end just for this assertion.
+    const pending = store["pending_challenges"]![challengeId] as Record<string, unknown>;
+    pending["path"] = "silent";
+
+    // ── Step 2 — build a finalize-only app whose PolicyContext returns ──
+    // a real session for "stub-session-id" (the value the jose-verifier
+    // mock yields). makeStubPolicyContext otherwise returns null from
+    // getSession, which validatePolicy treats as SESSION_INVALID → 401.
+    const finalizeApp = express();
+    finalizeApp.use(express.json());
+    finalizeApp.use(attachUser);
+    finalizeApp.post("/v1/sign/finalize", async (req, res, next) => {
+      const baseCtx = makeStubPolicyContext({
+        credentialId: CREDENTIAL_ID,
+        userId:       "dev-user",
+        companyId:    "dev-company",
+      });
+      const ctx = {
+        ...baseCtx,
+        async getSession(_sessionId: string) {
+          const now = baseCtx.now();
+          return {
+            sessionId:           "stub-session-id",
+            userId:              "dev-user",
+            companyId:           "dev-company",
+            recipientSetHash:    RECIPIENT_SET_HASH,
+            recipientAddresses:  payload.to,
+            authorizedAt:        now - 60_000,
+            expiresAt:           now + 10 * 60 * 1000,
+            hardCapAt:           now + 60 * 60 * 1000,
+            deviceCredentialId:  CREDENTIAL_ID,
+            status:              "active" as const,
+            lastUsedAt:          now - 30_000,
+            signCount:           1,
+          };
+        },
+      };
+      try { await makeSignFinalizeHandler(ctx)(req, res); } catch (e) { next(e); }
+    });
+    finalizeApp.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      // eslint-disable-next-line no-console
+      console.error("[test] handler error:", err);
+      res.status(500).json({ error: err.message, stack: err.stack });
+    });
+
+    const { canonicalize } = await import("@proofline/canonical");
+    const nodeCrypto = await import("node:crypto");
+    const payloadHash = nodeCrypto.createHash("sha256")
+      .update(canonicalize(payload))
+      .digest("hex");
+
+    const finalizeRes = await request(finalizeApp)
+      .post("/v1/sign/finalize")
+      .set("x-proofline-challenge-id", challengeId)
+      .send({
+        assertion: {
+          credentialId:      CREDENTIAL_ID,
+          clientDataJSON:    "stub-client-data",
+          authenticatorData: "stub-auth-data",
+          signature:         "stub-signature",
+        },
+        // The jose-verifier mock at the top of this file resolves to a
+        // payload whose sessionId is "stub-session-id" — that's the value
+        // we expect to see attached to the signature record.
+        sessionToken:     "stub-jws.payload.sig",
+        payloadHash,
+        recipientSetHash: RECIPIENT_SET_HASH,
+        path:             "silent",
+      });
+
+    expect(finalizeRes.status).toBe(200);
+
+    const envelopes = Object.values(store["signed_messages"] ?? {}) as Array<{
+      signatures: Array<Record<string, unknown>>;
+    }>;
+    expect(envelopes).toHaveLength(1);
+    const sig = envelopes[0]!.signatures[0]!;
+    expect(sig["sessionId"]).toBe("stub-session-id");
+    expect(sig["path"]).toBe("silent");
   });
 });
