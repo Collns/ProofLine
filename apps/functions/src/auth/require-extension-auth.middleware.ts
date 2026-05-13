@@ -35,7 +35,7 @@ import { makeRFC7807Error } from "../api/onboarding/http.helpers.js";
 const EXPECTED_ISSUER = "proofline-extension-auth";
 
 function getSecret(): string {
-  return process.env["EXT_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod";
+  return (process.env["EXT_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod").trim();
 }
 
 // ─── Result type ─────────────────────────────────────────────────────────────
