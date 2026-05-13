@@ -71,7 +71,14 @@ interface UserDoc {
   userId:    string;
   email:     string;
   companyId: string;
-  role?:     string;
+  // PFL-088: policy-relevant fields persisted at first-auth so
+  // validatePolicy doesn't have to fall back to permissive defaults.
+  // Loose string/number types here on purpose — the read path
+  // (firestore-policy-context.ts) narrows to UserRecord's literal unions.
+  role?:          string;
+  status?:        string;
+  wireLimitUsd?:  number;
+  dailyLimitUsd?: number;
   // Canonical schema (packages/types: User.devices: DeviceRecord[]). The
   // signing read-path (validatePolicy, sign-finalize) calls
   // `user.devices.find(...)` so the field MUST be an array, never a flat
@@ -80,6 +87,16 @@ interface UserDoc {
   createdAt: number;
   updatedAt: number;
 }
+
+// PFL-088: hackathon-grade defaults applied at the first /v1/extension/auth
+// call for each Firebase UID. Owners can later customize per user via an
+// onboarding wizard; until then these numbers are generous enough to demo
+// the $400k wire path without tripping POLICY_AUTHORITY_EXCEEDED while
+// staying within plausible owner-level authority.
+const DEFAULT_ROLE            = "owner";
+const DEFAULT_STATUS          = "active";
+const DEFAULT_WIRE_LIMIT_USD  = 500_000;
+const DEFAULT_DAILY_LIMIT_USD = 2_000_000;
 
 // Placeholder credentialId returned in the auth response when the user
 // hasn't enrolled a WebAuthn credential yet — the extension popup uses
@@ -179,16 +196,24 @@ export function makeExtensionAuthHandler(deps: ExtensionAuthHandlerDeps = {}) {
 
     let user: UserDoc;
     if (userSnap.exists) {
+      // PFL-088: never overwrite policy fields on the existing-user path.
+      // An owner may have already customized wireLimitUsd / role for this
+      // user; subsequent /v1/extension/auth calls are auth refreshes, not
+      // re-onboarding.
       user = userSnap.data() as UserDoc;
     } else {
       const now = Date.now();
       user = {
-        userId:    decoded.uid,
-        email:     decoded.email ?? "",
-        companyId: DEMO_COMPANY_ID,
-        devices:   [],
-        createdAt: now,
-        updatedAt: now,
+        userId:        decoded.uid,
+        email:         decoded.email ?? "",
+        companyId:     DEMO_COMPANY_ID,
+        role:          DEFAULT_ROLE,
+        status:        DEFAULT_STATUS,
+        wireLimitUsd:  DEFAULT_WIRE_LIMIT_USD,
+        dailyLimitUsd: DEFAULT_DAILY_LIMIT_USD,
+        devices:       [],
+        createdAt:     now,
+        updatedAt:     now,
       };
       await userRef.set(user, { merge: false });
     }
