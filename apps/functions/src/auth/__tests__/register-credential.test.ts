@@ -58,9 +58,27 @@ vi.mock("firebase-admin/auth", () => ({
   }),
 }));
 
-import { makeRegisterCredentialHandler } from "../register-credential.handler.js";
+import {
+  makeRegisterCredentialHandler,
+  type CoseExtractInput,
+  type CoseExtractResult,
+} from "../register-credential.handler.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// PFL-094: a fake COSE buffer the stub extractor returns. Starts with the
+// CBOR map-of-5 prefix (0xa5) — the same shape SimpleWebAuthn produces
+// for an EC P-256 key, so any "is this really COSE?" sanity check on the
+// stored bytes passes.
+const FAKE_COSE_BYTES = Buffer.concat([
+  Buffer.from([0xa5]),
+  Buffer.from(new Uint8Array(76).fill(9)),
+]);
+const FAKE_COSE_B64 = FAKE_COSE_BYTES.toString("base64");
+
+function stubCoseExtractor(): (input: CoseExtractInput) => Promise<CoseExtractResult> {
+  return async () => ({ ok: true, coseB64: FAKE_COSE_B64 });
+}
 
 function buildApp(opts: {
   verifyAuthBearer?: Parameters<typeof makeRegisterCredentialHandler>[0] extends infer T
@@ -68,10 +86,17 @@ function buildApp(opts: {
       ? F
       : never
     : never;
+  extractCose?: (input: CoseExtractInput) => Promise<CoseExtractResult>;
 } = {}) {
   const app = express();
   app.use(express.json());
-  const handler = makeRegisterCredentialHandler(opts);
+  const handler = makeRegisterCredentialHandler({
+    ...opts,
+    // Default to a passing stub so tests can focus on the handler's
+    // business logic without crafting real attestation bytes. Tests that
+    // explicitly want to exercise rejection inject their own.
+    extractCose: opts.extractCose ?? stubCoseExtractor(),
+  });
   app.post("/v1/extension/register-credential", (req, res, next) => {
     handler(req, res).catch(next);
   });
@@ -143,7 +168,9 @@ describe("POST /v1/extension/register-credential", () => {
       credentialId: validBody.credentialId,
       userId:       "user-abc",
       companyId:    "dev-company",
-      publicKey:    validBody.publicKey,
+      // PFL-094: stored publicKey is COSE bytes extracted from
+      // attestationObject (NOT the client-supplied SPKI in validBody.publicKey).
+      publicKey:    FAKE_COSE_B64,
       deviceName:   "Mac",
     });
     expect(typeof cred["createdAt"]).toBe("number");
@@ -157,7 +184,9 @@ describe("POST /v1/extension/register-credential", () => {
     expect(devices).toHaveLength(1);
     expect(devices[0]).toMatchObject({
       credentialId: validBody.credentialId,
-      publicKey:    validBody.publicKey,
+      // PFL-094: device publicKey is the SAME COSE bytes written to the
+      // webauthn_credentials doc — never the client's SPKI value.
+      publicKey:    FAKE_COSE_B64,
     });
     expect(typeof devices[0]?.["enrolledAt"]).toBe("number");
   });
@@ -300,7 +329,9 @@ describe("POST /v1/extension/register-credential", () => {
     expect(devices).toHaveLength(1);
     expect(devices[0]).toMatchObject({
       credentialId: validBody.credentialId,
-      publicKey:    validBody.publicKey,
+      // PFL-094: persisted publicKey is COSE bytes from the attestation,
+      // not the client-supplied SPKI in validBody.publicKey.
+      publicKey:    FAKE_COSE_B64,
     });
   });
 
@@ -370,7 +401,98 @@ describe("POST /v1/extension/register-credential", () => {
     };
     const device = userDoc.devices?.find((d) => d.credentialId === validBody.credentialId);
     expect(device).toBeDefined();
-    expect(device?.publicKey).toBe(validBody.publicKey);
+    // PFL-094: this is COSE bytes from the (stubbed) attestation, not
+    // the SPKI string in validBody.publicKey.
+    expect(device?.publicKey).toBe(FAKE_COSE_B64);
     expect(typeof device?.enrolledAt).toBe("number");
+  });
+
+  // ── PFL-094: COSE-from-attestation extraction ─────────────────────────────
+
+  it("PFL-094: stores COSE bytes (extracted from attestation), not the client-supplied SPKI", async () => {
+    store["users"] = {
+      "user-cose": {
+        userId:    "user-cose",
+        companyId: "dev-company",
+        devices:   [],
+      },
+    };
+
+    const app = buildApp({
+      verifyAuthBearer: () => ({
+        userId:       "user-cose",
+        companyId:    "dev-company",
+        extInstallId: "ext-cose",
+        iat:          NOW_SEC,
+        exp:          NOW_SEC + 3600,
+      }),
+      // Stub returns a buffer whose first byte is 0xa5 — CBOR map-of-5,
+      // the canonical prefix of a COSE-encoded EC P-256 key. We assert
+      // BOTH storage sites round-trip exactly those bytes (no double-
+      // encoding, no SPKI bleed-through).
+    });
+
+    await request(app)
+      .post("/v1/extension/register-credential")
+      .set("Authorization", "Bearer x")
+      .send(validBody)
+      .expect(200);
+
+    // Decode the stored value and confirm the COSE prefix.
+    const cred = store["webauthn_credentials"]?.[validBody.credentialId] as Record<string, unknown>;
+    const storedB64 = cred["publicKey"] as string;
+    expect(storedB64).toBe(FAKE_COSE_B64);
+    const storedBytes = Buffer.from(storedB64, "base64");
+    expect(storedBytes[0]).toBe(0xa5);
+
+    // Crucial: the SPKI value the client sent must NOT be stored anywhere
+    // as the canonical publicKey. (The raw attestationObject + clientDataJSON
+    // are still archived under their own field names; that's fine.)
+    expect(storedB64).not.toBe(validBody.publicKey);
+
+    // The device entry on the user doc carries the same COSE bytes.
+    const userDoc = store["users"]?.["user-cose"] as Record<string, unknown>;
+    const devices = userDoc["devices"] as Array<Record<string, unknown>>;
+    expect(devices[0]?.["publicKey"]).toBe(FAKE_COSE_B64);
+  });
+
+  it("PFL-094: returns 400 ATTESTATION_INVALID when the attestation cannot be parsed", async () => {
+    store["users"] = {
+      "user-bad-attest": {
+        userId:    "user-bad-attest",
+        companyId: "dev-company",
+        devices:   [],
+      },
+    };
+
+    const app = buildApp({
+      verifyAuthBearer: () => ({
+        userId:       "user-bad-attest",
+        companyId:    "dev-company",
+        extInstallId: "ext-x",
+        iat:          NOW_SEC,
+        exp:          NOW_SEC + 3600,
+      }),
+      // Inject an extractor that always rejects — mirrors what the real
+      // verifyRegistrationResponse does on `attestationObject: "AAAA"`
+      // (invalid CBOR). Goal: prove the handler returns 400 rather than
+      // 500-ing on garbage input.
+      extractCose: async () => ({ ok: false, reason: "Invalid CBOR in attestationObject" }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/register-credential")
+      .set("Authorization", "Bearer x")
+      .send({ ...validBody, attestationObject: "AAAA" })
+      .expect(400);
+
+    expect(res.body.title).toBe("ATTESTATION_INVALID");
+    expect(res.body.status).toBe(400);
+    expect(res.body.detail).toMatch(/CBOR|Invalid|attestation/i);
+
+    // Nothing should have been persisted on the failure path.
+    expect(store["webauthn_credentials"]?.[validBody.credentialId]).toBeUndefined();
+    const userDoc = store["users"]?.["user-bad-attest"] as Record<string, unknown>;
+    expect((userDoc["devices"] as unknown[])).toHaveLength(0);
   });
 });

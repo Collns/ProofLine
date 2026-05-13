@@ -215,7 +215,16 @@ export async function finishAssertion(
 
   const authenticator: AuthenticatorDevice = {
     credentialID: input.response.id,
-    credentialPublicKey: Buffer.from(input.storedPublicKey, 'base64'),
+    // Defensive (PFL-094): accept both base64 and base64url. PFL-094 wrote
+    // these bytes via `Buffer.from(cose).toString('base64')`, so this path
+    // will always see classic base64 today. The replace() handles any
+    // other caller that encoded the stored COSE key URL-safe — Node's
+    // 'base64' mode tolerates `-`/`_` since Node 16, but be explicit so a
+    // future strict environment doesn't silently break assertion verify.
+    credentialPublicKey: Buffer.from(
+      input.storedPublicKey.replace(/-/g, '+').replace(/_/g, '/'),
+      'base64',
+    ),
     counter: input.storedSignCount,
   };
 
