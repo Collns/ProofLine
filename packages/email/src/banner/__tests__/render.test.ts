@@ -7,7 +7,7 @@ const baseInput: Omit<BannerInput, 'state'> = {
   companyName: 'Acme Title',
   companyDomain: 'acme-title.com',
   envelopeId: 'env_abc123',
-  verifyBaseUrl: 'https://verify.proofline.web.app',
+  verifyBaseUrl: 'https://proofline-verify.web.app',
 };
 
 describe('renderEnvelopeBanner — verified state', () => {
@@ -62,20 +62,20 @@ describe('renderEnvelopeBanner — escaping & URL building', () => {
     const withoutSlash = renderEnvelopeBanner({
       ...baseInput,
       state: 'verified',
-      verifyBaseUrl: 'https://verify.proofline.web.app',
+      verifyBaseUrl: 'https://proofline-verify.web.app',
       envelopeId: 'env_abc123',
     });
     const withSlash = renderEnvelopeBanner({
       ...baseInput,
       state: 'verified',
-      verifyBaseUrl: 'https://verify.proofline.web.app/',
+      verifyBaseUrl: 'https://proofline-verify.web.app/',
       envelopeId: 'env_abc123',
     });
     expect(withoutSlash).toContain(
-      'href="https://verify.proofline.web.app/env_abc123"',
+      'href="https://proofline-verify.web.app/env_abc123"',
     );
     expect(withSlash).toContain(
-      'href="https://verify.proofline.web.app/env_abc123"',
+      'href="https://proofline-verify.web.app/env_abc123"',
     );
     expect(withoutSlash).not.toContain('//env_abc123');
     expect(withSlash).not.toContain('//env_abc123');

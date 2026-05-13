@@ -54,7 +54,12 @@ const COLORS = {
   white: "#FFFFFF",
 } as const;
 
-const VERIFY_BASE_URL = "https://verify.proofline.web.app";
+// Firebase Hosting site IDs are FULL subdomains (no nesting under a parent).
+// The deployed verify subapp has site ID `proofline-verify`, which resolves
+// to the URL below. PFL-097 fixed a prior value that used a non-existent
+// nested-style hostname and returned NET::ERR_CERT_COMMON_NAME_INVALID at
+// click time. Confirmed via `firebase hosting:sites:list --project proofline-cdabb`.
+const VERIFY_BASE_URL = "https://proofline-verify.web.app";
 
 // ─── Internal types ───────────────────────────────────────────────────────────
 
