@@ -65,6 +65,9 @@ import { makeExtensionAuthHandler } from "./auth/extension-auth.handler.js";
 // --- PFL-069: WebAuthn credential registration
 import { makeRegisterCredentialHandler } from "./auth/register-credential.handler.js";
 
+// --- PFL-087: real Bearer auth for signing routes
+import { requireExtensionAuth } from "./auth/require-extension-auth.middleware.js";
+
 // --- PFL-062: cosign HTTP wiring
 import { makeCosignRouter } from "./cosign/router.js";
 
@@ -183,7 +186,17 @@ publicApp.get("/healthz", (_req, res) => {
   res.status(200).json({ ok: true, service: "proofline-api" });
 });
 
-// ─── Auth stub ────────────────────────────────────────────────────────────────
+// ─── Auth ────────────────────────────────────────────────────────────────────
+//
+// `requireExtensionAuth` (PFL-087) decodes the JWS Bearer issued by
+// /v1/extension/auth and sets req.user from the real Firebase UID. It's
+// mounted on the signing routes below — which is the chain that feeds
+// PolicyContext.getUser(userId) → users/{realUID} → devices[].
+//
+// `stubAuthMiddleware` is intentionally kept for /v1/onboard and
+// /v1/bilateral: bilateral does its own auth via X-ProofLine-Bilateral-
+// Token (the stub is a pass-through provider of req.user); onboarding
+// will get real auth in a separate ticket.
 
 function stubAuthMiddleware(
   req: express.Request,
@@ -232,8 +245,8 @@ const signRouter = express.Router();
 signRouter.post("/",         withPerRequestPolicyCtx(makeSignHandler));
 signRouter.post("/finalize", withPerRequestPolicyCtx(makeSignFinalizeHandler));
 
-publicApp.use("/v1/sign",        corsMiddleware, stubAuthMiddleware, signRouter);
-publicApp.use("/v1/sign-silent", corsMiddleware, stubAuthMiddleware,
+publicApp.use("/v1/sign",        corsMiddleware, requireExtensionAuth, signRouter);
+publicApp.use("/v1/sign-silent", corsMiddleware, requireExtensionAuth,
   withPerRequestPolicyCtx(makeSignSilentHandler));
 
 // ─── Onboarding routes (/v1/onboard/*) ───────────────────────────────────────
