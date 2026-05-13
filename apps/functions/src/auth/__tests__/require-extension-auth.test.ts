@@ -122,11 +122,20 @@ describe("requireExtensionAuth — failure modes", () => {
 
   it("returns 401 INVALID_TOKEN when the signature does not match", async () => {
     const valid = mintToken({});
-    // Flip the last char of the signature segment — keep length stable so
-    // the timing-safe compare still runs.
-    const parts = valid.split(".") as [string, string, string];
-    const sig   = parts[2];
-    const tampered = `${parts[0]}.${parts[1]}.${sig.slice(0, -1)}${sig.slice(-1) === "A" ? "B" : "A"}`;
+    // Flip a char in the MIDDLE of the signature, not the last char.
+    // base64url packs only 4 meaningful bits into the final char of a
+    // 32-byte HMAC; the other 2 bits are zero-padding that Node's tolerant
+    // decoder silently truncates. So swapping the last char between two
+    // values in the same top-4-bit family (e.g. "A" ↔ "B", both in the
+    // 0b0000xx family) decodes to identical bytes — HMAC compare passes
+    // and the test flakes ~6% of runs. Middle chars encode 6 full bits
+    // with no padding, so any flip changes the decoded bytes.
+    const parts  = valid.split(".") as [string, string, string];
+    const sig    = parts[2];
+    const midIdx = Math.floor(sig.length / 2);
+    const midChar = sig[midIdx];
+    const flipped = midChar === "A" ? "B" : "A";
+    const tampered = `${parts[0]}.${parts[1]}.${sig.slice(0, midIdx)}${flipped}${sig.slice(midIdx + 1)}`;
 
     const res = await request(buildApp())
       .get("/protected")
