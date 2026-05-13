@@ -241,13 +241,42 @@ function readChipAddresses(compose: Element, field: FieldName): string[] {
 }
 
 function readReplyFallbackForTo(compose: Element): string[] {
+  // Try the compose element we were handed first.
+  const inNarrow = scanForToChipsExcludingBodyAndQuote(compose);
+  if (inNarrow.length > 0) return inNarrow;
+
+  // PFL-098.1: the `compose` the content script hands us is the smallest
+  // ancestor of `tr.btC` (the toolbar) that ALSO contains the body
+  // editable — see `findInlineComposes` in `gmail-detector.ts`. In Gmail
+  // inline reply, that "smallest body+toolbar wrapper" is a SIBLING of
+  // the recipients-chip subtree, both nested under a wider
+  // `[role="region"][data-compose-id]` container. The chip is therefore
+  // NOT a descendant of `compose` — Strategy 4a/4b/4c on the narrow
+  // compose all see zero candidates and we return EMPTY_TO even though
+  // the chip is one ancestor away.
+  //
+  // The cheapest robust fix: walk up to the wider compose-region
+  // ancestor and re-scan with the same body+blockquote exclusion. The
+  // exclusion is what keeps in-body @mentions / quoted-thread chips
+  // from leaking in. If no `[role="region"][data-compose-id]` ancestor
+  // exists (e.g. floating compose dialog where `compose` already IS the
+  // top-level container), `.closest()` returns the narrow compose itself
+  // and we skip — no harm done.
+  const wider = compose.closest('[role="region"][data-compose-id]');
+  if (wider && wider !== compose) {
+    return scanForToChipsExcludingBodyAndQuote(wider);
+  }
+  return [];
+}
+
+function scanForToChipsExcludingBodyAndQuote(root: Element): string[] {
   // Build the exclusion set: body editable + every <blockquote>. The
   // blockquote check handles both top-level quoted blocks and
   // `body > blockquote.gmail_quote` (Gmail's normal placement).
   const excluded: Element[] = [];
-  const body = querySelectorChain(compose, BODY_SELECTORS);
+  const body = querySelectorChain(root, BODY_SELECTORS);
   if (body) excluded.push(body);
-  for (const bq of Array.from(compose.querySelectorAll('blockquote'))) {
+  for (const bq of Array.from(root.querySelectorAll('blockquote'))) {
     excluded.push(bq);
   }
   const isExcluded = (el: Element): boolean =>
@@ -257,7 +286,7 @@ function readReplyFallbackForTo(compose: Element): string[] {
 
   // 4a: chips with [email] attribute (the canonical machine-readable
   // form Gmail uses for first-class recipient chips).
-  for (const chip of Array.from(compose.querySelectorAll('[email]'))) {
+  for (const chip of Array.from(root.querySelectorAll('[email]'))) {
     if (isExcluded(chip)) continue;
     const value = chipEmail(chip);
     if (value && EMAIL_RE.test(value)) out.push(value);
@@ -266,7 +295,7 @@ function readReplyFallbackForTo(compose: Element): string[] {
 
   // 4b: chips with only [data-hovercard-id] (no `email=`). Some reply
   // chip renderers drop the email attribute but keep the hovercard.
-  for (const chip of Array.from(compose.querySelectorAll('[data-hovercard-id*="@"]'))) {
+  for (const chip of Array.from(root.querySelectorAll('[data-hovercard-id*="@"]'))) {
     if (isExcluded(chip)) continue;
     const value = (chip.getAttribute('data-hovercard-id') ?? '').trim();
     if (value && EMAIL_RE.test(value)) out.push(value);
@@ -275,7 +304,7 @@ function readReplyFallbackForTo(compose: Element): string[] {
 
   // 4c: <a href="mailto:..."> — recipient lines may render as plain
   // anchor tags when no chip is materialized at all.
-  for (const a of Array.from(compose.querySelectorAll('a[href^="mailto:"]'))) {
+  for (const a of Array.from(root.querySelectorAll('a[href^="mailto:"]'))) {
     if (isExcluded(a)) continue;
     const href = a.getAttribute('href') ?? '';
     const rawAddr = href.slice('mailto:'.length).split('?')[0] ?? '';

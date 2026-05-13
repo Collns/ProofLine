@@ -244,6 +244,208 @@ describe('extractPayload — failure modes', () => {
     }
   });
 
+  it('PFL-098.1: real bug — `compose` passed to extractPayload is a NARROW subtree that excludes the chip (chip is in a sibling subtree under role="region"[data-compose-id])', () => {
+    // Reproduces the exact live failure mode. The content script's
+    // `findInlineComposes` walks up from `tr.btC` to the smallest
+    // ancestor that contains the body editable, then passes THAT
+    // element to `extractPayload`. In Gmail inline reply, the chip
+    // and the body+toolbar live in SIBLING subtrees under a wider
+    // `[role="region"][data-compose-id]` container — so the compose
+    // element extractPayload sees does NOT contain the chip at all.
+    //
+    // Strategy 4's `compose.querySelectorAll('[email]')` returns 0 →
+    // EMPTY_TO. The fix is for Strategy 4 to walk up to the wider
+    // `[role="region"][data-compose-id]` ancestor when nothing matches
+    // in the narrow compose.
+    document.body.innerHTML = '';
+
+    // The wider role="region" container (what manual DevTools queries hit).
+    const region = document.createElement('div');
+    region.setAttribute('role', 'region');
+    region.setAttribute('data-compose-id', '1');
+    region.setAttribute('aria-label', 'Re:');
+
+    // ── Sibling subtree A: recipients chip area
+    const recipientsCell = document.createElement('td');
+    recipientsCell.className = 'Iy';
+    const chip = document.createElement('span');
+    chip.setAttribute('email', 'danievwe@gmail.com');
+    chip.textContent = 'danievwe@gmail.com';
+    recipientsCell.appendChild(chip);
+    region.appendChild(recipientsCell);
+
+    // ── Sibling subtree B: the body+toolbar wrapper. This is the
+    // element findInlineComposes returns as `compose`.
+    const composeWrapper = document.createElement('div');
+    composeWrapper.className = 'composeWrap';
+
+    const body = document.createElement('div');
+    body.setAttribute('role', 'textbox');
+    body.setAttribute('aria-label', 'Message Body');
+    body.setAttribute('contenteditable', 'true');
+    body.textContent = 'reply body';
+    composeWrapper.appendChild(body);
+
+    // Subject + toolbar (subject input must be inside `compose` so
+    // extractPayload's subject reader doesn't fail at DOM_UNEXPECTED).
+    const subj = document.createElement('input');
+    subj.setAttribute('name', 'subjectbox');
+    subj.value = 'Re: hello';
+    composeWrapper.appendChild(subj);
+
+    // The To input — Gmail also puts this in the body+toolbar wrapper
+    // in some reply layouts, with hidden form mirrors elsewhere.
+    const toInput = document.createElement('input');
+    toInput.setAttribute('aria-label', 'To recipients');
+    toInput.setAttribute('type', 'text');
+    toInput.setAttribute('role', 'combobox');
+    toInput.value = '';
+    composeWrapper.appendChild(toInput);
+
+    // Hidden form mirrors that trip Strategy 2's `otherInputs > 1` guard
+    // so Strategy 4 actually gets a chance to run.
+    for (const name of ['to', 'cc', 'bcc']) {
+      const i = document.createElement('input');
+      i.setAttribute('name', name);
+      i.setAttribute('type', 'hidden');
+      composeWrapper.appendChild(i);
+    }
+
+    region.appendChild(composeWrapper);
+    document.body.appendChild(region);
+
+    // Sanity: the chip is reachable from the wider region but NOT from
+    // the narrow compose — this is precisely the live failure shape.
+    expect(region.querySelectorAll('[email]')).toHaveLength(1);
+    expect(composeWrapper.querySelectorAll('[email]')).toHaveLength(0);
+
+    const result = extractPayload(composeWrapper, { now: fixedNow, generateNonce: fixedNonce });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.to).toEqual(['danievwe@gmail.com']);
+    }
+  });
+
+  it('PFL-098.1 secondary: input + chip in separate subtrees WITHIN one compose (chip is reachable, sanity-check Strategy 2/4 still cooperate)', () => {
+    // Faithful reproduction of the live Gmail inline-reply DOM that
+    // PFL-098 was supposed to fix but didn't. Key features:
+    //   - compose root has role="region" aria-label="Re:" (NOT "To" —
+    //     so Strategy 1's regionSelector misses)
+    //   - one <input aria-label="To recipients"> with empty value
+    //     (Strategy 2 finds it, but its ancestor walk runs into hidden
+    //     <input name="cc"> / <input name="bcc"> mirrors that Gmail
+    //     keeps in the form, tripping the otherInputs.length > 1 break)
+    //   - the actual recipient chip [email="…"] lives in a separate
+    //     table subtree under the form
+    //   - the form also contains body editable + a quoted blockquote
+    //   - Strategy 4 MUST scan compose-wide and pick up the chip.
+    document.body.innerHTML = '';
+    const compose = document.createElement('div');
+    compose.setAttribute('role', 'region');
+    compose.setAttribute('data-compose-id', '1');
+    compose.setAttribute('aria-label', 'Re:');
+
+    const outerTable = document.createElement('table');
+    outerTable.className = 'aoP HM';
+    const outerTbody = document.createElement('tbody');
+    const outerTr = document.createElement('tr');
+    const outerTd = document.createElement('td');
+    outerTd.className = 'I5';
+    const form = document.createElement('form');
+    form.className = 'bAs';
+
+    // ── Chip subtree (mirrors the live path: SPAN -> DIV.oL.aDm.az9 ->
+    // DIV.aoD.hl -> TD.Iy -> TR -> TBODY -> TABLE.IG). The chip and the
+    // To input live in DIFFERENT subtrees under the form — sharing only
+    // the form ancestor.
+    const chipTable = document.createElement('table');
+    chipTable.className = 'IG';
+    const chipTbody = document.createElement('tbody');
+    const chipTr = document.createElement('tr');
+    const chipTd = document.createElement('td');
+    chipTd.className = 'Iy';
+    const chipWrap = document.createElement('div');
+    chipWrap.className = 'aoD hl';
+    const chipInner = document.createElement('div');
+    chipInner.className = 'oL aDm az9';
+    const chip = document.createElement('span');
+    chip.setAttribute('email', 'danievwe@gmail.com');
+    chip.textContent = 'danievwe@gmail.com';
+    chipInner.appendChild(chip);
+    chipWrap.appendChild(chipInner);
+    chipTd.appendChild(chipWrap);
+    chipTr.appendChild(chipTd);
+    chipTbody.appendChild(chipTr);
+    chipTable.appendChild(chipTbody);
+    form.appendChild(chipTable);
+
+    // ── To-input subtree — a sibling of the chip's table under the form,
+    // so the smallest common ancestor of input + chip is the form itself.
+    const inputTable = document.createElement('table');
+    const inputTbody = document.createElement('tbody');
+    const inputTr = document.createElement('tr');
+    const inputTd = document.createElement('td');
+    const toInput = document.createElement('input');
+    toInput.id = ':9r';
+    toInput.className = 'agP aFw';
+    toInput.setAttribute('aria-label', 'To recipients');
+    toInput.setAttribute('type', 'text');
+    toInput.setAttribute('role', 'combobox');
+    toInput.value = '';
+    inputTd.appendChild(toInput);
+    inputTr.appendChild(inputTd);
+    inputTbody.appendChild(inputTr);
+    inputTable.appendChild(inputTbody);
+    form.appendChild(inputTable);
+
+    // ── Hidden form mirror inputs Gmail keeps for all three fields, even
+    // when only To is visible. These match ANY_RECIPIENT_INPUT and were
+    // hypothesized to trip Strategy 2's `otherInputs.length > 1` guard.
+    const hiddenTo = document.createElement('input');
+    hiddenTo.setAttribute('name', 'to');
+    hiddenTo.setAttribute('type', 'hidden');
+    hiddenTo.value = '';
+    form.appendChild(hiddenTo);
+    const hiddenCc = document.createElement('input');
+    hiddenCc.setAttribute('name', 'cc');
+    hiddenCc.setAttribute('type', 'hidden');
+    hiddenCc.value = '';
+    form.appendChild(hiddenCc);
+    const hiddenBcc = document.createElement('input');
+    hiddenBcc.setAttribute('name', 'bcc');
+    hiddenBcc.setAttribute('type', 'hidden');
+    hiddenBcc.value = '';
+    form.appendChild(hiddenBcc);
+
+    const fromInput = document.createElement('input');
+    fromInput.setAttribute('name', 'from');
+    fromInput.setAttribute('type', 'hidden');
+    fromInput.value = 'danievwe@gmail.com';
+    form.appendChild(fromInput);
+
+    // ── Body editable
+    const body = document.createElement('div');
+    body.setAttribute('role', 'textbox');
+    body.setAttribute('aria-label', 'Message Body');
+    body.setAttribute('contenteditable', 'true');
+    body.textContent = 'reply body';
+    form.appendChild(body);
+
+    outerTd.appendChild(form);
+    outerTr.appendChild(outerTd);
+    outerTbody.appendChild(outerTr);
+    outerTable.appendChild(outerTbody);
+    compose.appendChild(outerTable);
+    document.body.appendChild(compose);
+
+    const result = extractPayload(compose, { now: fixedNow, generateNonce: fixedNonce });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.to).toEqual(['danievwe@gmail.com']);
+    }
+  });
+
   it('PFL-098: extracts the chipped recipient from a collapsed reply compose, ignoring the quoted blockquote', () => {
     // Simulates Gmail reply DOM with the recipients row collapsed:
     //   - NO role="listbox" / role="region" with aria-label="To"
