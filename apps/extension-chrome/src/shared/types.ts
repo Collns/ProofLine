@@ -39,11 +39,17 @@ export interface ExtractionFailedMessage {
   error: ExtractError;
 }
 
+export interface VerifyInboundMessage {
+  type: 'VERIFY_INBOUND';
+  envelopeId: string;
+}
+
 export type ContentToBackgroundMessage =
   | SignButtonClickedMessage
   | PingMessage
   | PayloadExtractedMessage
-  | ExtractionFailedMessage;
+  | ExtractionFailedMessage
+  | VerifyInboundMessage;
 
 // ── Background → content (injected via chrome.tabs.sendMessage) ──────────────
 
@@ -106,6 +112,7 @@ const KNOWN_TYPES: ReadonlySet<ContentToBackgroundMessage['type']> = new Set([
   'PING',
   'PAYLOAD_EXTRACTED',
   'EXTRACTION_FAILED',
+  'VERIFY_INBOUND',
 ]);
 
 export function isContentToBackgroundMessage(
