@@ -23,6 +23,7 @@
 
 import type { EmailPayload } from "@proofline/types";
 import { canonicalize } from "@proofline/canonical";
+import { handleVerifyInbound } from "./verify-inbound.js";
 
 import {
   handleCeremonyMessage,
@@ -83,6 +84,7 @@ chrome.windows.onRemoved.addListener((windowId) => {
 // ─── Internal-message listener (content script / action popup) ──────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (handleVerifyInbound(message, sendResponse)) return true;
   void (async () => {
     try {
       const result = await routeContentMessage(message, sender);
