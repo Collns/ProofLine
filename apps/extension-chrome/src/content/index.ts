@@ -1,3 +1,4 @@
+import { sweepInboundMessages } from './inject-badge.js';
 import { log, warn } from '../shared/log.js';
 import { findComposeContainers } from './gmail-detector.js';
 import { tryInject } from './inject-toolbar.js';
@@ -16,6 +17,7 @@ function sweep(): void {
   for (const compose of composes) {
     tryInject(compose);
   }
+  sweepInboundMessages(document);
 }
 
 function findComposeByComposeId(composeId: string): Element | null {
