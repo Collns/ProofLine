@@ -19,24 +19,57 @@ import * as crypto from "node:crypto";
 
 const store: Record<string, Record<string, unknown>> = {};
 
+interface DocRef {
+  __path: { col: string; id: string };
+  get: () => Promise<{ exists: boolean; data: () => unknown }>;
+  set: (data: Record<string, unknown>, opts?: { merge?: boolean }) => Promise<void>;
+  collection: (sub: string) => CollectionRef;
+}
+interface CollectionRef {
+  doc: (id: string) => DocRef;
+}
+
+function writeAt(col: string, id: string, data: Record<string, unknown>, merge?: boolean): void {
+  store[col] = store[col] ?? {};
+  if (merge) {
+    store[col][id] = { ...(store[col][id] as object ?? {}), ...data };
+  } else {
+    store[col][id] = data;
+  }
+}
+
+function makeCollectionRef(col: string): CollectionRef {
+  return {
+    doc: (id: string): DocRef => ({
+      __path: { col, id },
+      get:    async () => ({
+        exists: Boolean(store[col]?.[id]),
+        data:   () => store[col]?.[id] ?? null,
+      }),
+      set:    async (data, opts) => writeAt(col, id, data, opts?.merge),
+      // Sub-collections live under `${parentCol}/${docId}/${subCol}`.
+      // PFL-100: register-credential writes role_credentials there.
+      collection: (sub: string) => makeCollectionRef(`${col}/${id}/${sub}`),
+    }),
+  };
+}
+
 function makeFirestoreMock() {
   return {
-    collection: (col: string) => ({
-      doc: (id: string) => ({
-        get:    async () => ({
-          exists: Boolean(store[col]?.[id]),
-          data:   () => store[col]?.[id] ?? null,
-        }),
-        set:    async (data: Record<string, unknown>, opts?: { merge?: boolean }) => {
-          store[col] = store[col] ?? {};
-          if (opts?.merge) {
-            store[col][id] = { ...(store[col][id] as object ?? {}), ...data };
-          } else {
-            store[col][id] = data;
-          }
+    collection: (col: string) => makeCollectionRef(col),
+    // PFL-100: register-credential uses a batch to atomically write
+    // webauthn_credentials + users/{userId}/role_credentials.
+    batch: () => {
+      const ops: Array<() => void> = [];
+      return {
+        set: (ref: DocRef, data: Record<string, unknown>, opts?: { merge?: boolean }) => {
+          ops.push(() => writeAt(ref.__path.col, ref.__path.id, data, opts?.merge));
         },
-      }),
-    }),
+        commit: async () => {
+          for (const op of ops) op();
+        },
+      };
+    },
   };
 }
 

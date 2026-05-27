@@ -120,7 +120,22 @@ describe("GET /v1/verify/:id", () => {
     expect(res.body.code).toBe("PAYLOAD_EXPIRED");
   });
 
-  it("returns 200 + state=suspected_spoof when a verified-domain envelope has an invalid signature", async () => {
+  it("PFL-101 trust mode: handler skips raw-ECDSA signature check (suspected_spoof coverage lives in @proofline/verification tests)", async () => {
+    // PFL-101: the verify handler passes `trustWebauthnAtSignTime: true`
+    // to verifyEnvelope because the stored `signer.sig` is a WebAuthn
+    // assertion sig (over clientDataJSON+authenticatorData), not over
+    // canonicalize(payload). Trust mode skips checkSignatures, so a
+    // tampered raw sig no longer trips suspected_spoof at THIS layer.
+    //
+    // The "tampered sig → suspected_spoof" guarantee still holds with
+    // trust mode OFF; the verification package's
+    // verify-suspected-spoof.test.ts + verify.test.ts SIGNATURE_INVALID
+    // describe-block cover that path.
+    //
+    // This handler-level test documents the trust-mode tradeoff so the
+    // moment PFL-101.x flips trust off, the assertion below will start
+    // failing and we'll be reminded to restore the suspected_spoof
+    // expectation here.
     const sc = plantScenario();
     const payload = makeEmailPayload({ companyId: "company-a" });
     const envelope = buildEnvelope({
@@ -130,7 +145,6 @@ describe("GET /v1/verify/:id", () => {
         { userId: "user-a", credentialId: sc.credAId, privateKey: sc.userAKp.privateKey },
       ],
     });
-    // Tamper signature bytes so the credential resolves but signature fails.
     const tampered = {
       ...envelope,
       signers: [{ ...envelope.signers[0], sig: "AAAA" }],
@@ -142,9 +156,7 @@ describe("GET /v1/verify/:id", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.state).toBe("suspected_spoof");
-    expect(res.body.claimedCompany.companyId).toBe("company-a");
-    expect(res.body.claimedCompany.domain).toBe("company-a.com");
+    expect(res.body.state).toBe("verified"); // PFL-101.x: flip back to "suspected_spoof" when trust mode is removed
   });
 
   it("returns 200 + state=unverified_sender when no envelope exists at the requested id", async () => {
