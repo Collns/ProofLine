@@ -321,8 +321,45 @@ export function makeRegisterCredentialHandler(
     const coseB64 = coseResult.coseB64;
 
     // 5. Store credential — `publicKey` is now COSE bytes (base64), not SPKI.
+    //
+    //    PFL-100: we also write a parallel doc to
+    //    users/{userId}/role_credentials/{credentialId} so the verify
+    //    pipeline's `RegistryView.getUserCredential` (collectionGroup
+    //    query on role_credentials) can resolve this credential at
+    //    verify time. Sign-time and verify-time crypto take DIFFERENT
+    //    encodings of the same EC P-256 key:
+    //      - sign-time @simplewebauthn assertion verifier → COSE base64
+    //      - verify-time @proofline/crypto.verifyEcdsaP256 → SPKI base64
+    //    So we keep COSE in webauthn_credentials.publicKey and SPKI in
+    //    role_credentials.publicKey. The browser already sends both
+    //    forms; body.publicKey (base64url) is SPKI from response.getPublicKey()
+    //    and we just re-encode to plain base64 for the role_credentials doc.
+    //
+    //    HACKATHON CAVEAT — issuerSig: the verify pipeline checks
+    //    `verifyEcdsaP256(company.rootPublicKey, canonicalize(credentialFields),
+    //    credential.issuerSig)` at packages/verification/src/checks.ts:117.
+    //    We don't yet have company-root signing infrastructure, so issuerSig
+    //    is stored as "". Verification will fail with ROLE_CREDENTIAL_INVALID
+    //    until that lands. TODO(PFL-100.1): sign role credentials with the
+    //    company root key at registration time.
     const now = Date.now();
-    await credRef.set({
+
+    const userRef  = firestore.collection("users").doc(decoded.userId);
+    const userSnap = await userRef.get();
+    const existingUser = userSnap.exists
+      ? (userSnap.data() as {
+          role?: "owner" | "manager" | "employee";
+          devices?: DeviceRecord[];
+          wireLimitUsd?: number;
+          dailyLimitUsd?: number;
+        })
+      : null;
+    const userRole = existingUser?.role ?? "owner";
+
+    const spkiBase64 = Buffer.from(body.publicKey, "base64url").toString("base64");
+    const roleCredRef = userRef.collection("role_credentials").doc(body.credentialId);
+
+    const credDoc = {
       credentialId:      body.credentialId,
       userId:            decoded.userId,
       companyId:         decoded.companyId,
@@ -331,7 +368,25 @@ export function makeRegisterCredentialHandler(
       clientDataJSON:    body.clientDataJSON,
       deviceName:        body.deviceName ?? "Unknown device",
       createdAt:         now,
-    });
+    };
+    const roleCredDoc = {
+      v:                1 as const,
+      credentialId:     body.credentialId,
+      publicKey:        spkiBase64,
+      userId:           decoded.userId,
+      companyId:        decoded.companyId,
+      role:             userRole,
+      perEmailLimitUsd: null,
+      dailyLimitUsd:    null,
+      issuedAt:         now,
+      revokedAt:        null,
+      issuerSig:        "",
+    };
+
+    const batch = firestore.batch();
+    batch.set(credRef,     credDoc);
+    batch.set(roleCredRef, roleCredDoc);
+    await batch.commit();
 
     // 6. Append the new device to users/{userId}.devices[].
     //    Idempotent: if a DeviceRecord with this credentialId already
@@ -346,11 +401,8 @@ export function makeRegisterCredentialHandler(
       publicKey:    coseB64,
       enrolledAt:   now,
     };
-    const userRef  = firestore.collection("users").doc(decoded.userId);
-    const userSnap = await userRef.get();
-    if (userSnap.exists) {
-      const u = userSnap.data() as { devices?: DeviceRecord[] };
-      const devices = Array.isArray(u.devices) ? u.devices : [];
+    if (existingUser) {
+      const devices = Array.isArray(existingUser.devices) ? existingUser.devices : [];
       if (!devices.some((d) => d.credentialId === body.credentialId)) {
         await userRef.set(
           { devices: [...devices, newDevice], updatedAt: now },
