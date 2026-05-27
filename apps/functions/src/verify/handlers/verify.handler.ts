@@ -29,6 +29,49 @@ export interface VerifyHandlerDeps {
 
 const CACHE_HEADER = "public, max-age=60, s-maxage=300";
 
+// PFL-100: the signing endpoint (sign-finalize) persists envelopes in the
+// `EmailSignedEnvelope` shape from signing.helpers.ts, which is structurally
+// different from the canonical `SignedEnvelope` schema. Translate to the
+// canonical shape before zod parsing so verifyEnvelope sees what it expects.
+// If `raw` already has `signers` (canonical shape), pass it through.
+function bridgeStoredEnvelope(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const obj = raw as Record<string, unknown>;
+  if (Array.isArray(obj.signers)) return raw;
+  if (!Array.isArray(obj.signatures)) return raw;
+
+  const payload = obj.payload as Record<string, unknown> | undefined;
+  const payloadType: "wire" | "email" | "bilateral" =
+    payload && payload.isWireInstruction === true
+      ? "wire"
+      : payload && typeof payload.from === "string"
+        ? "email"
+        : "bilateral";
+
+  const signers = obj.signatures.map((s) => {
+    const sig = s as Record<string, unknown>;
+    return {
+      userId: String(sig.signerId ?? ""),
+      credentialId: String(sig.credentialId ?? ""),
+      role: typeof sig.role === "string" ? sig.role : "signer",
+      sig: String(sig.sig ?? ""),
+      signedAt: Number(sig.signedAt ?? 0),
+      sessionId: typeof sig.sessionId === "string" ? sig.sessionId : null,
+    };
+  });
+
+  return {
+    v: 1,
+    payloadType,
+    payload: obj.payload,
+    payloadHash: obj.payloadHash,
+    signers,
+    anchorRoot: obj.anchorRoot ?? null,
+    anchorTxHash: obj.anchorTxHash ?? null,
+    anchorBlockNumber: obj.anchorBlockNumber ?? null,
+  };
+}
+
 function setPublicHeaders(res: express.Response): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -60,7 +103,7 @@ export function makeVerifyHandler(deps: VerifyHandlerDeps) {
         // someone wrote them with `set({...})` after construction. Run
         // them through the schema again so verifyEnvelope sees a
         // canonical shape (or so we can reject early on a malformed doc).
-        const parsed = SignedEnvelope.safeParse(raw);
+        const parsed = SignedEnvelope.safeParse(bridgeStoredEnvelope(raw));
         if (!parsed.success) {
           body = {
             ok: false,
