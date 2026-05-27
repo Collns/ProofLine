@@ -26,7 +26,7 @@ export function renderEnvelopeBanner(rawInput: BannerInput): string {
     .replace('{companyName}', company);
 
   const verifyHref = escapeAttr(
-    `${input.verifyBaseUrl.replace(/\/$/, '')}/${input.envelopeId}`,
+    `${input.verifyBaseUrl.replace(/\/$/, '')}/v/${input.envelopeId}`,
   );
 
   const fontStack =

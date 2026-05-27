@@ -72,12 +72,12 @@ describe('renderEnvelopeBanner — escaping & URL building', () => {
       envelopeId: 'env_abc123',
     });
     expect(withoutSlash).toContain(
-      'href="https://proofline-verify.web.app/env_abc123"',
+      'href="https://proofline-verify.web.app/v/env_abc123"',
     );
     expect(withSlash).toContain(
-      'href="https://proofline-verify.web.app/env_abc123"',
+      'href="https://proofline-verify.web.app/v/env_abc123"',
     );
-    expect(withoutSlash).not.toContain('//env_abc123');
-    expect(withSlash).not.toContain('//env_abc123');
+    expect(withoutSlash).not.toContain('//v/env_abc123');
+    expect(withSlash).not.toContain('//v/env_abc123');
   });
 });
