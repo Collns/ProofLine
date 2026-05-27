@@ -48,6 +48,15 @@ function bridgeStoredEnvelope(raw: unknown): unknown {
         ? "email"
         : "bilateral";
 
+  // Hash encoding bridge: sign-finalize persists payloadHash as hex,
+  // but @proofline/verification expects base64url. Convert iff the
+  // stored value looks like a 64-char lowercase hex string; otherwise
+  // pass through (canonical-shape docs already store base64url).
+  const rawHash = String(obj.payloadHash ?? "");
+  const payloadHash = /^[0-9a-f]{64}$/.test(rawHash)
+    ? Buffer.from(rawHash, "hex").toString("base64url")
+    : rawHash;
+
   const signers = obj.signatures.map((s) => {
     const sig = s as Record<string, unknown>;
     return {
@@ -64,7 +73,7 @@ function bridgeStoredEnvelope(raw: unknown): unknown {
     v: 1,
     payloadType,
     payload: obj.payload,
-    payloadHash: obj.payloadHash,
+    payloadHash,
     signers,
     anchorRoot: obj.anchorRoot ?? null,
     anchorTxHash: obj.anchorTxHash ?? null,
