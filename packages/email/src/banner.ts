@@ -148,7 +148,7 @@ function signerRow(signer: BannerContext["signers"][number]): string {
 export function renderBanner(ctx: BannerContext): string {
   const borderColor = stateBorderColor(ctx.state);
   const labelColor = stateLabelColor(ctx.state);
-  const verifyUrl = `${VERIFY_BASE_URL}/${encodeURIComponent(ctx.envelopeId)}`;
+  const verifyUrl = `${VERIFY_BASE_URL}/v/${encodeURIComponent(ctx.envelopeId)}`;
   const signerRows = ctx.signers.map(signerRow).join("");
   const wireNote = ctx.isWireInstruction
     ? `<tr><td colspan="2" style="padding-top:6px;font-size:12px;color:${COLORS.amber700};
