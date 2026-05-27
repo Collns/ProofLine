@@ -26,6 +26,8 @@ const BUTTON_STYLE: Partial<CSSStyleDeclaration> = {
   font: 'inherit',
   cursor: 'pointer',
   marginLeft: '8px',
+  position: 'relative',
+  zIndex: '2147483647',
 };
 
 function buildButton(compose: Element): HTMLButtonElement {
