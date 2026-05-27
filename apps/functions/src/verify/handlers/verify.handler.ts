@@ -128,6 +128,10 @@ export function makeVerifyHandler(deps: VerifyHandlerDeps) {
             envelope,
             registry: deps.service.registry,
             now: deps.now,
+            // PFL-101: hackathon trust mode. See verifyEnvelope's
+            // VerifyEnvelopeInput.trustWebauthnAtSignTime for the full
+            // rationale and TODO chain (PFL-100.1, PFL-101.x).
+            trustWebauthnAtSignTime: true,
           });
           body = shapeResponse(result);
         }
