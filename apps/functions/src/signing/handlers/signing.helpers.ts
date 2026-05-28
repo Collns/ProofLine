@@ -355,15 +355,28 @@ export async function resolveSignerDisplayRecord(
   const data = (snap.data() ?? {}) as {
     displayName?: string;
     role?: string;
-    companyName?: string;
-    domain?: string;
+    companyId?: string;
   };
+
+  // PFL-109: companyName + domain live on the COMPANY doc, not the user
+  // doc. Look up companies/{companyId} and read legalName + domain there.
+  let companyName = "";
+  let domain = "";
+  if (data.companyId) {
+    const companySnap = await db.collection("companies").doc(data.companyId).get();
+    if (companySnap.exists) {
+      const company = (companySnap.data() ?? {}) as { legalName?: string; domain?: string };
+      companyName = company.legalName ?? "";
+      domain = company.domain ?? "";
+    }
+  }
+
   return {
     userId,
-    name: data.displayName ?? userId,
+    name: data.displayName ?? userId,   // PFL-108 sets displayName at auth time
     role: data.role ?? "Unknown",
-    companyName: data.companyName ?? "",
-    domain: data.domain ?? "",
+    companyName,
+    domain,
     signedAt: Date.now(),
   };
 }
