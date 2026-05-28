@@ -90,7 +90,13 @@ function listenForBackgroundMessages(): void {
     }
     if (message.type === 'AUTH_LOGOUT') {
       isAuthenticated = false;
-      log('content', 'auth logout broadcast — Sign button disabled');
+      // Buttons injected before logout would otherwise linger until the
+      // next page refresh — gating sweep() only prevents NEW injections.
+      // Remove any already-injected Sign buttons now.
+      document
+        .querySelectorAll('[data-proofline-injected="true"]')
+        .forEach((el) => el.remove());
+      log('content', 'auth logout broadcast — Sign buttons removed');
       sendResponse({ ok: true });
       return false;
     }
