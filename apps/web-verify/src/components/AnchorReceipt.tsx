@@ -7,9 +7,45 @@ interface Props {
   txHash?: string | null;
 }
 
+function isPendingAnchor(anchor: SerializedAnchor): boolean {
+  // Sentinel anchor written by the verify pipeline (PFL-101) when an
+  // envelope hasn't been batch-anchored on chain yet: block "0" and an
+  // all-zero root. Render a "pending" notice rather than broken zeros.
+  const zeroBlock = anchor.blockNumber === '0' || anchor.blockNumber === '';
+  const zeroRoot = /^0x0+$/i.test(anchor.root);
+  return zeroBlock || zeroRoot;
+}
+
 export function AnchorReceipt({ anchor, txHash }: Props) {
   const blockUrl = buildBasescanBlockUrl(anchor.blockNumber);
   const anchoredAt = formatTimestamp(Number(anchor.timestamp));
+
+  if (isPendingAnchor(anchor)) {
+    return (
+      <section aria-label="Blockchain anchor receipt" className="rounded-xl border border-gray-200 bg-white p-4">
+        <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
+          Blockchain Anchor
+        </h2>
+        <p className="text-sm text-gray-600">
+          Anchor pending — will be confirmed in the next batch.
+        </p>
+        <div className="mt-3 pt-3 border-t border-gray-100">
+          <p className="text-xs text-gray-400">
+            This message is signed and verified now; its on-chain{' '}
+            <a
+              href="https://base.org"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[#0D6EFD] hover:underline"
+            >
+              Base Sepolia
+            </a>{' '}
+            anchor is added on the next batch for tamper-evident proof.
+          </p>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section aria-label="Blockchain anchor receipt" className="rounded-xl border border-gray-200 bg-white p-4">

@@ -17,8 +17,13 @@ const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   timeZoneName: 'short',
 });
 
-export function formatTimestamp(unixSeconds: number): string {
-  return DATE_FORMATTER.format(new Date(unixSeconds * 1000));
+export function formatTimestamp(unix: number): string {
+  // Accept either seconds or milliseconds. A seconds value >= 1e12 would
+  // be ~year 33000, so anything that large is treated as already-ms.
+  // signer.signedAt is stored in ms (sign-finalize uses Date.now()),
+  // while payload.issuedAt/expiresAt and anchor.timestamp are in seconds.
+  const ms = unix >= 1e12 ? unix : unix * 1000;
+  return DATE_FORMATTER.format(new Date(ms));
 }
 
 export function maskAccount(account: string): string {
