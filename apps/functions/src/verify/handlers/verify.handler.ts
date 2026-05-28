@@ -14,6 +14,7 @@ import * as express from "express";
 import type { SignedEnvelope as SignedEnvelopeType } from "@proofline/types";
 import { SignedEnvelope } from "@proofline/types";
 import { verifyEnvelope } from "@proofline/verification";
+import type { Anchor, Hex32 } from "@proofline/verification";
 
 import type { VerifyService } from "../service-factory.js";
 import { shapeResponse } from "../shape-response.js";
@@ -81,6 +82,30 @@ function bridgeStoredEnvelope(raw: unknown): unknown {
   };
 }
 
+// PFL-106: once the anchor batch runs it stamps anchorRoot / anchorTxHash /
+// anchorBlockNumber / anchorBlockTimestamp onto the signed_messages doc.
+// Build a concrete Anchor from those so the verify page shows the REAL
+// on-chain block (Basescan link) instead of "Anchor pending". Returns
+// undefined when the envelope hasn't been anchored yet (no real block) —
+// the verify pipeline then falls back to the sentinel/pending anchor.
+function buildTrustedAnchor(raw: unknown): Anchor | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const root = typeof o.anchorRoot === "string" ? o.anchorRoot : null;
+  const blockNumber = typeof o.anchorBlockNumber === "number" ? o.anchorBlockNumber : null;
+  // Require a real, on-chain block — block 0 / missing root means "not
+  // anchored yet", which must stay pending rather than render as confirmed.
+  if (!root || /^0x0+$/i.test(root) || blockNumber === null || blockNumber <= 0) {
+    return undefined;
+  }
+  const timestamp = typeof o.anchorBlockTimestamp === "number" ? o.anchorBlockTimestamp : 0;
+  return {
+    root: root as Hex32,
+    blockNumber: BigInt(blockNumber),
+    timestamp: BigInt(timestamp),
+  };
+}
+
 function setPublicHeaders(res: express.Response): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -132,6 +157,9 @@ export function makeVerifyHandler(deps: VerifyHandlerDeps) {
             // VerifyEnvelopeInput.trustWebauthnAtSignTime for the full
             // rationale and TODO chain (PFL-100.1, PFL-101.x).
             trustWebauthnAtSignTime: true,
+            // PFL-106: surface the real on-chain anchor (stamped onto the
+            // doc by the anchor batch) when present; undefined → pending.
+            trustedAnchor: buildTrustedAnchor(raw),
           });
           body = shapeResponse(result);
         }
