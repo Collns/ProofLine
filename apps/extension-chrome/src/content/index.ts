@@ -88,6 +88,15 @@ function listenForBackgroundMessages(): void {
       sendResponse({ ok: true });
       return false;
     }
+    if (message.type === 'AUTH_LOGIN') {
+      isAuthenticated = true;
+      // Inject into any compose windows already open at sign-in time,
+      // without waiting for the next Gmail DOM mutation or re-check.
+      sweep();
+      log('content', 'auth login broadcast — Sign buttons injected');
+      sendResponse({ ok: true });
+      return false;
+    }
     if (message.type === 'AUTH_LOGOUT') {
       isAuthenticated = false;
       // Buttons injected before logout would otherwise linger until the

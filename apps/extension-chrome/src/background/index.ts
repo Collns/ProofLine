@@ -143,6 +143,10 @@ async function routeContentMessage(
       if (!token) return { authenticated: false };
       const auth = await getAuthToken();
       if (!auth) return { authenticated: false };
+      // Mirror of broadcastLogout: tell every open Gmail content script
+      // to set its cached auth flag and inject Sign buttons into any
+      // already-open composes without waiting for a refresh or re-check.
+      broadcastLogin();
       return {
         authenticated: true,
         email:         auth.email,
@@ -388,10 +392,23 @@ function extractErrCode(msg: string): string {
  * which we swallow).
  */
 function broadcastLogout(): void {
+  broadcastToAllTabs("AUTH_LOGOUT");
+}
+
+/**
+ * Broadcast AUTH_LOGIN to all tabs on successful sign-in so content
+ * scripts flip their cached `isAuthenticated` flag and inject the Sign
+ * button into open composes immediately.
+ */
+function broadcastLogin(): void {
+  broadcastToAllTabs("AUTH_LOGIN");
+}
+
+function broadcastToAllTabs(type: "AUTH_LOGOUT" | "AUTH_LOGIN"): void {
   chrome.tabs.query({}, (tabs) => {
     for (const tab of tabs) {
       if (tab.id == null) continue;
-      chrome.tabs.sendMessage(tab.id, { type: "AUTH_LOGOUT" }, () => {
+      chrome.tabs.sendMessage(tab.id, { type }, () => {
         // Swallow "no receiving end" errors for non-Gmail tabs.
         void chrome.runtime.lastError;
       });

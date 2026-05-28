@@ -78,17 +78,25 @@ export interface AuthLogoutMessage {
   type: 'AUTH_LOGOUT';
 }
 
+// Broadcast on successful sign-in so content scripts set the cached auth
+// flag and inject the Sign button into open composes immediately.
+export interface AuthLoginMessage {
+  type: 'AUTH_LOGIN';
+}
+
 export type BackgroundToContentMessage =
   | PayloadSignedMessage
   | PayloadNeedsCosignMessage
   | SignFailedMessage
-  | AuthLogoutMessage;
+  | AuthLogoutMessage
+  | AuthLoginMessage;
 
 const KNOWN_BG_TO_CONTENT: ReadonlySet<BackgroundToContentMessage['type']> = new Set([
   'PAYLOAD_SIGNED',
   'PAYLOAD_NEEDS_COSIGN',
   'SIGN_FAILED',
   'AUTH_LOGOUT',
+  'AUTH_LOGIN',
 ]);
 
 export function isBackgroundToContentMessage(
