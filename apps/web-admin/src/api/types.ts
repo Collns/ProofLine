@@ -67,6 +67,9 @@ export interface EnrollOfficerResponse {
 
 export interface FinalizeRequest {
   companyId: string;
+  // PFL-103: skip server-side prior-step gates (onboardingStatus + KYC)
+  // so a demo-skipped onboarding can still finalize.
+  demoMode?: boolean;
 }
 export interface FinalizeResponse {
   ok: boolean;
