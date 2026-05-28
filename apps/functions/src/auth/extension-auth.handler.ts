@@ -71,6 +71,9 @@ interface UserDoc {
   userId:    string;
   email:     string;
   companyId: string;
+  // PFL-102: verification's shapeUser() requires displayName — without it
+  // the user resolves to null → USER_UNKNOWN at verify time.
+  displayName?: string;
   // PFL-088: policy-relevant fields persisted at first-auth so
   // validatePolicy doesn't have to fall back to permissive defaults.
   // Loose string/number types here on purpose — the read path
@@ -150,6 +153,32 @@ export function issueExtensionAuthToken(input: IssueTokenInput): {
   return { token: `${sigInput}.${sig}`, iat, exp };
 }
 
+// ─── Display-name derivation (PFL-102) ───────────────────────────────────────
+
+/**
+ * Derive a human display name for a new/backfilled user doc.
+ *   1. Firebase Auth display name (decoded.name) if present.
+ *   2. Else the email local-part, split on `.`/`_`/`-`, each word
+ *      capitalized: "daniel.ookoro@gmail.com" → "Daniel Ookoro".
+ *   3. Else the raw email (last-ditch so the field is never empty).
+ */
+function deriveDisplayName(decoded: { name?: string; email?: string }): string {
+  const name = decoded.name?.trim();
+  if (name) return name;
+
+  const email = decoded.email?.trim() ?? "";
+  const localPart = email.split("@")[0] ?? "";
+  if (localPart) {
+    const words = localPart
+      .split(/[._-]+/)
+      .filter((w) => w.length > 0)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+    if (words.length > 0) return words.join(" ");
+  }
+
+  return email;
+}
+
 // ─── Handler factory ─────────────────────────────────────────────────────────
 
 export interface ExtensionAuthHandlerDeps {
@@ -157,7 +186,7 @@ export interface ExtensionAuthHandlerDeps {
    * Verify a Firebase ID token. Defaults to firebase-admin/auth.
    * Injected for tests so we don't need a live Firebase project.
    */
-  verifyIdToken?: (idToken: string) => Promise<{ uid: string; email?: string }>;
+  verifyIdToken?: (idToken: string) => Promise<{ uid: string; email?: string; name?: string }>;
 }
 
 export function makeExtensionAuthHandler(deps: ExtensionAuthHandlerDeps = {}) {
@@ -165,7 +194,7 @@ export function makeExtensionAuthHandler(deps: ExtensionAuthHandlerDeps = {}) {
     deps.verifyIdToken ??
     (async (idToken: string) => {
       const decoded = await getAuth().verifyIdToken(idToken);
-      return { uid: decoded.uid, email: decoded.email };
+      return { uid: decoded.uid, email: decoded.email, name: decoded.name };
     });
 
   return async function extensionAuthHandler(
@@ -180,7 +209,7 @@ export function makeExtensionAuthHandler(deps: ExtensionAuthHandlerDeps = {}) {
     const { idToken, extInstallId } = parsed.data;
 
     // 1. Verify Firebase ID token.
-    let decoded: { uid: string; email?: string };
+    let decoded: { uid: string; email?: string; name?: string };
     try {
       decoded = await verifyIdToken(idToken);
     } catch (err) {
@@ -201,11 +230,19 @@ export function makeExtensionAuthHandler(deps: ExtensionAuthHandlerDeps = {}) {
       // user; subsequent /v1/extension/auth calls are auth refreshes, not
       // re-onboarding.
       user = userSnap.data() as UserDoc;
+      // PFL-102: backfill displayName for users created before this fix.
+      // verification's shapeUser() returns null without it → USER_UNKNOWN.
+      if (!user.displayName || user.displayName.trim().length === 0) {
+        const displayName = deriveDisplayName({ name: decoded.name, email: user.email || decoded.email });
+        user.displayName = displayName;
+        await userRef.set({ displayName, updatedAt: Date.now() }, { merge: true });
+      }
     } else {
       const now = Date.now();
       user = {
         userId:        decoded.uid,
         email:         decoded.email ?? "",
+        displayName:   deriveDisplayName({ name: decoded.name, email: decoded.email }),
         companyId:     DEMO_COMPANY_ID,
         role:          DEFAULT_ROLE,
         status:        DEFAULT_STATUS,
