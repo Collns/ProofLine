@@ -97,12 +97,30 @@ async function postJson<TReq, TRes>(path: string, body: TReq): Promise<TRes> {
 
 // ── Endpoints ────────────────────────────────────────────────────────────────
 
+// PFL-105: resolve the owner's real Firebase UID for the start request.
+// The admin app has no Firebase Auth login yet, so we accept the UID via
+// (1) ?uid= URL param, or (2) localStorage 'proofline-owner-uid'.
+// Returns undefined when neither is set — the server then falls back to
+// its stub-auth userId.
+function resolveOwnerUid(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const fromParam = new URLSearchParams(window.location.search).get('uid');
+  if (fromParam && fromParam.trim().length > 0) return fromParam.trim();
+  const fromStorage = window.localStorage.getItem('proofline-owner-uid');
+  if (fromStorage && fromStorage.trim().length > 0) return fromStorage.trim();
+  return undefined;
+}
+
 export async function startOnboarding(input: StartRequest): Promise<StartResponse> {
   if (isFixtureMode()) {
     await sleep(FIXTURE_LATENCY_MS);
     return { ...fixtureStartResponse, domain: input.domain };
   }
-  return postJson<StartRequest, StartResponse>('/start', input);
+  // Inject the owner UID unless the caller already set one.
+  const body: StartRequest = input.ownerUserId
+    ? input
+    : { ...input, ownerUserId: resolveOwnerUid() };
+  return postJson<StartRequest, StartResponse>('/start', body);
 }
 
 export async function verifyDns(input: VerifyDnsRequest): Promise<VerifyDnsResponse> {

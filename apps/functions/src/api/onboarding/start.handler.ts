@@ -23,6 +23,14 @@ const StartRequestSchema = z.object({
   ein:        z.string().regex(/^\d{2}-\d{7}$/, "EIN must be formatted as XX-XXXXXXX"),
   state:      z.string().length(2).toUpperCase(),
   ownerEmail: z.string().email(),
+  // PFL-105: the admin app has no Firebase Auth login yet, so the stub
+  // auth middleware sets req.user.userId = "dev-user". The owner's REAL
+  // Firebase UID (used by the extension) is passed in the body so the
+  // company doc records the right owner — letting finalize seed the
+  // owner's users/{realUID} doc and the extension pick up the real
+  // companyId. TODO(PFL-105.1): replace with a verified ID token once
+  // the admin app gains a real login.
+  ownerUserId: z.string().min(1).optional(),
 });
 
 type StartRequest  = z.infer<typeof StartRequestSchema>;
@@ -46,7 +54,9 @@ export function makeStartHandler() {
     }
 
     const body: StartRequest = parseResult.data;
-    const { userId } = (req as any).user as { userId: string; companyId: string };
+    const { userId: reqUserId } = (req as any).user as { userId: string; companyId: string };
+    // Prefer the real owner UID from the body over the stub-auth userId.
+    const userId = body.ownerUserId ?? reqUserId;
 
     const existing = await getCompanyByDomain(body.domain);
     if (existing && existing.onboardingStatus === "verified") {
