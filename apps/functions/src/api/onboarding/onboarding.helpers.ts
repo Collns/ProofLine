@@ -29,6 +29,11 @@ export interface CompanyDoc {
   ownerUserId: string;
   ownerEmail: string;
   onboardingStatus: OnboardingStatus;
+  // PFL-103: the VERIFY-side shapeCompany() reads `status` (the
+  // verification enum), NOT `onboardingStatus`. Without this field a
+  // finalized company resolves to null → COMPANY_UNKNOWN at verify time.
+  // Set to 'verified' at finalize.
+  status?: "verified" | "suspended" | "revoked";
   dnsToken: string;
   dnsVerifiedAt?: number;
   emailCode?: string;

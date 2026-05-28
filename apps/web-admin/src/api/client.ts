@@ -33,8 +33,19 @@ const FIXTURE_LATENCY_MS = 800;
 // ── Mode detection ───────────────────────────────────────────────────────────
 
 function isFixtureMode(): boolean {
-  // DEMO MODE: always use fixtures (no live backend deployed yet)
-  return true;
+  // PFL-103: live backend by default so onboarding creates real
+  // companies/{} docs in Firestore. Escape hatches for offline UI work:
+  //   - ?fixtures=1  query param → force fixtures
+  //   - ?live=1      query param → force live (overrides env)
+  //   - VITE_USE_FIXTURES=true   build env → force fixtures
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('fixtures') === '1') return true;
+    if (params.get('live') === '1') return false;
+  }
+  const env = (import.meta as { env?: Record<string, string | undefined> }).env
+    ?.VITE_USE_FIXTURES;
+  return env === 'true' || env === '1';
 }
 
 // ── Auth header (stub) ───────────────────────────────────────────────────────

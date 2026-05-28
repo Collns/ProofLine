@@ -101,7 +101,9 @@ export function StepKeyCeremony({ state, onSetCredential, onSetAnchor, onAdvance
         }
       }, 1500);
 
-      const res = await finalize({ companyId: state.companyId });
+      // PFL-103: demoMode so finalize succeeds even when DNS/email/KYB/KYC
+      // were demo-skipped (no prior-step records in Firestore).
+      const res = await finalize({ companyId: state.companyId, demoMode: true });
       clearInterval(beatInterval);
 
       onSetAnchor({
