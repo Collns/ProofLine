@@ -13,15 +13,26 @@ import { ApiError } from '../api/types';
 
 const RECENT_LIMIT = 5;
 
-// TODO(PFL-AUTH): pull legalName from the authenticated company once the
-// auth flow lands. For the demo we hardcode the fixture company name.
-const COMPANY_NAME = 'Acme Title';
+// PFL-110: resolve the company name without a real auth flow yet.
+// Priority: ?company= URL param → localStorage 'proofline-company-name'
+// → generic fallback. (TODO(PFL-AUTH): pull legalName from the
+// authenticated company once login lands.)
+function resolveCompanyName(): string {
+  if (typeof window !== 'undefined') {
+    const fromParam = new URLSearchParams(window.location.search).get('company');
+    if (fromParam && fromParam.trim().length > 0) return fromParam.trim();
+    const fromStorage = window.localStorage.getItem('proofline-company-name');
+    if (fromStorage && fromStorage.trim().length > 0) return fromStorage.trim();
+  }
+  return 'your company';
+}
 
 export function DashboardHome() {
   const [stats, setStats] = useState<NetworkStats | null>(null);
   const [recent, setRecent] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
+  const companyName = resolveCompanyName();
 
   useEffect(() => {
     let cancelled = false;
@@ -38,8 +49,13 @@ export function DashboardHome() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
+        // PFL-110: the invitations backend isn't deployed yet. Treat
+        // API/network failures as "no data" (empty defaults) rather than
+        // surfacing a scary red banner — the dashboard is still usable.
+        // Only genuinely unexpected (non-ApiError) failures show the banner.
         if (err instanceof ApiError) {
-          setError({ code: err.code, message: err.message });
+          setStats(emptyStats());
+          setRecent([]);
         } else {
           setError({
             code:    'UNKNOWN',
@@ -58,7 +74,7 @@ export function DashboardHome() {
   return (
     <AppShell
       eyebrow="Verified"
-      heading={`Welcome, ${COMPANY_NAME}.`}
+      heading={`Welcome, ${companyName}.`}
       description={
         <>You’re verified. Bring your counterparties online to transact securely.</>
       }
