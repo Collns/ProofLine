@@ -19,29 +19,12 @@
  *     so local dev / tests don't need a real wallet.
  */
 
-import { createRequire } from "node:module";
 import type { AnchorProvider, Hex32, AnchorReceipt, MerkleProof } from "@proofline/anchoring";
-
-// Lazy-load the viem-backed provider via createRequire because
-// @proofline/anchoring does not (yet) declare a subpath export for its
-// providers. Followup: widen packages/anchoring/package.json `exports`
-// to expose ./providers/viem-base-sepolia, then replace this with a
-// normal static import.
-const requireCjs = createRequire(import.meta.url);
-type ViemAnchorConfig = {
-  rpcUrl: string;
-  contractAddress: `0x${string}`;
-  deployerPrivateKey: `0x${string}`;
-};
-function loadViemProviderFactory(): (cfg: ViemAnchorConfig) => AnchorProvider {
-  // packages/anchoring is built ahead of apps/functions in CI; this path
-  // resolves through the pnpm workspace symlink.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const mod = requireCjs("@proofline/anchoring/dist/providers/viem-base-sepolia.js") as {
-    makeViemBaseSepoliaAnchorProvider: (cfg: ViemAnchorConfig) => AnchorProvider;
-  };
-  return mod.makeViemBaseSepoliaAnchorProvider;
-}
+// PFL-107: static import. The prior dynamic `createRequire(...dist/providers/
+// viem-base-sepolia.js)` failed at runtime — esbuild bundles functions into
+// a single file so that path doesn't exist in the deployed bundle. The
+// provider is now re-exported from the package root.
+import { makeViemBaseSepoliaAnchorProvider } from "@proofline/anchoring";
 
 import type { RegistryEvent } from "./batch.js";
 import type {
@@ -310,8 +293,7 @@ export function makeAnchorRunDeps(
   if (overrides.anchor) {
     anchor = overrides.anchor;
   } else if (env.rpcUrl && env.deployerKey && env.contractAddress) {
-    const factory = loadViemProviderFactory();
-    anchor = factory({
+    anchor = makeViemBaseSepoliaAnchorProvider({
       rpcUrl:             env.rpcUrl,
       deployerPrivateKey: env.deployerKey as `0x${string}`,
       contractAddress:    env.contractAddress as `0x${string}`,
