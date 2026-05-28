@@ -94,15 +94,25 @@ export function makeViemBaseSepoliaAnchorProvider(
       const receipt = await publicClient.waitForTransactionReceipt({
         hash: txHash,
       });
-      const block = await publicClient.getBlock({
-        blockNumber: receipt.blockNumber,
-      });
+      // Base Sepolia's RPC sometimes can't serve block details immediately
+      // after confirmation. The block NUMBER from the receipt is reliable;
+      // only the block-details fetch is flaky — fall back to wall-clock
+      // seconds for the timestamp rather than failing the whole anchor.
+      let timestamp: bigint;
+      try {
+        const block = await publicClient.getBlock({
+          blockNumber: receipt.blockNumber,
+        });
+        timestamp = block.timestamp;
+      } catch {
+        timestamp = BigInt(Math.floor(Date.now() / 1000));
+      }
 
       return {
         root,
         txHash,
         blockNumber: receipt.blockNumber,
-        timestamp: block.timestamp,
+        timestamp,
       };
     },
 
@@ -115,8 +125,16 @@ export function makeViemBaseSepoliaAnchorProvider(
       });
       if (blockNumber === 0n) return null;
 
-      const block = await publicClient.getBlock({ blockNumber });
-      return { blockNumber, timestamp: block.timestamp };
+      // Same flaky-getBlock guard as postAnchor: the on-chain block number
+      // is authoritative; fall back to wall-clock if details can't be read.
+      let timestamp: bigint;
+      try {
+        const block = await publicClient.getBlock({ blockNumber });
+        timestamp = block.timestamp;
+      } catch {
+        timestamp = BigInt(Math.floor(Date.now() / 1000));
+      }
+      return { blockNumber, timestamp };
     },
 
     verifyProof(leaf: Hex32, proof: MerkleProof, root: Hex32): boolean {
