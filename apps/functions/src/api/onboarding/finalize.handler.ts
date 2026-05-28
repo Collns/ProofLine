@@ -69,7 +69,23 @@ interface RoleCredential {
 
 const FinalizeRequestSchema = z.object({
   companyId: z.string().min(1),
+  // PFL-103: when true, skip the prior-step gates (onboardingStatus +
+  // officer KYC) so the demo flow can finalize a company whose
+  // DNS/email/KYB/KYC steps were demo-skipped. KMS key + role credential
+  // + anchor + status='verified' still run for real.
+  demoMode: z.boolean().optional(),
 });
+
+// PFL-103: derive a human display name for the owner's seeded user doc.
+// "owner@acme-title.com" → "Owner".
+function deriveDisplayNameFromEmail(email: string): string {
+  const local = email.split("@")[0] ?? "";
+  const words = local
+    .split(/[._-]+/)
+    .filter((w) => w.length > 0)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+  return words.length > 0 ? words.join(" ") : email;
+}
 
 // ─── Canonical bytes for role credential ─────────────────────────────────────
 
@@ -104,7 +120,7 @@ export function makeFinalizeHandler(deps: {
       return;
     }
 
-    const { companyId } = parseResult.data;
+    const { companyId, demoMode } = parseResult.data;
     const { userId }    = (req as any).user as { userId: string };
 
     // ── 2. Load company ───────────────────────────────────────────────────────
@@ -119,26 +135,34 @@ export function makeFinalizeHandler(deps: {
       return;
     }
 
-    const allowedStatuses = ["pending_kyc", "pending_finalize"];
-    if (!allowedStatuses.includes(company.onboardingStatus)) {
+    // PFL-103: demoMode relaxes the prior-step gates. We still refuse to
+    // re-finalize an already-verified company even in demo mode.
+    if (!demoMode) {
+      const allowedStatuses = ["pending_kyc", "pending_finalize"];
+      if (!allowedStatuses.includes(company.onboardingStatus)) {
+        res.status(409).json(
+          ERR.conflict(
+            "ONBOARDING_STEP_INVALID",
+            `Finalize not allowed in status: ${company.onboardingStatus}`
+          )
+        );
+        return;
+      }
+
+      // ── 3. Guard: KYC must be complete ──────────────────────────────────────
+      if (!company.officerEnrollment?.verifiedAt) {
+        res.status(422).json(
+          ERR.unprocessable(
+            "KYC_INCOMPLETE",
+            "Officer identity verification has not been confirmed yet. " +
+            "Please complete the Stripe Identity flow or wait for the webhook."
+          )
+        );
+        return;
+      }
+    } else if (company.onboardingStatus === "verified") {
       res.status(409).json(
-        ERR.conflict(
-          "ONBOARDING_STEP_INVALID",
-          `Finalize not allowed in status: ${company.onboardingStatus}`
-        )
-      );
-      return;
-    }
-
-    // ── 3. Guard: KYC must be complete ────────────────────────────────────────
-
-    if (!company.officerEnrollment?.verifiedAt) {
-      res.status(422).json(
-        ERR.unprocessable(
-          "KYC_INCOMPLETE",
-          "Officer identity verification has not been confirmed yet. " +
-          "Please complete the Stripe Identity flow or wait for the webhook."
-        )
+        ERR.conflict("ONBOARDING_STEP_INVALID", "Company is already verified")
       );
       return;
     }
@@ -240,13 +264,37 @@ export function makeFinalizeHandler(deps: {
     }
 
     // ── 10. Advance company to verified ───────────────────────────────────────
+    // PFL-103: also write `status: 'verified'` (the VERIFY-side enum field
+    // shapeCompany reads) alongside `onboardingStatus`. Without it the
+    // company never resolves at verify time.
 
     await updateCompany(companyId, {
       onboardingStatus: "verified",
+      status:           "verified",
       verifiedAt:       now,
       anchorTxHash:     anchorTxHash || undefined,
       anchorBlockNumber: anchorBlockNumber || undefined,
     });
+
+    // ── 10b. Link the owner's user doc to this company (PFL-103, fixes D+E) ────
+    // The extension auth handler reads companyId from users/{uid} on the
+    // existing-user path; new users get DEMO_COMPANY_ID. Seeding the owner's
+    // user doc here means that once they auth via the extension they sign
+    // under the REAL company, and the owner is shapeUser-resolvable at
+    // verify time (companyId + displayName + role + status all present).
+    // merge:true so we never clobber devices[] enrolled later.
+    await firestore.collection("users").doc(userId).set(
+      {
+        userId,
+        companyId,
+        email:       company.ownerEmail,
+        displayName: deriveDisplayNameFromEmail(company.ownerEmail),
+        role:        "owner",
+        status:      "active",
+        updatedAt:   now,
+      },
+      { merge: true },
+    );
 
     // ── 11. Respond ───────────────────────────────────────────────────────────
 
