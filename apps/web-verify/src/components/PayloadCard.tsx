@@ -58,12 +58,9 @@ function EmailCard({ payload }: { payload: EmailPayload }) {
         <Row label="Issued" value={formatTimestamp(payload.issuedAt)} />
         <Row label="Expires" value={formatTimestamp(payload.expiresAt)} />
       </dl>
-      {payload.body && (
-        <div className="mt-4 p-3 bg-gray-50 rounded-lg">
-          <p className="text-xs font-medium text-gray-500 mb-2">Message body</p>
-          <p className="text-sm text-gray-800 whitespace-pre-wrap">{payload.body}</p>
-        </div>
-      )}
+      {/* Privacy: the message body is never displayed on the public
+          verify page. Non-wire emails show only the metadata above;
+          wire instructions show only the structured wire fields below. */}
       {payload.isWireInstruction && payload.wirePayload && (
         <div className="mt-4">
           <WireCard payload={payload.wirePayload} />
