@@ -20,7 +20,12 @@ import {
 } from './invitations-fixtures';
 import { sleep } from './fixtures';
 
-const API_BASE = '/v1/invitations';
+// PFL-110: a relative '/v1/invitations' hits Firebase Hosting (index.html),
+// not the Functions backend — point at the deployed `api` function, with a
+// VITE_API_BASE override. Mirrors apps/web-admin/src/api/client.ts.
+const API_BASE = import.meta.env.VITE_API_BASE
+  ? `${import.meta.env.VITE_API_BASE}/v1/invitations`
+  : 'https://us-central1-proofline-cdabb.cloudfunctions.net/api/v1/invitations';
 const FIXTURE_LATENCY_MS = 600;
 
 // Bulk constraints from PRD §6.7 F-INV-06.
