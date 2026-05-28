@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Field } from '../../components/Field';
 import { PrimaryButton } from '../../components/PrimaryButton';
 import { SecondaryButton } from '../../components/SecondaryButton';
+import { SkipDemoButton } from '../../components/SkipDemoButton';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { LoadingDots } from '../../components/LoadingDots';
 import { enrollOfficer } from '../../api/client';
@@ -18,6 +19,7 @@ interface Props {
   }) => void;
   onAdvance: () => void;
   onBack: () => void;
+  onSkip: () => void;
 }
 
 type Phase = 'pick-officer' | 'launching' | 'verifying' | 'done' | 'failed';
@@ -26,7 +28,7 @@ const FIXTURE_MODE =
   typeof window !== 'undefined' &&
   new URLSearchParams(window.location.search).get('fixture') === 'happy-path';
 
-export function StepKYC({ state, onSetResult, onAdvance, onBack }: Props) {
+export function StepKYC({ state, onSetResult, onAdvance, onBack, onSkip }: Props) {
   const [phase, setPhase] = useState<Phase>(state.kycStatus === 'verified' ? 'done' : 'pick-officer');
   const [officerEmail, setOfficerEmail] = useState(
     state.officerEmail || (state.kybOfficers[0] ? '' : ''),
@@ -207,6 +209,8 @@ export function StepKYC({ state, onSetResult, onAdvance, onBack }: Props) {
           <PrimaryButton onClick={() => setPhase('pick-officer')}>Try again</PrimaryButton>
         )}
       </div>
+
+      {phase !== 'done' && <SkipDemoButton onClick={onSkip} />}
     </section>
   );
 }

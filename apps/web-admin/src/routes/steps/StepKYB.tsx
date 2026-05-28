@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { PrimaryButton } from '../../components/PrimaryButton';
 import { SecondaryButton } from '../../components/SecondaryButton';
+import { SkipDemoButton } from '../../components/SkipDemoButton';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { LoadingDots } from '../../components/LoadingDots';
 import { runKyb } from '../../api/client';
@@ -17,9 +18,10 @@ interface Props {
   }) => void;
   onAdvance: () => void;
   onBack: () => void;
+  onSkip: () => void;
 }
 
-export function StepKYB({ state, onSetResult, onAdvance, onBack }: Props) {
+export function StepKYB({ state, onSetResult, onAdvance, onBack, onSkip }: Props) {
   const [busy, setBusy] = useState(false);
   const [apiErr, setApiErr] = useState<{ code: string; message: string } | null>(null);
   const hasResult = state.kybVendorRef !== null;
@@ -90,6 +92,8 @@ export function StepKYB({ state, onSetResult, onAdvance, onBack }: Props) {
           <PrimaryButton onClick={onAdvance}>Continue → Officer identity</PrimaryButton>
         )}
       </div>
+
+      {!hasResult && <SkipDemoButton onClick={onSkip} />}
     </section>
   );
 }

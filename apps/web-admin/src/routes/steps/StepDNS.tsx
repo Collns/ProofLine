@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CopyableCode } from '../../components/CopyableCode';
 import { PrimaryButton } from '../../components/PrimaryButton';
 import { SecondaryButton } from '../../components/SecondaryButton';
+import { SkipDemoButton } from '../../components/SkipDemoButton';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { LoadingDots } from '../../components/LoadingDots';
 import { verifyDns } from '../../api/client';
@@ -14,12 +15,13 @@ interface Props {
   onMarkVerified: (at: number) => void;
   onAdvance: () => void;
   onBack: () => void;
+  onSkip: () => void;
 }
 
 const POLL_MS = 30_000;
 const TROUBLESHOOT_AFTER_MS = 5 * 60 * 1000;
 
-export function StepDNS({ state, onMarkVerified, onAdvance, onBack }: Props) {
+export function StepDNS({ state, onMarkVerified, onAdvance, onBack, onSkip }: Props) {
   const [busy, setBusy] = useState(false);
   const [hasStartedPolling, setHasStartedPolling] = useState(false);
   const [lastChecked, setLastChecked] = useState<number | null>(null);
@@ -177,6 +179,8 @@ export function StepDNS({ state, onMarkVerified, onAdvance, onBack }: Props) {
       <div className="flex justify-between">
         <SecondaryButton onClick={onBack} disabled={busy}>Back</SecondaryButton>
       </div>
+
+      <SkipDemoButton onClick={onSkip} />
     </section>
   );
 }

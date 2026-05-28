@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Field } from '../../components/Field';
 import { PrimaryButton } from '../../components/PrimaryButton';
 import { SecondaryButton } from '../../components/SecondaryButton';
+import { SkipDemoButton } from '../../components/SkipDemoButton';
 import { ErrorBanner } from '../../components/ErrorBanner';
 import { verifyEmail, verifyEmailCode } from '../../api/client';
 import { ApiError } from '../../api/types';
@@ -12,13 +13,14 @@ interface Props {
   onMarkVerified: (at: number) => void;
   onAdvance: () => void;
   onBack: () => void;
+  onSkip: () => void;
 }
 
 // Note on spec divergence: the spec asks for two codes (admin@ + postmaster@)
 // but the API on main sends a SINGLE 6-digit code to ownerEmail. We follow
 // the API. Caller flagged this in the discovery report — see README.
 
-export function StepEmail({ state, onMarkVerified, onAdvance, onBack }: Props) {
+export function StepEmail({ state, onMarkVerified, onAdvance, onBack, onSkip }: Props) {
   const [sent, setSent] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [code, setCode] = useState('');
@@ -137,6 +139,8 @@ export function StepEmail({ state, onMarkVerified, onAdvance, onBack }: Props) {
       <div className="flex justify-between">
         <SecondaryButton onClick={onBack} disabled={busy}>Back</SecondaryButton>
       </div>
+
+      <SkipDemoButton onClick={onSkip} />
     </section>
   );
 }

@@ -45,6 +45,11 @@ export function OnboardingWizard() {
           }
           onAdvance={() => dispatch({ type: 'ADVANCE_STEP' })}
           onBack={() => dispatch({ type: 'GO_BACK_STEP' })}
+          onSkip={() => {
+            // Demo skip: mark verified now (no real DNS lookup) and advance.
+            dispatch({ type: 'MARK_DNS_VERIFIED', payload: { at: Date.now() } });
+            dispatch({ type: 'ADVANCE_STEP' });
+          }}
         />
       )}
 
@@ -56,6 +61,11 @@ export function OnboardingWizard() {
           }
           onAdvance={() => dispatch({ type: 'ADVANCE_STEP' })}
           onBack={() => dispatch({ type: 'GO_BACK_STEP' })}
+          onSkip={() => {
+            // Demo skip: mark verified now (no real code sent) and advance.
+            dispatch({ type: 'MARK_EMAIL_VERIFIED', payload: { at: Date.now() } });
+            dispatch({ type: 'ADVANCE_STEP' });
+          }}
         />
       )}
 
@@ -65,6 +75,16 @@ export function OnboardingWizard() {
           onSetResult={(payload) => dispatch({ type: 'SET_KYB_RESULT', payload })}
           onAdvance={() => dispatch({ type: 'ADVANCE_STEP' })}
           onBack={() => dispatch({ type: 'GO_BACK_STEP' })}
+          onSkip={() => {
+            // Demo skip: no Middesk call. Set a passing status with a
+            // sentinel vendorRef so downstream steps / finalize see KYB as
+            // satisfied and know it was demo-skipped.
+            dispatch({
+              type: 'SET_KYB_RESULT',
+              payload: { vendorRef: 'demo-skipped', status: 'approved', officers: [] },
+            });
+            dispatch({ type: 'ADVANCE_STEP' });
+          }}
         />
       )}
 
@@ -74,6 +94,19 @@ export function OnboardingWizard() {
           onSetResult={(payload) => dispatch({ type: 'SET_KYC_RESULT', payload })}
           onAdvance={() => dispatch({ type: 'ADVANCE_STEP' })}
           onBack={() => dispatch({ type: 'GO_BACK_STEP' })}
+          onSkip={() => {
+            // Demo skip: no Stripe Identity session. Set a passing status
+            // with a sentinel vendorRef so finalize sees KYC as satisfied.
+            dispatch({
+              type: 'SET_KYC_RESULT',
+              payload: {
+                vendorRef: 'demo-skipped',
+                status: 'verified',
+                officerEmail: state.officerEmail || state.ownerEmail || '',
+              },
+            });
+            dispatch({ type: 'ADVANCE_STEP' });
+          }}
         />
       )}
 
