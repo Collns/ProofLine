@@ -12,10 +12,40 @@ import { readComposeId } from './shared.js';
 // walks current compose containers — both floating dialogs AND inline
 // reply/forward boxes (PFL-071) — and idempotently injects the button.
 
+// Cached auth flag. The Sign button is only injected when the user is
+// connected. chrome.runtime.sendMessage is async, so we cannot query it
+// inside the synchronous sweep — instead we cache the result and refresh
+// it on a timer + on the AUTH_LOGOUT broadcast.
+let isAuthenticated = false;
+const AUTH_REFRESH_MS = 30_000;
+
+function refreshAuthStatus(): void {
+  try {
+    chrome.runtime.sendMessage({ type: 'GET_AUTH_STATUS' }, (response) => {
+      if (chrome.runtime.lastError) {
+        // SW asleep / not reachable — leave the flag as-is.
+        return;
+      }
+      const next = Boolean(response && (response as { authenticated?: boolean }).authenticated);
+      if (next !== isAuthenticated) {
+        isAuthenticated = next;
+        // Auth state changed — run a sweep so the button appears/clears
+        // without waiting for the next Gmail DOM mutation.
+        sweep();
+      }
+    });
+  } catch {
+    // sendMessage can throw if the extension context is invalidated
+    // (e.g. during reload). Non-fatal.
+  }
+}
+
 function sweep(): void {
-  const composes = findComposeContainers(document);
-  for (const compose of composes) {
-    tryInject(compose);
+  if (isAuthenticated) {
+    const composes = findComposeContainers(document);
+    for (const compose of composes) {
+      tryInject(compose);
+    }
   }
   sweepInboundMessages(document);
 }
@@ -58,6 +88,12 @@ function listenForBackgroundMessages(): void {
       sendResponse({ ok: true });
       return false;
     }
+    if (message.type === 'AUTH_LOGOUT') {
+      isAuthenticated = false;
+      log('content', 'auth logout broadcast — Sign button disabled');
+      sendResponse({ ok: true });
+      return false;
+    }
     return false;
   });
 }
@@ -65,11 +101,17 @@ function listenForBackgroundMessages(): void {
 function start(): void {
   log('content', 'ProofLine content script loaded');
 
-  // Run once on load — Gmail may already have a compose open
-  // (e.g., after extension reload).
+  listenForBackgroundMessages();
+
+  // Resolve auth status, then sweep (refreshAuthStatus runs sweep() itself
+  // when the flag flips). Also run an initial sweep for inbound-message
+  // badges, which don't depend on auth.
+  refreshAuthStatus();
   sweep();
 
-  listenForBackgroundMessages();
+  // Periodically re-check auth so a login/logout in another surface
+  // propagates even if the AUTH_LOGOUT broadcast was missed (SW asleep).
+  setInterval(refreshAuthStatus, AUTH_REFRESH_MS);
 
   const observer = new MutationObserver(() => {
     sweep();
