@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
-import { ErrorBanner } from '../components/ErrorBanner';
 import { InvitationCard } from '../components/InvitationCard';
 import { NetworkCoverageMeter } from '../components/NetworkCoverageMeter';
 import {
@@ -9,7 +8,6 @@ import {
   listInvitations,
 } from '../api/invitations-client';
 import type { Invitation, NetworkStats } from '../api/invitations-types';
-import { ApiError } from '../api/types';
 
 const RECENT_LIMIT = 5;
 
@@ -17,10 +15,27 @@ const RECENT_LIMIT = 5;
 // Priority: ?company= URL param → localStorage 'proofline-company-name'
 // → generic fallback. (TODO(PFL-AUTH): pull legalName from the
 // authenticated company once login lands.)
+// We read the param from BOTH window.location.search AND any query string
+// embedded in the hash, so it works whether the app is served via path or
+// hash routing (and survives a Firebase Hosting SPA rewrite).
+function readQueryParam(name: string): string | null {
+  if (typeof window === 'undefined') return null;
+  const fromSearch = new URLSearchParams(window.location.search).get(name);
+  if (fromSearch && fromSearch.trim().length > 0) return fromSearch.trim();
+  // Hash may look like "#/dashboard?company=Acme%20Title" — parse its query.
+  const hash = window.location.hash;
+  const qIdx = hash.indexOf('?');
+  if (qIdx !== -1) {
+    const fromHash = new URLSearchParams(hash.slice(qIdx + 1)).get(name);
+    if (fromHash && fromHash.trim().length > 0) return fromHash.trim();
+  }
+  return null;
+}
+
 function resolveCompanyName(): string {
+  const fromParam = readQueryParam('company');
+  if (fromParam) return fromParam;
   if (typeof window !== 'undefined') {
-    const fromParam = new URLSearchParams(window.location.search).get('company');
-    if (fromParam && fromParam.trim().length > 0) return fromParam.trim();
     const fromStorage = window.localStorage.getItem('proofline-company-name');
     if (fromStorage && fromStorage.trim().length > 0) return fromStorage.trim();
   }
@@ -31,13 +46,11 @@ export function DashboardHome() {
   const [stats, setStats] = useState<NetworkStats | null>(null);
   const [recent, setRecent] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const companyName = resolveCompanyName();
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setError(null);
     Promise.all([
       getNetworkStats(),
       listInvitations({ pageSize: RECENT_LIMIT, page: 1 }),
@@ -47,21 +60,15 @@ export function DashboardHome() {
         setStats(s);
         setRecent(list.items.slice(0, RECENT_LIMIT));
       })
-      .catch((err: unknown) => {
+      .catch(() => {
         if (cancelled) return;
-        // PFL-110: the invitations backend isn't deployed yet. Treat
-        // API/network failures as "no data" (empty defaults) rather than
-        // surfacing a scary red banner — the dashboard is still usable.
-        // Only genuinely unexpected (non-ApiError) failures show the banner.
-        if (err instanceof ApiError) {
-          setStats(emptyStats());
-          setRecent([]);
-        } else {
-          setError({
-            code:    'UNKNOWN',
-            message: err instanceof Error ? err.message : 'Failed to load dashboard.',
-          });
-        }
+        // PFL-110: the invitations backend isn't deployed yet. ANY failure
+        // — ApiError, a fetch TypeError ("Failed to fetch"), or CORS — is
+        // treated as "no data" so the dashboard always loads clean. No
+        // error banner. (TODO: restore error surfacing once the
+        // invitations API is live.)
+        setStats(emptyStats());
+        setRecent([]);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -80,8 +87,6 @@ export function DashboardHome() {
       }
     >
       <div className="space-y-6">
-        {error && <ErrorBanner code={error.code} message={error.message} />}
-
         <NetworkCoverageMeter
           stats={stats ?? emptyStats()}
           loading={loading && !stats}
