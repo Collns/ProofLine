@@ -27,7 +27,12 @@ import {
   fixtureFinalizeResponse,
 } from './fixtures';
 
-const API_BASE = '/v1/onboard';
+// PFL-104: a relative '/v1/onboard' path hits Firebase Hosting (which
+// serves index.html), not the Functions backend. Point at the deployed
+// `api` function; override per-env with VITE_API_BASE.
+const API_BASE = import.meta.env.VITE_API_BASE
+  ? `${import.meta.env.VITE_API_BASE}/v1/onboard`
+  : 'https://us-central1-proofline-cdabb.cloudfunctions.net/api/v1/onboard';
 const FIXTURE_LATENCY_MS = 800;
 
 // ── Mode detection ───────────────────────────────────────────────────────────
