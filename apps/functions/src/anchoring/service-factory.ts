@@ -146,17 +146,56 @@ export function makeFirestoreAnchorStore(): AnchorStore {
       await db.collection("anchors").doc(rec.id).set(rec);
     },
 
-    async markEventsAnchored(eventIds: string[], _anchorRecordId: string): Promise<void> {
+    async markEventsAnchored(eventIds: string[], anchorRecordId: string): Promise<void> {
       if (eventIds.length === 0) return;
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { getFirestore } = require("firebase-admin/firestore");
       const db = getFirestore();
-      // Firestore batch limit is 500 ops; chunk just in case.
-      const CHUNK = 400;
+
+      // PFL-106: the previous impl only DELETED the anchor_queue entries —
+      // the on-chain anchor coordinates never reached the signed_messages
+      // doc, so the verify page always read a null anchor → "Anchor pending"
+      // forever. Read the just-written AnchorRecord and stamp its root /
+      // txHash / blockNumber / blockTimestamp back onto each anchored
+      // envelope, THEN delete the queue entry.
+      const anchorSnap = await db.collection("anchors").doc(anchorRecordId).get();
+      const anchorData = anchorSnap.exists
+        ? (anchorSnap.data() as {
+            root?: string;
+            txHash?: string;
+            blockNumber?: number;
+            blockTimestamp?: number;
+          })
+        : null;
+
+      // Firestore batch limit is 500 ops; chunk just in case (we now do up
+      // to 2 ops per event: signed_messages.set + anchor_queue.delete).
+      const CHUNK = 200;
       for (let i = 0; i < eventIds.length; i += CHUNK) {
         const chunk = eventIds.slice(i, i + CHUNK);
+        // Resolve each queue entry's envelopeId before we delete it.
+        const queueDocs = await Promise.all(
+          chunk.map((id: string) => db.collection("anchor_queue").doc(id).get()),
+        );
         const batch = db.batch();
-        for (const id of chunk) {
+        for (let j = 0; j < chunk.length; j++) {
+          const id = chunk[j];
+          const qd = queueDocs[j];
+          if (anchorData?.root && qd.exists) {
+            const envelopeId = (qd.data() as { envelopeId?: string }).envelopeId;
+            if (envelopeId) {
+              batch.set(
+                db.collection("signed_messages").doc(envelopeId),
+                {
+                  anchorRoot:           anchorData.root,
+                  anchorTxHash:         anchorData.txHash ?? "",
+                  anchorBlockNumber:    anchorData.blockNumber ?? 0,
+                  anchorBlockTimestamp: anchorData.blockTimestamp ?? 0,
+                },
+                { merge: true },
+              );
+            }
+          }
           batch.delete(db.collection("anchor_queue").doc(id));
         }
         await batch.commit();
