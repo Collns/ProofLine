@@ -50,6 +50,17 @@ export interface VerifyEnvelopeInput {
    * this flag entirely.
    */
   trustWebauthnAtSignTime?: boolean;
+  /**
+   * PFL-106: in trust mode, the caller may supply the anchor coordinates
+   * already recorded for this envelope (root/blockNumber/timestamp stamped
+   * onto signed_messages by the anchor batch). When present it's used
+   * directly — no live `getAnchorForRoot` chain read at verify time. This
+   * lets the verify page show the REAL on-chain anchor for signed emails
+   * once the batch has run, while a not-yet-anchored envelope (no trusted
+   * anchor + null anchorRoot) still falls back to the sentinel "pending"
+   * anchor. Ignored when trustWebauthnAtSignTime is false.
+   */
+  trustedAnchor?: Anchor;
 }
 
 const SENTINEL_ANCHOR: Anchor = {
@@ -127,7 +138,10 @@ export async function verifyEnvelope(input: VerifyEnvelopeInput): Promise<Verifi
   }
 
   let anchor: Anchor;
-  if (trust && (envelope.anchorRoot === null || envelope.anchorRoot === undefined)) {
+  if (trust && input.trustedAnchor) {
+    // Anchor coordinates already recorded for this envelope (PFL-106).
+    anchor = input.trustedAnchor;
+  } else if (trust && (envelope.anchorRoot === null || envelope.anchorRoot === undefined)) {
     anchor = SENTINEL_ANCHOR;
   } else {
     const c5 = await checkAnchor(envelope, registry);
