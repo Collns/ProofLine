@@ -72,15 +72,23 @@ export interface SignFailedMessage {
   message: string;
 }
 
+// Broadcast on sign-out so content scripts drop their cached auth flag
+// and stop injecting the Sign button without waiting for a re-check.
+export interface AuthLogoutMessage {
+  type: 'AUTH_LOGOUT';
+}
+
 export type BackgroundToContentMessage =
   | PayloadSignedMessage
   | PayloadNeedsCosignMessage
-  | SignFailedMessage;
+  | SignFailedMessage
+  | AuthLogoutMessage;
 
 const KNOWN_BG_TO_CONTENT: ReadonlySet<BackgroundToContentMessage['type']> = new Set([
   'PAYLOAD_SIGNED',
   'PAYLOAD_NEEDS_COSIGN',
   'SIGN_FAILED',
+  'AUTH_LOGOUT',
 ]);
 
 export function isBackgroundToContentMessage(

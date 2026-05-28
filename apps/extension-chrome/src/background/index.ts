@@ -31,6 +31,7 @@ import {
 } from "./popup-manager.js";
 import { openPopupCeremony } from "./popup-launcher.js";
 import {
+  clearAuthToken,
   getAuthToken,
   getOrIssueAuthToken,
 } from "./auth-token.js";
@@ -104,6 +105,9 @@ interface ContentRouteResult {
   signed?:        boolean;
   loggedOut?:     boolean;
   authenticated?: boolean;
+  email?:         string;
+  companyId?:     string;
+  userId?:        string;
 }
 
 async function routeContentMessage(
@@ -121,7 +125,40 @@ async function routeContentMessage(
 
     case "GET_AUTH_STATUS": {
       const auth = await getAuthToken();
-      return { authenticated: auth !== null };
+      if (!auth) return { authenticated: false };
+      return {
+        authenticated: true,
+        email:         auth.email,
+        companyId:     auth.companyId,
+        userId:        auth.userId,
+      };
+    }
+
+    case "REQUEST_AUTH": {
+      // Opens the auth ceremony popup if needed (getOrIssueAuthToken),
+      // then reads back the persisted AuthTokenRecord. Returns the
+      // connected identity on success, or { authenticated: false } if
+      // the user cancelled / the ceremony failed (token === null).
+      const token = await getOrIssueAuthToken();
+      if (!token) return { authenticated: false };
+      const auth = await getAuthToken();
+      if (!auth) return { authenticated: false };
+      return {
+        authenticated: true,
+        email:         auth.email,
+        companyId:     auth.companyId,
+        userId:        auth.userId,
+      };
+    }
+
+    case "SIGN_OUT": {
+      await clearAuthToken();
+      await clearAllSessions();
+      // Tell every open Gmail content script to drop its cached
+      // authenticated flag so the Sign button disappears immediately
+      // without waiting for the next periodic re-check.
+      broadcastLogout();
+      return { loggedOut: true };
     }
 
     case "GET_SESSION_STATUS": {
@@ -342,6 +379,24 @@ function extractErrCode(msg: string): string {
   // Conventionally "<CODE>: <detail>" — pull the prefix.
   const idx = msg.indexOf(":");
   return idx > 0 ? msg.slice(0, idx) : msg;
+}
+
+/**
+ * Broadcast AUTH_LOGOUT to all tabs so content scripts reset their
+ * cached `isAuthenticated` flag immediately. Fire-and-forget; tabs with
+ * no ProofLine content script just ignore it (sendMessage rejects,
+ * which we swallow).
+ */
+function broadcastLogout(): void {
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs) {
+      if (tab.id == null) continue;
+      chrome.tabs.sendMessage(tab.id, { type: "AUTH_LOGOUT" }, () => {
+        // Swallow "no receiving end" errors for non-Gmail tabs.
+        void chrome.runtime.lastError;
+      });
+    }
+  });
 }
 
 async function postToTab(
