@@ -130,7 +130,14 @@ export function makeFinalizeHandler(deps: {
       res.status(404).json(ERR.notFound(`Company ${companyId} not found`));
       return;
     }
-    if (company.ownerUserId !== userId) {
+    // PFL-105: the company doc's ownerUserId is the authoritative owner
+    // (recorded at /start from the real Firebase UID). req.user.userId is
+    // the stub "dev-user" until the admin app gets real auth, so the
+    // ownership check is only meaningful — and only enforced — when NOT in
+    // demo mode. The real owner UID drives the credential + user-doc seed
+    // below regardless of mode.
+    const ownerUserId = company.ownerUserId;
+    if (!demoMode && ownerUserId !== userId) {
       res.status(403).json(ERR.forbidden());
       return;
     }
@@ -198,7 +205,7 @@ export function makeFinalizeHandler(deps: {
     const credWithoutSig: Omit<RoleCredential, "sig"> = {
       credentialId,
       companyId,
-      userId,
+      userId:       ownerUserId,
       role:         "owner",
       domain:       company.domain,
       publicKey:    "",   // owner's WebAuthn pubkey enrolled separately via /v1/webauthn/enroll
@@ -238,7 +245,7 @@ export function makeFinalizeHandler(deps: {
       {
         type:      "CREDENTIAL_ISSUED",
         companyId,
-        payload:   { credentialId, role: "owner", userId },
+        payload:   { credentialId, role: "owner", userId: ownerUserId },
         timestamp: now,
       },
     ];
@@ -268,12 +275,17 @@ export function makeFinalizeHandler(deps: {
     // shapeCompany reads) alongside `onboardingStatus`. Without it the
     // company never resolves at verify time.
 
+    // PFL-104: Firestore rejects `undefined` field values. The prior
+    // `anchorTxHash || undefined` / `anchorBlockNumber || undefined` turned
+    // the no-anchor case ("" / 0) INTO undefined → WriteBatch.update threw.
+    // Write concrete defaults instead so a stubbed/skipped anchor still
+    // persists cleanly.
     await updateCompany(companyId, {
       onboardingStatus: "verified",
       status:           "verified",
       verifiedAt:       now,
-      anchorTxHash:     anchorTxHash || undefined,
-      anchorBlockNumber: anchorBlockNumber || undefined,
+      anchorTxHash:     anchorTxHash ?? "",
+      anchorBlockNumber: anchorBlockNumber ?? 0,
     });
 
     // ── 10b. Link the owner's user doc to this company (PFL-103, fixes D+E) ────
@@ -283,9 +295,9 @@ export function makeFinalizeHandler(deps: {
     // under the REAL company, and the owner is shapeUser-resolvable at
     // verify time (companyId + displayName + role + status all present).
     // merge:true so we never clobber devices[] enrolled later.
-    await firestore.collection("users").doc(userId).set(
+    await firestore.collection("users").doc(ownerUserId).set(
       {
-        userId,
+        userId:      ownerUserId,
         companyId,
         email:       company.ownerEmail,
         displayName: deriveDisplayNameFromEmail(company.ownerEmail),

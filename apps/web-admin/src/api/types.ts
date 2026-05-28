@@ -7,6 +7,11 @@ export interface StartRequest {
   ein: string;
   state: string;        // 2-char US state code, uppercased
   ownerEmail: string;
+  // PFL-105: the real Firebase UID of the owner. The admin app has no
+  // Firebase Auth login yet, so the server's stub auth can't supply it —
+  // we pass it from the client (URL ?uid= or localStorage) so the company
+  // doc records the right owner.
+  ownerUserId?: string;
 }
 export interface StartResponse {
   companyId: string;
