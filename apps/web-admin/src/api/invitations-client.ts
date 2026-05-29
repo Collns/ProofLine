@@ -19,6 +19,7 @@ import {
   getFixtureStore,
 } from './invitations-fixtures';
 import { sleep } from './fixtures';
+import { getFirebaseAuth } from '../lib/firebase';
 
 // PFL-110: a relative '/v1/invitations' hits Firebase Hosting (index.html),
 // not the Functions backend — point at the deployed `api` function, with a
@@ -46,13 +47,21 @@ function isFixtureMode(): boolean {
   return false;
 }
 
-// ── Auth header (stub, mirrors client.ts) ────────────────────────────────────
+// ── Auth header (mirrors client.ts) ──────────────────────────────────────────
 
-function authHeader(): Record<string, string> {
-  const token =
-    typeof window !== 'undefined'
-      ? window.localStorage.getItem('firebase-id-token')
-      : null;
+// PFL-121: real Firebase ID token from the signed-in user, with a cached-
+// token and dev-placeholder fallback.
+async function authHeader(): Promise<Record<string, string>> {
+  let token: string | null = null;
+  try {
+    const current = getFirebaseAuth().currentUser;
+    if (current) token = await current.getIdToken();
+  } catch {
+    /* auth not configured / offline */
+  }
+  if (!token && typeof window !== 'undefined') {
+    token = window.localStorage.getItem('firebase-id-token');
+  }
   return { Authorization: `Bearer ${token ?? 'DEV_PLACEHOLDER_TOKEN'}` };
 }
 
@@ -75,7 +84,7 @@ async function getJson<TRes>(
 
   const response = await fetch(`${API_BASE}${path}${qs}`, {
     method:  'GET',
-    headers: { Accept: 'application/json', ...authHeader() },
+    headers: { Accept: 'application/json', ...(await authHeader()) },
   });
   return parseResponse<TRes>(response);
 }
@@ -86,7 +95,7 @@ async function postJson<TReq, TRes>(path: string, body: TReq): Promise<TRes> {
     headers: {
       'Content-Type': 'application/json',
       Accept:         'application/json',
-      ...authHeader(),
+      ...(await authHeader()),
     },
     body: JSON.stringify(body),
   });
@@ -96,7 +105,7 @@ async function postJson<TReq, TRes>(path: string, body: TReq): Promise<TRes> {
 async function deleteJson(path: string): Promise<void> {
   const response = await fetch(`${API_BASE}${path}`, {
     method:  'DELETE',
-    headers: { Accept: 'application/json', ...authHeader() },
+    headers: { Accept: 'application/json', ...(await authHeader()) },
   });
   if (!response.ok) {
     let errBody: ApiErrorBody | undefined;
