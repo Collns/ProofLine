@@ -13,6 +13,7 @@
 // before this is anything but a hackathon demo.
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
 import { getFirestore, type Firestore } from 'firebase/firestore';
+import { getAuth, type Auth } from 'firebase/auth';
 
 const FALLBACK_PROJECT_ID = 'proofline-cdabb';
 
@@ -31,6 +32,7 @@ function firebaseConfig() {
 
 let cachedApp: FirebaseApp | null = null;
 let cachedDb: Firestore | null = null;
+let cachedAuth: Auth | null = null;
 
 function getFirebaseApp(): FirebaseApp {
   if (cachedApp) return cachedApp;
@@ -42,6 +44,13 @@ export function getDb(): Firestore {
   if (cachedDb) return cachedDb;
   cachedDb = getFirestore(getFirebaseApp());
   return cachedDb;
+}
+
+// PFL-121: Firebase Auth instance for the admin login flow.
+export function getFirebaseAuth(): Auth {
+  if (cachedAuth) return cachedAuth;
+  cachedAuth = getAuth(getFirebaseApp());
+  return cachedAuth;
 }
 
 /** True when at least a web API key is configured (reads can authenticate). */
