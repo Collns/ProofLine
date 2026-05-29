@@ -26,6 +26,7 @@ import {
   fixtureEnrollOfficerResponse,
   fixtureFinalizeResponse,
 } from './fixtures';
+import { getFirebaseAuth } from '../lib/firebase';
 
 // PFL-104: a relative '/v1/onboard' path hits Firebase Hosting (which
 // serves index.html), not the Functions backend. Point at the deployed
@@ -53,17 +54,22 @@ function isFixtureMode(): boolean {
   return env === 'true' || env === '1';
 }
 
-// ── Auth header (stub) ───────────────────────────────────────────────────────
+// ── Auth header ──────────────────────────────────────────────────────────────
 //
-// TODO(PFL-AUTH): replace with real Firebase Auth. For this slice, we read a
-// token from localStorage at 'firebase-id-token' if present; otherwise fall
-// back to a dev placeholder. The real login flow is a separate ticket.
-
-function authHeader(): Record<string, string> {
-  const token =
-    typeof window !== 'undefined'
-      ? window.localStorage.getItem('firebase-id-token')
-      : null;
+// PFL-121: use the signed-in user's real Firebase ID token. Falls back to a
+// cached token in localStorage (written by AuthContext), then to a dev
+// placeholder so unauthenticated/local flows still hit the API.
+async function authHeader(): Promise<Record<string, string>> {
+  let token: string | null = null;
+  try {
+    const current = getFirebaseAuth().currentUser;
+    if (current) token = await current.getIdToken();
+  } catch {
+    /* auth not configured / offline — fall through to cached/placeholder */
+  }
+  if (!token && typeof window !== 'undefined') {
+    token = window.localStorage.getItem('firebase-id-token');
+  }
   return { Authorization: `Bearer ${token ?? 'DEV_PLACEHOLDER_TOKEN'}` };
 }
 
@@ -75,7 +81,7 @@ async function postJson<TReq, TRes>(path: string, body: TReq): Promise<TRes> {
     headers: {
       'Content-Type': 'application/json',
       Accept:         'application/json',
-      ...authHeader(),
+      ...(await authHeader()),
     },
     body: JSON.stringify(body),
   });
@@ -97,12 +103,16 @@ async function postJson<TReq, TRes>(path: string, body: TReq): Promise<TRes> {
 
 // ── Endpoints ────────────────────────────────────────────────────────────────
 
-// PFL-105: resolve the owner's real Firebase UID for the start request.
-// The admin app has no Firebase Auth login yet, so we accept the UID via
-// (1) ?uid= URL param, or (2) localStorage 'proofline-owner-uid'.
-// Returns undefined when neither is set — the server then falls back to
-// its stub-auth userId.
+// PFL-121: resolve the owner's real Firebase UID for the start request.
+// Prefer the authenticated user's UID; fall back to the legacy ?uid= URL
+// param / localStorage bridge for unauthenticated/demo flows.
 function resolveOwnerUid(): string | undefined {
+  try {
+    const uid = getFirebaseAuth().currentUser?.uid;
+    if (uid && uid.length > 0) return uid;
+  } catch {
+    /* auth not configured — fall through to param/storage */
+  }
   if (typeof window === 'undefined') return undefined;
   const fromParam = new URLSearchParams(window.location.search).get('uid');
   if (fromParam && fromParam.trim().length > 0) return fromParam.trim();
