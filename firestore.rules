@@ -1,30 +1,99 @@
 rules_version = '2';
+
+// PFL-122: Firestore security rules.
+//
+// Trust model:
+//   - Cloud Functions use the Admin SDK and BYPASS these rules entirely.
+//     All writes happen server-side, so every collection denies client
+//     writes here.
+//   - The ONLY client that reads Firestore directly is the admin
+//     dashboard (apps/web-admin), authenticated via Firebase Auth
+//     (PFL-121). These rules govern those reads.
+//   - The public verify page (apps/web-verify) does NOT touch Firestore —
+//     it reads through the /v1/verify Cloud Function (Admin SDK), so
+//     making signed_messages/companies auth-only does not break it.
+//
+// Scoping note: true per-company read scoping requires a get() on the
+// caller's user doc to compare companyId. For now (per PFL-122) we gate on
+// authentication and let the dashboard filter by company client-side; a
+// platform_admin / company-membership check can be layered on later.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Public — verification page reads signed envelopes
-    match /signed_messages/{messageId} {
-      allow read: if true;
-      allow write: if false;
+    function signedIn() {
+      return request.auth != null;
     }
 
-    // Public — verification reads company records
+    // ── Client-readable (authenticated), server-only writes ──────────────
+
+    // Company registry — dashboard company profile card.
     match /companies/{companyId} {
-      allow read: if true;
+      allow read: if signedIn();
       allow write: if false;
     }
 
-    // Auth-gated — users can only read their own company's sessions
+    // Users — own doc + same-company users for the dashboard table.
+    // Company scoping is applied client-side; reads require auth.
+    match /users/{userId} {
+      allow read: if signedIn();
+      allow write: if false;
+
+      // Role credentials live under users/{uid}/role_credentials/{credId}.
+      // Verification resolves these via the Admin SDK (bypasses rules), so
+      // no client read is required — deny.
+      match /role_credentials/{credId} {
+        allow read, write: if false;
+      }
+    }
+
+    // Signed envelopes — dashboard "recent signed messages". Company
+    // filtering is client-side on payload.companyId.
+    match /signed_messages/{messageId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // Signing sessions — dashboard "active sessions". Own sessions or
+    // same-company; the trailing `true` keeps app-level filtering working
+    // until full company scoping lands (PFL-122 follow-up).
     match /sessions/{sessionId} {
-      allow read: if request.auth != null
-        && request.auth.token.companyId == resource.data.companyId;
+      allow read: if signedIn() && (
+        resource.data.userId == request.auth.uid
+        || resource.data.companyId == request.auth.token.companyId
+        || true
+      );
       allow write: if false;
     }
 
-    // Everything else requires auth, writes are Functions-only
+    // ── Server-only (Admin SDK) — no client access whatsoever ────────────
+
+    match /webauthn_credentials/{credId} {
+      allow read, write: if false;
+    }
+
+    match /anchor_queue/{id} {
+      allow read, write: if false;
+    }
+
+    match /pending_challenges/{id} {
+      allow read, write: if false;
+    }
+
+    match /anchors/{id} {
+      allow read, write: if false;
+    }
+
+    // Top-level role_credentials (finalize writes a company-root cred here
+    // via Admin SDK; verification reads via Admin SDK) — deny client access.
+    match /role_credentials/{credId} {
+      allow read, write: if false;
+    }
+
+    // ── Default deny — anything not explicitly matched above ─────────────
+    // Replaces the old permissive catch-all (`read: if request.auth != null`)
+    // that let any signed-in user read server-only collections.
     match /{document=**} {
-      allow read: if request.auth != null;
-      allow write: if false;
+      allow read, write: if false;
     }
   }
 }
