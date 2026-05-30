@@ -5,7 +5,11 @@ import { ErrorScreen } from '../components/ErrorScreen';
 import { validateOpenerFromWindow } from '../lib/opener-validator';
 import { getFirebaseAuth } from '../lib/firebase';
 import { registerPlatformAuthenticator } from '../lib/webauthn-register';
-import { requestExtensionAuth, registerCredential } from '../api/client';
+import {
+  requestExtensionAuth,
+  registerCredential,
+  requestRegistrationChallenge,
+} from '../api/client';
 import { deliverToOpener } from '../api/postmessage';
 
 // Extension auth + first-device enrolment (PFL-061, PFL-069).
@@ -143,9 +147,15 @@ export function ExtensionAuth() {
     if (!params) return;
     setPhase({ kind: 'registering', auth });
     try {
+      // PFL-095: fetch a server-issued challenge BEFORE running the
+      // WebAuthn ceremony. The same bytes surface in clientDataJSON,
+      // and the server consumes the pending_challenges record when
+      // /v1/extension/register-credential runs below.
+      const challengeResponse = await requestRegistrationChallenge({}, auth.authToken);
       const reg = await registerPlatformAuthenticator({
-        userId: auth.userId,
-        email:  auth.email,
+        userId:       auth.userId,
+        email:        auth.email,
+        challengeB64: challengeResponse.challenge,
       });
       const stored = await registerCredential(
         {

@@ -1,14 +1,15 @@
-// WebAuthn registration helper (PFL-069).
+// WebAuthn registration helper (PFL-069 / PFL-095).
 //
 // Wraps navigator.credentials.create() with the parameter set the
 // ProofLine sign popup uses on subsequent navigator.credentials.get()
 // calls. RP ID is "proofline-sign.web.app" — see
 // apps/extension-chrome/src/shared/config.ts and SignStart.tsx.
 //
-// The challenge is generated client-side because the hackathon server
-// does not verify attestation. When the server starts verifying
-// attestation, swap the random challenge for one issued by
-// /v1/extension/registration-challenge.
+// PFL-095: the caller MUST supply a server-issued `challengeB64` from
+// POST /v1/auth/challenge. The challenge field is no longer optional —
+// the server consumes it as a single-use replay defence at
+// /v1/extension/register-credential. Generating it client-side would
+// register a credential that the server has no record of authorising.
 
 const RP_ID   = 'proofline-sign.web.app';
 const RP_NAME = 'ProofLine';
@@ -23,8 +24,10 @@ export interface RegistrationResult {
 export interface RegisterInput {
   userId:       string;
   email:        string;
-  /** Optional pre-issued challenge; otherwise a random 32-byte one is generated. */
-  challengeB64?: string;
+  /** Server-issued base64url challenge from POST /v1/auth/challenge (PFL-095).
+   *  Required — credentials registered with a client-generated challenge
+   *  are rejected by the server with CHALLENGE_INVALID. */
+  challengeB64: string;
 }
 
 export async function registerPlatformAuthenticator(
@@ -33,10 +36,14 @@ export async function registerPlatformAuthenticator(
   if (typeof navigator === 'undefined' || !navigator.credentials?.create) {
     throw new Error('WebAuthn is not supported in this browser');
   }
+  if (!input.challengeB64) {
+    throw new Error(
+      'registerPlatformAuthenticator: challengeB64 is required (PFL-095). ' +
+      'Call POST /v1/auth/challenge first.',
+    );
+  }
 
-  const challenge = input.challengeB64
-    ? b64urlToBytes(input.challengeB64)
-    : randomBytes(32);
+  const challenge = b64urlToBytes(input.challengeB64);
 
   const userIdBytes = stringToBytes(input.userId);
 
@@ -86,12 +93,6 @@ export async function registerPlatformAuthenticator(
 }
 
 // ─── base64url helpers ───────────────────────────────────────────────────────
-
-function randomBytes(n: number): Uint8Array {
-  const out = new Uint8Array(n);
-  crypto.getRandomValues(out);
-  return out;
-}
 
 function stringToBytes(s: string): Uint8Array {
   return new TextEncoder().encode(s);

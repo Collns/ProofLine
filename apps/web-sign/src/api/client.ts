@@ -10,6 +10,8 @@ import {
   type ExtensionAuthResponse,
   type RegisterCredentialRequest,
   type RegisterCredentialResponse,
+  type RegistrationChallengeRequest,
+  type RegistrationChallengeResponse,
   type ApiErrorBody,
 } from './types';
 
@@ -144,6 +146,24 @@ export function registerCredential(
 ): Promise<RegisterCredentialResponse> {
   return postJsonWithHeaders<RegisterCredentialRequest, RegisterCredentialResponse>(
     '/v1/extension/register-credential',
+    input,
+    { Authorization: `Bearer ${authToken}` },
+  );
+}
+
+// ── Server-issued WebAuthn registration challenge (PFL-095) ─────────────────
+// POST /v1/auth/challenge — must be called immediately before
+// navigator.credentials.create(). The returned `challenge` is what the
+// browser passes into PublicKeyCredentialCreationOptions; the same
+// bytes get surfaced in clientDataJSON and the register-credential
+// handler consumes the matching pending_challenges record.
+
+export function requestRegistrationChallenge(
+  input: RegistrationChallengeRequest,
+  authToken: string,
+): Promise<RegistrationChallengeResponse> {
+  return postJsonWithHeaders<RegistrationChallengeRequest, RegistrationChallengeResponse>(
+    '/v1/auth/challenge',
     input,
     { Authorization: `Bearer ${authToken}` },
   );
