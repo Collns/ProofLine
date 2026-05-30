@@ -8,7 +8,7 @@ function makeRecord(overrides: Partial<ChallengeRecord> = {}): ChallengeRecord {
     challenge: 'test-challenge',
     userId: 'user-1',
     purpose: 'registration',
-    rpId: 'proofline.web.app',
+    rpId: 'proofline-sign.web.app',
     createdAt: now,
     expiresAt: now + 60_000,
     consumed: false,
