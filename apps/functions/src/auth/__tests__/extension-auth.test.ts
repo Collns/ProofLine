@@ -25,15 +25,43 @@ function makeFirestoreMock() {
           exists: Boolean(store[col]?.[id]),
           data:   () => store[col]?.[id] ?? null,
         }),
-        set:    async (data: unknown, _opts?: unknown) => {
+        set:    async (data: unknown, opts?: { merge?: boolean }) => {
           store[col] = store[col] ?? {};
-          store[col][id] = data;
+          if (opts?.merge && store[col][id]) {
+            store[col][id] = { ...(store[col][id] as object), ...(data as object) };
+          } else {
+            store[col][id] = data as Record<string, unknown>;
+          }
         },
         update: async (patch: Record<string, unknown>) => {
           if (!store[col]?.[id]) throw new Error(`Doc ${col}/${id} not found`);
           store[col][id] = { ...(store[col][id] as object), ...patch };
         },
       }),
+      // PFL-067: minimal where().limit().get() shim — only supports
+      // exact-match on a single field, which is all resolveCompanyIdByEmail
+      // exercises. Returns docs in insertion order.
+      where: (field: string, op: string, value: unknown) => {
+        const matches = () => {
+          const docs = store[col] ?? {};
+          return Object.entries(docs)
+            .filter(([, data]) => op === "==" && (data as Record<string, unknown>)[field] === value)
+            .map(([id, data]) => ({ id, data: () => data }));
+        };
+        const build = (limit: number) => ({
+          get: async () => {
+            const docs = matches().slice(0, limit);
+            return { empty: docs.length === 0, docs };
+          },
+        });
+        return {
+          limit: (n: number) => build(n),
+          get:   async () => {
+            const docs = matches();
+            return { empty: docs.length === 0, docs };
+          },
+        };
+      },
     }),
   };
 }
@@ -102,9 +130,13 @@ beforeEach(() => {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("POST /v1/extension/auth", () => {
-  it("returns a JWS authToken + userId + companyId for a valid ID token", async () => {
+  it("auto-links a new user to a company that matches their email domain (PFL-067)", async () => {
+    store["companies"] = {
+      "co-acme": { companyId: "co-acme", domain: "acme.com" },
+    };
+
     const app = buildApp({
-      verifyIdToken: async () => ({ uid: "user-abc", email: "alice@example.com" }),
+      verifyIdToken: async () => ({ uid: "user-abc", email: "alice@acme.com" }),
     });
 
     const res = await request(app)
@@ -114,31 +146,64 @@ describe("POST /v1/extension/auth", () => {
 
     expect(res.body.authToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     expect(res.body.userId).toBe("user-abc");
-    expect(typeof res.body.companyId).toBe("string");
-    expect(res.body.companyId.length).toBeGreaterThan(0);
-    expect(typeof res.body.credentialId).toBe("string");
-    expect(res.body.email).toBe("alice@example.com");
+    expect(res.body.companyId).toBe("co-acme");
+    expect(res.body.email).toBe("alice@acme.com");
+    expect(res.body.needsOnboarding).toBeUndefined();
 
-    // The user record should have been auto-created in Firestore.
-    expect(store["users"]?.["user-abc"]).toBeDefined();
-    expect((store["users"]!["user-abc"] as { email: string }).email).toBe(
-      "alice@example.com",
-    );
+    const userDoc = store["users"]!["user-abc"] as Record<string, unknown>;
+    expect(userDoc["companyId"]).toBe("co-acme");
+    expect(userDoc["status"]).toBe("active");
     // PFL-084: fresh user docs persist `devices: []`, NOT a flat
     // `credentialId` placeholder string.
-    const userDoc = store["users"]!["user-abc"] as Record<string, unknown>;
     expect(userDoc["credentialId"]).toBeUndefined();
     expect(userDoc["devices"]).toEqual([]);
     // PFL-088: fresh user docs persist policy fields so validatePolicy
     // doesn't have to apply the firestore-policy-context.ts safety-net
     // defaults — and so the wire path doesn't trip at $0.
     expect(userDoc["role"]).toBe("owner");
-    expect(userDoc["status"]).toBe("active");
     expect(userDoc["wireLimitUsd"]).toBe(500_000);
     expect(userDoc["dailyLimitUsd"]).toBe(2_000_000);
     // Response still surfaces the placeholder so the popup knows it must
     // run a WebAuthn registration before signing.
     expect(res.body.credentialId).toBe("placeholder-credential-id");
+  });
+
+  it("flags needsOnboarding when no company matches the email domain (PFL-067)", async () => {
+    const app = buildApp({
+      verifyIdToken: async () => ({ uid: "user-no-co", email: "bob@unknown-co.com" }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/auth")
+      .send({ idToken: "fake.firebase.idtoken.value", extInstallId: "ext-install-1" })
+      .expect(200);
+
+    expect(res.body.companyId).toBe("");
+    expect(res.body.needsOnboarding).toBe(true);
+
+    const userDoc = store["users"]!["user-no-co"] as Record<string, unknown>;
+    expect(userDoc["companyId"]).toBe("");
+    expect(userDoc["status"]).toBe("pending");
+  });
+
+  it("never auto-links public email providers like gmail.com (PFL-067)", async () => {
+    // Even if a malicious / mis-onboarded "gmail.com" company exists,
+    // gmail users must NOT be linked into it.
+    store["companies"] = {
+      "co-gmail-trap": { companyId: "co-gmail-trap", domain: "gmail.com" },
+    };
+
+    const app = buildApp({
+      verifyIdToken: async () => ({ uid: "user-gmail", email: "someone@gmail.com" }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/auth")
+      .send({ idToken: "fake.firebase.idtoken.value", extInstallId: "ext-install-1" })
+      .expect(200);
+
+    expect(res.body.companyId).toBe("");
+    expect(res.body.needsOnboarding).toBe(true);
   });
 
   it("returns 400 when idToken is missing from the body", async () => {
@@ -230,5 +295,68 @@ describe("POST /v1/extension/auth", () => {
     expect(userDoc["wireLimitUsd"]).toBeUndefined();
     expect(userDoc["dailyLimitUsd"]).toBeUndefined();
     expect(userDoc["status"]).toBeUndefined();
+  });
+
+  it("re-resolves companyId for existing users stamped with the legacy 'dev-company' sentinel (PFL-067)", async () => {
+    store["companies"] = {
+      "co-acme": { companyId: "co-acme", domain: "acme.com" },
+    };
+    store["users"] = {
+      "user-legacy": {
+        userId:    "user-legacy",
+        email:     "dave@acme.com",
+        companyId: "dev-company",
+        devices:   [],
+        createdAt: 1700000000000,
+        updatedAt: 1700000000000,
+      },
+    };
+
+    const app = buildApp({
+      verifyIdToken: async () => ({ uid: "user-legacy", email: "dave@acme.com" }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/auth")
+      .send({ idToken: "fake.firebase.idtoken.value", extInstallId: "ext-install-x" })
+      .expect(200);
+
+    expect(res.body.companyId).toBe("co-acme");
+    expect(res.body.needsOnboarding).toBeUndefined();
+
+    const userDoc = store["users"]!["user-legacy"] as Record<string, unknown>;
+    expect(userDoc["companyId"]).toBe("co-acme");
+  });
+
+  it("leaves an existing user's real companyId alone even if the domain doesn't match (PFL-067)", async () => {
+    // An owner may have manually set the user's companyId to something
+    // their email domain wouldn't resolve to (e.g. consultant working
+    // under a client's company). The refresh path must not clobber that.
+    store["companies"] = {
+      "co-other": { companyId: "co-other", domain: "other.com" },
+    };
+    store["users"] = {
+      "user-consultant": {
+        userId:    "user-consultant",
+        email:     "alex@personal-domain.com",
+        companyId: "co-other",
+        devices:   [],
+        createdAt: 1700000000000,
+        updatedAt: 1700000000000,
+      },
+    };
+
+    const app = buildApp({
+      verifyIdToken: async () => ({ uid: "user-consultant", email: "alex@personal-domain.com" }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/auth")
+      .send({ idToken: "fake.firebase.idtoken.value", extInstallId: "ext-install-y" })
+      .expect(200);
+
+    expect(res.body.companyId).toBe("co-other");
+    const userDoc = store["users"]!["user-consultant"] as Record<string, unknown>;
+    expect(userDoc["companyId"]).toBe("co-other");
   });
 });

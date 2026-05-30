@@ -63,6 +63,11 @@ export interface ExtensionAuthResponse {
   companyId:    string;
   credentialId: string;
   email:        string;
+  // PFL-067: true when the user's email domain didn't match any onboarded
+  // company (or was a public provider like gmail.com). The extension popup
+  // uses this to show "Your company isn't on ProofLine yet" instead of
+  // silently dropping the user into a demo workspace.
+  needsOnboarding?: boolean;
 }
 
 // ─── Stored user record (subset we care about) ───────────────────────────────
@@ -70,6 +75,9 @@ export interface ExtensionAuthResponse {
 interface UserDoc {
   userId:    string;
   email:     string;
+  // PFL-067: may be "" when the user's email domain didn't match any
+  // onboarded company. The signing path treats an empty companyId as
+  // un-onboarded and refuses to mint signatures.
   companyId: string;
   // PFL-102: verification's shapeUser() requires displayName — without it
   // the user resolves to null → USER_UNKNOWN at verify time.
@@ -108,10 +116,81 @@ const DEFAULT_DAILY_LIMIT_USD = 2_000_000;
 // until the first real enrolment lands in register-credential.handler.ts.
 const PLACEHOLDER_CREDENTIAL_ID = "placeholder-credential-id";
 
-// Hackathon-mode companyId for users who haven't completed onboarding.
-// Mirrors the stub used by stubAuthMiddleware in index.ts so the rest of
-// the pipeline (policy, signing) keeps working.
-const DEMO_COMPANY_ID = "dev-company";
+// PFL-067: legacy hackathon companyId. Kept ONLY as a sentinel so the
+// existing-user path can detect docs that were stamped with it before
+// domain-based linking landed and re-resolve them. Do NOT use as a
+// fallback when creating new users — un-linked users get companyId: ""
+// and needsOnboarding: true on the response.
+const LEGACY_DEMO_COMPANY_ID = "dev-company";
+
+// PFL-067: public email providers we never auto-link. A "yahoo.com"
+// company sneaking into the registry would otherwise grab every Yahoo
+// user the first time they install the extension. Keep this list narrow
+// — real corporate domains shouldn't appear here.
+const PUBLIC_EMAIL_DOMAINS = new Set<string>([
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "msn.com",
+  "yahoo.com",
+  "yahoo.co.uk",
+  "ymail.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "aol.com",
+  "proton.me",
+  "protonmail.com",
+  "pm.me",
+  "fastmail.com",
+  "zoho.com",
+  "gmx.com",
+  "gmx.de",
+  "mail.com",
+  "yandex.com",
+  "yandex.ru",
+  "qq.com",
+  "163.com",
+  "126.com",
+  "duck.com",
+  "tutanota.com",
+]);
+
+function extractEmailDomain(email: string | undefined): string | null {
+  if (!email) return null;
+  const at = email.lastIndexOf("@");
+  if (at < 0 || at === email.length - 1) return null;
+  const domain = email.slice(at + 1).trim().toLowerCase();
+  return domain.length > 0 ? domain : null;
+}
+
+function isPublicEmailDomain(domain: string): boolean {
+  return PUBLIC_EMAIL_DOMAINS.has(domain);
+}
+
+/**
+ * Look up the company a user's email domain belongs to. Returns null
+ * when the email is missing, the domain is a public provider, or no
+ * company has registered that domain.
+ */
+export async function resolveCompanyIdByEmail(
+  firestore: FirebaseFirestore.Firestore,
+  email: string | undefined,
+): Promise<string | null> {
+  const domain = extractEmailDomain(email);
+  if (!domain || isPublicEmailDomain(domain)) return null;
+
+  const snap = await firestore
+    .collection("companies")
+    .where("domain", "==", domain)
+    .limit(1)
+    .get();
+  if (snap.empty) return null;
+  const data = snap.docs[0].data() as { companyId?: string };
+  return data.companyId ?? snap.docs[0].id ?? null;
+}
 
 // ─── Token issuance ──────────────────────────────────────────────────────────
 
@@ -237,15 +316,38 @@ export function makeExtensionAuthHandler(deps: ExtensionAuthHandlerDeps = {}) {
         user.displayName = displayName;
         await userRef.set({ displayName, updatedAt: Date.now() }, { merge: true });
       }
+      // PFL-067: re-resolve companyId for users that were stamped with the
+      // legacy DEMO sentinel (or got an empty companyId before this lookup
+      // existed). Only writes when we find a real match — we never clobber
+      // a real companyId an owner already set.
+      const needsReresolve =
+        !user.companyId ||
+        user.companyId === LEGACY_DEMO_COMPANY_ID;
+      if (needsReresolve) {
+        const resolved = await resolveCompanyIdByEmail(firestore, user.email || decoded.email);
+        if (resolved && resolved !== user.companyId) {
+          user.companyId = resolved;
+          await userRef.set(
+            { companyId: resolved, updatedAt: Date.now() },
+            { merge: true },
+          );
+        }
+      }
     } else {
+      const resolvedCompanyId = await resolveCompanyIdByEmail(firestore, decoded.email);
       const now = Date.now();
       user = {
         userId:        decoded.uid,
         email:         decoded.email ?? "",
         displayName:   deriveDisplayName({ name: decoded.name, email: decoded.email }),
-        companyId:     DEMO_COMPANY_ID,
+        // PFL-067: empty string when no company matched. The signing path
+        // gates on a non-empty companyId, so un-linked users can auth but
+        // can't sign until they're invited / onboarded.
+        companyId:     resolvedCompanyId ?? "",
         role:          DEFAULT_ROLE,
-        status:        DEFAULT_STATUS,
+        // PFL-067: "pending" until the user is linked to a company. Once a
+        // domain match exists we treat them as active immediately.
+        status:        resolvedCompanyId ? DEFAULT_STATUS : "pending",
         wireLimitUsd:  DEFAULT_WIRE_LIMIT_USD,
         dailyLimitUsd: DEFAULT_DAILY_LIMIT_USD,
         devices:       [],
@@ -276,6 +378,12 @@ export function makeExtensionAuthHandler(deps: ExtensionAuthHandlerDeps = {}) {
       credentialId: primaryCredentialId,
       email:        user.email ?? decoded.email ?? "",
     };
+    // PFL-067: tell the popup the user has no company yet so it can
+    // surface a "your company isn't on ProofLine yet" message instead of
+    // letting them try (and silently fail) to sign.
+    if (!user.companyId) {
+      response.needsOnboarding = true;
+    }
     res.status(200).json(response);
   };
 }
