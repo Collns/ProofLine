@@ -74,6 +74,9 @@ import { makeExtensionAuthHandler } from "./auth/extension-auth.handler.js";
 // --- PFL-069: WebAuthn credential registration
 import { makeRegisterCredentialHandler } from "./auth/register-credential.handler.js";
 
+// --- PFL-095: server-issued WebAuthn registration challenges
+import { makeRegistrationChallengeHandler } from "./auth/registration-challenge.handler.js";
+
 // --- PFL-087: real Bearer auth for signing routes
 import { requireExtensionAuth } from "./auth/require-extension-auth.middleware.js";
 
@@ -359,6 +362,32 @@ publicApp.post(
   },
 );
 publicApp.options("/v1/extension/register-credential", corsMiddleware);
+
+// PFL-095: server-issued WebAuthn registration challenges. The popup
+// calls this BEFORE running navigator.credentials.create() and then
+// posts the resulting attestation (carrying the same challenge in
+// clientDataJSON) to /v1/extension/register-credential, where the
+// challenge is single-use consumed.
+let cachedRegistrationChallengeHandler:
+  | ((req: express.Request, res: express.Response) => Promise<void>)
+  | null = null;
+function registrationChallengeHandler(): (
+  req: express.Request,
+  res: express.Response,
+) => Promise<void> {
+  if (cachedRegistrationChallengeHandler) return cachedRegistrationChallengeHandler;
+  cachedRegistrationChallengeHandler = makeRegistrationChallengeHandler();
+  return cachedRegistrationChallengeHandler;
+}
+
+publicApp.post(
+  "/v1/auth/challenge",
+  corsMiddleware,
+  (req, res, next) => {
+    registrationChallengeHandler()(req, res).catch(next);
+  },
+);
+publicApp.options("/v1/auth/challenge", corsMiddleware);
 
 // ─── PFL-062: Cosign routes (/v1/cosign/*) ───────────────────────────────────
 //

@@ -95,6 +95,25 @@ export interface RegisterCredentialResponse {
   credentialId: string;
 }
 
+// ── /v1/auth/challenge ──────────────────────────────────────────────────────
+// PFL-095: server-issued WebAuthn registration challenge. The popup MUST
+// call this immediately before navigator.credentials.create() and pass
+// `challenge` into the WebAuthn options. The same value gets surfaced
+// back in clientDataJSON, where /v1/extension/register-credential reads
+// it and consumes the matching pending_challenges record (single-use).
+
+export interface RegistrationChallengeRequest {
+  /** Optional pre-binding. Usually omitted — the browser doesn't know
+   *  the credentialId until after credentials.create resolves. */
+  credentialId?: string;
+}
+
+export interface RegistrationChallengeResponse {
+  challengeId: string;
+  challenge:   string; // base64url
+  expiresAt:   number; // ms epoch
+}
+
 // ── Error envelope ───────────────────────────────────────────────────────────
 
 export interface ApiErrorBody {
