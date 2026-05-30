@@ -499,6 +499,46 @@ describe('PFL-125: WebAuthn signature verification', () => {
     if (result.ok) expect(result.state).toBe('suspected_spoof');
   });
 
+  it('verifies when challenge is the raw canonical payload bytes (production sign-handler encoding)', async () => {
+    // PFL-125 follow-up: apps/functions/src/signing/handlers/sign.handler.ts
+    // ships `challenge = base64url(canonicalBytes)`, NOT base64url(hash).
+    // The verifier must accept this and bind via sha256(challengeBytes)
+    // == decode(payloadHash). Without that, the verify page renders
+    // every production-signed envelope as "Suspected Spoof".
+    const s = buildScenario();
+    const payload = makeEmailPayload({ companyId: 'company-a' });
+    const payloadHash = hashPayload(payload);                  // base64url(sha256(canonicalBytes))
+    const canonicalBytes = canonicalize(payload);
+    const challengeAsCanonical = Buffer.from(canonicalBytes).toString('base64url');
+    const { sig, authenticatorData, clientDataJSON } = buildWebauthnSig({
+      privateKey: s.userAKp.privateKey,
+      challenge:  challengeAsCanonical,
+    });
+    const envelope: SignedEnvelope = {
+      v: 1,
+      payloadType: 'email',
+      payload,
+      payloadHash,
+      signers: [{
+        userId:            'user-a',
+        credentialId:      'cred-a',
+        role:              'employee',
+        sig,
+        signedAt:          Math.floor(Date.now() / 1000),
+        sessionId:         null,
+        authenticatorData,
+        clientDataJSON,
+      }],
+      anchorRoot:        ANCHOR_ROOT,
+      anchorTxHash:      null,
+      anchorBlockNumber: null,
+    };
+
+    const result = await verifyEnvelope({ envelope, registry: s.registry });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.state).toBe('verified');
+  });
+
   it('promotes to suspected_spoof when clientDataJSON.challenge does not match payloadHash (replay across payloads)', async () => {
     const s = buildScenario();
     const payload = makeEmailPayload({ companyId: 'company-a' });

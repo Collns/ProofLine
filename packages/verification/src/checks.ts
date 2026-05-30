@@ -174,13 +174,38 @@ async function verifyWebauthnSignature(input: {
   }
 
   // Bind the assertion to this payload via the challenge.
+  //
+  // Encoding caveat (PFL-125 follow-up): there are TWO legitimate shapes
+  // for `clientData.challenge` in this codebase because the sign
+  // handlers and the verification tests took different conventions:
+  //
+  //   1. apps/functions/src/signing/handlers/sign.handler.ts (prod path):
+  //      `challenge = base64url(canonicalBytes)` — i.e. the RAW canonical
+  //      payload bytes, NOT the hash. After the browser round-trips
+  //      through clientDataJSON, `clientData.challenge` is the same
+  //      base64url string. To check binding here we hash the decoded
+  //      bytes and compare to `expectedChallenge` (which has already
+  //      been normalized to base64url(payloadHash) by the verify
+  //      handler bridge).
+  //
+  //   2. tests / future callers that pass the hash itself as challenge:
+  //      `challenge = base64url(sha256(canonicalBytes)) = payloadHash`.
+  //      Direct string equality.
+  //
+  // Accept both — both bind the assertion to a specific payload.
   let clientData: { challenge?: unknown };
   try {
     clientData = JSON.parse(Buffer.from(clientDataBytes).toString('utf8')) as { challenge?: unknown };
   } catch {
     return fail('SIGNATURE_INVALID', `clientDataJSON not parseable for credential ${input.credentialId}`);
   }
-  if (typeof clientData.challenge !== 'string' || clientData.challenge !== input.expectedChallenge) {
+  if (typeof clientData.challenge !== 'string' || clientData.challenge.length === 0) {
+    return fail(
+      'SIGNATURE_INVALID',
+      `clientDataJSON.challenge missing or empty for credential ${input.credentialId}`,
+    );
+  }
+  if (!challengeBindsToPayload(clientData.challenge, input.expectedChallenge)) {
     return fail(
       'SIGNATURE_INVALID',
       `clientDataJSON.challenge does not match payloadHash for credential ${input.credentialId}`,
@@ -197,6 +222,49 @@ async function verifyWebauthnSignature(input: {
     return fail('SIGNATURE_INVALID', `signature invalid for credential ${input.credentialId}`);
   }
   return { ok: true };
+}
+
+/**
+ * PFL-125 follow-up: returns true when `clientChallenge` (a base64url
+ * string lifted from clientDataJSON) binds to `expectedChallenge` (the
+ * envelope's payloadHash, base64url-encoded sha256 of canonical bytes).
+ *
+ * Accepts either shape:
+ *   - direct equality (challenge == payloadHash) — challenge is the hash;
+ *   - sha256(decode(challenge)) == decode(payloadHash) — challenge is the
+ *     raw canonical bytes that the production sign handler ships today.
+ *
+ * Comparison happens on bytes (constant time) after base64url decode, so
+ * we don't trip on accidental padding/whitespace differences in the
+ * string representations.
+ */
+function challengeBindsToPayload(clientChallenge: string, expectedChallenge: string): boolean {
+  // Shape 1 — string equality (test fixtures, future hash-as-challenge senders).
+  if (clientChallenge === expectedChallenge) return true;
+
+  let challengeBytes: Uint8Array;
+  let expectedBytes: Uint8Array;
+  try {
+    challengeBytes = Buffer.from(clientChallenge, 'base64url');
+    expectedBytes  = Buffer.from(expectedChallenge, 'base64url');
+  } catch {
+    return false;
+  }
+  if (expectedBytes.length === 0) return false;
+
+  // Shape 1' — same bytes after base64url normalisation (catches padding diffs).
+  if (uint8ArraysEqual(challengeBytes, expectedBytes)) return true;
+
+  // Shape 2 — challenge IS the canonical payload bytes; hash and compare.
+  const challengeHash = sha256(challengeBytes);
+  return uint8ArraysEqual(challengeHash, expectedBytes);
+}
+
+function uint8ArraysEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
 }
 
 // ─── CHECK 4 — Role credential chain ─────────────────────────────────────────
