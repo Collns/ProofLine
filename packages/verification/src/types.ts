@@ -26,6 +26,11 @@ export interface VerifiedSignerInfo {
   companyDomain: string;
   companyLegalName: string;
   userDisplayName: string;
+  // PFL-125: surfaced so consumers (verify-page UI, downstream auditors)
+  // can re-derive the bytes the authenticator signed without re-parsing
+  // the underlying envelope.
+  authenticatorData?: string;  // base64url
+  clientDataJSON?:    string;  // base64url
 }
 
 export interface Company {

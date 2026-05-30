@@ -78,16 +78,123 @@ export async function checkSignerIdentities(
 
 // ─── CHECK 3 — Signature validity ────────────────────────────────────────────
 
+export interface CheckSignaturesOptions {
+  /**
+   * PFL-125 backward-compat: old `signed_messages` documents persisted
+   * before authenticatorData + clientDataJSON were stored alongside `sig`
+   * carry a WebAuthn assertion signature that this verifier cannot
+   * reconstruct (no authData → no signed bytes to recover). When this
+   * flag is true, such envelopes are treated as a soft-skip with a
+   * console warning rather than a hard SIGNATURE_INVALID. Newly written
+   * envelopes always carry the fields and verify properly.
+   *
+   * Defaults to false — the verification package itself stays strict so
+   * unit tests catch real regressions. The production verify handler
+   * sets this to true.
+   */
+  legacySignatureFallback?: boolean;
+}
+
 export async function checkSignatures(
   envelope: SignedEnvelope,
   resolvedSigners: ResolvedSigner[],
+  options: CheckSignaturesOptions = {},
 ): Promise<CheckResult> {
-  const message = canonicalize(envelope.payload);
+  const canonicalBytes = canonicalize(envelope.payload);
+
   for (const { info, credential } of resolvedSigners) {
-    const valid = await verifyEcdsaP256(credential.publicKey, message, info.sig);
-    if (!valid) {
-      return fail('SIGNATURE_INVALID', `signature invalid for credential ${info.credentialId}`);
+    const hasWebauthnArtifacts =
+      typeof info.authenticatorData === 'string' && info.authenticatorData.length > 0 &&
+      typeof info.clientDataJSON    === 'string' && info.clientDataJSON.length    > 0;
+
+    if (hasWebauthnArtifacts) {
+      const result = await verifyWebauthnSignature({
+        publicKey:         credential.publicKey,
+        authenticatorData: info.authenticatorData!,
+        clientDataJSON:    info.clientDataJSON!,
+        sig:               info.sig,
+        expectedChallenge: envelope.payloadHash,
+        credentialId:      info.credentialId,
+      });
+      if (!result.ok) return result;
+      continue;
     }
+
+    // No WebAuthn material on the signer — fall back to verifying `sig`
+    // against the canonical payload bytes directly. This path covers
+    // server-key signatures, fixtures, and the suspected-spoof tampered-
+    // sig path (which signs raw canonical bytes via test helpers).
+    const valid = await verifyEcdsaP256(credential.publicKey, canonicalBytes, info.sig);
+    if (valid) continue;
+
+    if (options.legacySignatureFallback) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[verification] PFL-125 legacy envelope: skipping signature check for credential ${info.credentialId} ` +
+        `— no authenticatorData/clientDataJSON stored and the raw-canonical check also failed. ` +
+        `New envelopes verify properly; re-anchor or re-sign to restore strict verification.`,
+      );
+      continue;
+    }
+
+    return fail('SIGNATURE_INVALID', `signature invalid for credential ${info.credentialId}`);
+  }
+  return { ok: true };
+}
+
+/**
+ * PFL-125: reconstruct the bytes a WebAuthn authenticator signed at
+ * registration/sign time and verify the ECDSA signature against them.
+ *
+ * Authenticators sign `SHA256(authData || SHA256(clientDataJSON))`.
+ * `verifyEcdsaP256` already runs `createVerify('SHA256')` internally,
+ * so we hand it `authData || SHA256(clientDataJSON)` and it does the
+ * outer SHA-256 before the curve check.
+ *
+ * Also binds the signature to THIS payload by requiring the challenge
+ * embedded in clientDataJSON to equal `envelope.payloadHash`. Without
+ * that bind, an attacker could lift a valid (authData, clientDataJSON,
+ * sig) triple from one signed message and replay it onto another.
+ */
+async function verifyWebauthnSignature(input: {
+  publicKey:         string;
+  authenticatorData: string;
+  clientDataJSON:    string;
+  sig:               string;
+  expectedChallenge: string;
+  credentialId:      string;
+}): Promise<CheckResult> {
+  let authData: Uint8Array;
+  let clientDataBytes: Uint8Array;
+  try {
+    authData        = Buffer.from(input.authenticatorData, 'base64url');
+    clientDataBytes = Buffer.from(input.clientDataJSON,    'base64url');
+  } catch {
+    return fail('SIGNATURE_INVALID', `signature artifacts malformed for credential ${input.credentialId}`);
+  }
+
+  // Bind the assertion to this payload via the challenge.
+  let clientData: { challenge?: unknown };
+  try {
+    clientData = JSON.parse(Buffer.from(clientDataBytes).toString('utf8')) as { challenge?: unknown };
+  } catch {
+    return fail('SIGNATURE_INVALID', `clientDataJSON not parseable for credential ${input.credentialId}`);
+  }
+  if (typeof clientData.challenge !== 'string' || clientData.challenge !== input.expectedChallenge) {
+    return fail(
+      'SIGNATURE_INVALID',
+      `clientDataJSON.challenge does not match payloadHash for credential ${input.credentialId}`,
+    );
+  }
+
+  const clientDataHash = sha256(clientDataBytes);
+  const signedMessage  = new Uint8Array(authData.length + clientDataHash.length);
+  signedMessage.set(authData, 0);
+  signedMessage.set(clientDataHash, authData.length);
+
+  const valid = await verifyEcdsaP256(input.publicKey, signedMessage, input.sig);
+  if (!valid) {
+    return fail('SIGNATURE_INVALID', `signature invalid for credential ${input.credentialId}`);
   }
   return { ok: true };
 }

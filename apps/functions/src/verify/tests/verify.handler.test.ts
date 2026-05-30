@@ -120,22 +120,19 @@ describe("GET /v1/verify/:id", () => {
     expect(res.body.code).toBe("PAYLOAD_EXPIRED");
   });
 
-  it("PFL-101 trust mode: handler skips raw-ECDSA signature check (suspected_spoof coverage lives in @proofline/verification tests)", async () => {
-    // PFL-101: the verify handler passes `trustWebauthnAtSignTime: true`
-    // to verifyEnvelope because the stored `signer.sig` is a WebAuthn
-    // assertion sig (over clientDataJSON+authenticatorData), not over
-    // canonicalize(payload). Trust mode skips checkSignatures, so a
-    // tampered raw sig no longer trips suspected_spoof at THIS layer.
+  it("PFL-125 legacy fallback: a legacy envelope without authenticatorData/clientDataJSON soft-skips the sig check with a warning", async () => {
+    // PFL-125: signature verification is real now. New envelopes carry
+    // authenticatorData + clientDataJSON on each signer and
+    // checkSignatures reconstructs `authData || sha256(clientDataJSON)`
+    // to verify the WebAuthn signature. This test exercises the legacy
+    // path: an envelope WITHOUT those fields (synthesized via the
+    // raw-canonical test helper) whose `sig` is tampered.
     //
-    // The "tampered sig → suspected_spoof" guarantee still holds with
-    // trust mode OFF; the verification package's
-    // verify-suspected-spoof.test.ts + verify.test.ts SIGNATURE_INVALID
-    // describe-block cover that path.
-    //
-    // This handler-level test documents the trust-mode tradeoff so the
-    // moment PFL-101.x flips trust off, the assertion below will start
-    // failing and we'll be reminded to restore the suspected_spoof
-    // expectation here.
+    // Production verify handler passes legacySignatureFallback: true so
+    // such rows log a warning and continue — they predate PFL-125 and
+    // can't be re-verified without re-signing. The verification
+    // package's verify-suspected-spoof.test.ts covers the strict path
+    // where SIGNATURE_INVALID promotes to suspected_spoof.
     const sc = plantScenario();
     const payload = makeEmailPayload({ companyId: "company-a" });
     const envelope = buildEnvelope({
@@ -156,7 +153,7 @@ describe("GET /v1/verify/:id", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.state).toBe("verified"); // PFL-101.x: flip back to "suspected_spoof" when trust mode is removed
+    expect(res.body.state).toBe("verified"); // PFL-125 legacy-fallback path; new envelopes verify strictly
   });
 
   it("returns 200 + state=unverified_sender when no envelope exists at the requested id", async () => {

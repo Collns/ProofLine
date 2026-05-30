@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { verifyEnvelope } from '../verify.js';
 import {
   buildScenario,
@@ -13,7 +13,9 @@ import {
   InMemoryRegistry,
 } from './helpers.js';
 import { canonicalize } from '@proofline/canonical';
+import * as nodeCrypto from 'node:crypto';
 import type { Hex32 } from '../types.js';
+import type { SignedEnvelope } from '@proofline/types';
 
 const ANCHOR_ROOT = '0xdeadbeef' as Hex32;
 
@@ -387,6 +389,179 @@ describe('POLICY_AUTHORITY_EXCEEDED_AT_SIGNING', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe('POLICY_AUTHORITY_EXCEEDED_AT_SIGNING');
+  });
+});
+
+// ─── PFL-125: WebAuthn signature verification ────────────────────────────────
+
+/**
+ * Build a WebAuthn-style signature for the test scenario. Authenticators
+ * sign `SHA256(authData || SHA256(clientDataJSON))` — we replicate that
+ * here using node:crypto so verifyEnvelope's checkSignatures path
+ * exercises the real reconstruction logic.
+ */
+function buildWebauthnSig(opts: {
+  privateKey: nodeCrypto.KeyObject;
+  challenge:  string;            // value to embed as clientData.challenge
+  origin?:    string;
+}): { sig: string; authenticatorData: string; clientDataJSON: string } {
+  const clientData = JSON.stringify({
+    type:      'webauthn.get',
+    challenge: opts.challenge,
+    origin:    opts.origin ?? 'https://proofline-sign.web.app',
+    crossOrigin: false,
+  });
+  const clientDataBytes = Buffer.from(clientData, 'utf8');
+  // 37 bytes is the minimum authenticator data size (rpIdHash[32] +
+  // flags[1] + signCount[4]). Contents don't matter for the verifier —
+  // it only re-hashes whatever bytes we hand it.
+  const authData = Buffer.alloc(37, 0xaa);
+  const clientDataHash = nodeCrypto.createHash('sha256').update(clientDataBytes).digest();
+  const signedMessage = Buffer.concat([authData, clientDataHash]);
+  const signer = nodeCrypto.createSign('SHA256');
+  signer.update(signedMessage);
+  signer.end();
+  const sig = signer.sign({ key: opts.privateKey, dsaEncoding: 'der' }).toString('base64url');
+  return {
+    sig,
+    authenticatorData: authData.toString('base64url'),
+    clientDataJSON:    clientDataBytes.toString('base64url'),
+  };
+}
+
+describe('PFL-125: WebAuthn signature verification', () => {
+  it('verifies an envelope whose signer carries authenticatorData + clientDataJSON', async () => {
+    const s = buildScenario();
+    const payload = makeEmailPayload({ companyId: 'company-a' });
+    const payloadHash = hashPayload(payload);
+    const { sig, authenticatorData, clientDataJSON } = buildWebauthnSig({
+      privateKey: s.userAKp.privateKey,
+      challenge:  payloadHash,
+    });
+    const envelope: SignedEnvelope = {
+      v: 1,
+      payloadType: 'email',
+      payload,
+      payloadHash,
+      signers: [{
+        userId:            'user-a',
+        credentialId:      'cred-a',
+        role:              'employee',
+        sig,
+        signedAt:          Math.floor(Date.now() / 1000),
+        sessionId:         null,
+        authenticatorData,
+        clientDataJSON,
+      }],
+      anchorRoot:        ANCHOR_ROOT,
+      anchorTxHash:      null,
+      anchorBlockNumber: null,
+    };
+
+    const result = await verifyEnvelope({ envelope, registry: s.registry });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.state).toBe('verified');
+  });
+
+  it('promotes to suspected_spoof when the WebAuthn signature is over different bytes', async () => {
+    const s = buildScenario();
+    const payload = makeEmailPayload({ companyId: 'company-a' });
+    const payloadHash = hashPayload(payload);
+    const { sig: goodSig, authenticatorData, clientDataJSON } = buildWebauthnSig({
+      privateKey: s.userAKp.privateKey,
+      challenge:  payloadHash,
+    });
+    // Tamper: replace the authenticatorData with a different blob so the
+    // reconstructed signed-message no longer matches what was signed.
+    const tamperedAuthData = Buffer.alloc(37, 0xbb).toString('base64url');
+    const envelope: SignedEnvelope = {
+      v: 1,
+      payloadType: 'email',
+      payload,
+      payloadHash,
+      signers: [{
+        userId:            'user-a',
+        credentialId:      'cred-a',
+        role:              'employee',
+        sig:               goodSig,
+        signedAt:          Math.floor(Date.now() / 1000),
+        sessionId:         null,
+        authenticatorData: tamperedAuthData,
+        clientDataJSON,
+      }],
+      anchorRoot:        ANCHOR_ROOT,
+      anchorTxHash:      null,
+      anchorBlockNumber: null,
+    };
+
+    const result = await verifyEnvelope({ envelope, registry: s.registry });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.state).toBe('suspected_spoof');
+  });
+
+  it('promotes to suspected_spoof when clientDataJSON.challenge does not match payloadHash (replay across payloads)', async () => {
+    const s = buildScenario();
+    const payload = makeEmailPayload({ companyId: 'company-a' });
+    const payloadHash = hashPayload(payload);
+    // Sign with a challenge that binds to a DIFFERENT payload — the
+    // verifier must reject even though the underlying ECDSA math works.
+    const { sig, authenticatorData, clientDataJSON } = buildWebauthnSig({
+      privateKey: s.userAKp.privateKey,
+      challenge:  'this-is-some-other-payloads-hash',
+    });
+    const envelope: SignedEnvelope = {
+      v: 1,
+      payloadType: 'email',
+      payload,
+      payloadHash,
+      signers: [{
+        userId:            'user-a',
+        credentialId:      'cred-a',
+        role:              'employee',
+        sig,
+        signedAt:          Math.floor(Date.now() / 1000),
+        sessionId:         null,
+        authenticatorData,
+        clientDataJSON,
+      }],
+      anchorRoot:        ANCHOR_ROOT,
+      anchorTxHash:      null,
+      anchorBlockNumber: null,
+    };
+
+    const result = await verifyEnvelope({ envelope, registry: s.registry });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.state).toBe('suspected_spoof');
+  });
+
+  it('legacySignatureFallback soft-skips a legacy envelope (no WebAuthn fields, bad raw sig) with a warning', async () => {
+    const s = buildScenario();
+    const payload = makeEmailPayload({ companyId: 'company-a' });
+    const envelope = buildEnvelope({
+      payload,
+      payloadType: 'email',
+      signerSpecs: [{ userId: 'user-a', credentialId: 'cred-a', privateKey: s.userAKp.privateKey }],
+      anchorRoot: ANCHOR_ROOT,
+    });
+    // Tamper raw sig — legacy fallback must still produce `verified`.
+    const tampered = {
+      ...envelope,
+      signers: [{ ...envelope.signers[0], sig: signBytes(s.userAKp.privateKey, new Uint8Array(32).fill(0)) }],
+    };
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const result = await verifyEnvelope({
+        envelope: tampered as never,
+        registry: s.registry,
+        legacySignatureFallback: true,
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.state).toBe('verified');
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
