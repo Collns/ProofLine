@@ -224,6 +224,11 @@ export function makeSignFinalizeHandler(ctx: PolicyContext) {
       sig:          body.assertion.signature,
       signedAt:     now,
       path:         body.path,
+      // PFL-125: store the WebAuthn artifacts so verify-time can
+      // reconstruct (authData || sha256(clientDataJSON)) and validate
+      // the signature against THIS payload (challenge binding).
+      authenticatorData: body.assertion.authenticatorData,
+      clientDataJSON:    body.assertion.clientDataJSON,
     };
     if (parsedSessionToken?.sessionId) {
       signatureRecord.sessionId = parsedSessionToken.sessionId;
