@@ -39,9 +39,15 @@
  *
  * Attestation verification IS performed here (PFL-094) — `verifyRegistrationResponse`
  * from @simplewebauthn/server parses the attestationObject and gives us the
- * COSE public key bytes. The trust caveat: see `extractChallengeFromClientDataJSON`
- * below — we don't currently issue the registration challenge server-side, so
- * the challenge match is structural only. PFL-095 closes that hole.
+ * COSE public key bytes.
+ *
+ * Replay defence (PFL-095): the challenge in clientDataJSON MUST match a
+ * record in `pending_challenges` issued by POST /v1/auth/challenge for the
+ * same userId. The lookup is transactional read+delete (single-use), and
+ * the record carries a 5-minute TTL. Missing record → 400 CHALLENGE_INVALID;
+ * stale record → 400 CHALLENGE_EXPIRED. The attestation is only fed to
+ * verifyRegistrationResponse AFTER the challenge has been validated and
+ * consumed.
  */
 
 import type * as express from "express";
@@ -52,6 +58,10 @@ import { verifyRegistrationResponse } from "@simplewebauthn/server";
 
 import type { DeviceRecord } from "@proofline/types";
 import { ERR, makeRFC7807Error } from "../api/onboarding/http.helpers.js";
+import {
+  REGISTRATION_CHALLENGE_PURPOSE,
+  type PendingRegistrationChallenge,
+} from "./registration-challenge.handler.js";
 
 // ─── Auth: decode + verify the extension auth JWS ────────────────────────────
 
@@ -138,24 +148,18 @@ export interface RegisterCredentialResponse {
 // `registrationInfo.credentialPublicKey` as raw COSE bytes. We base64-
 // encode those and store them as the canonical `publicKey` everywhere.
 //
-// HACKATHON CAVEAT — TRUSTED CHALLENGE:
+// CHALLENGE HANDLING (PFL-095):
 //
-// `verifyRegistrationResponse` requires `expectedChallenge` so it can
-// reject ceremonies where the authenticator signed a value the server
-// didn't issue. Today the client (apps/web-sign/src/lib/webauthn-register.ts)
-// generates its own challenge locally and the server never sees it ahead
-// of time. As a stop-gap we parse the challenge OUT of clientDataJSON
-// below and feed THAT back as the expected challenge.
-//
-// This defeats the security purpose of the challenge — an attacker who
-// can supply clientDataJSON also controls "the expected value", so the
-// check is structural only. We're trading proper attestation verification
-// for shipping the demo. PFL-095 fixes this with a server-issued
-// registration challenge (mirrors the /v1/sign challenge endpoint).
-//
-// TODO(PFL-095): issue registration challenges from the server, persist
-// in pending_registration_challenges, then verify against that record
-// here instead of trusting clientDataJSON.
+// We parse `challenge` out of clientDataJSON BEFORE calling
+// `verifyRegistrationResponse`, but only to look it up in
+// `pending_challenges` (a server-issued, single-use record from POST
+// /v1/auth/challenge). If the lookup fails we reject the request with
+// CHALLENGE_INVALID / CHALLENGE_EXPIRED — so by the time the bytes get
+// to verifyRegistrationResponse below, we already know the server
+// issued the challenge for THIS user. The expectedChallenge passed into
+// the verifier is the same bytes the browser signed, which keeps the
+// SimpleWebAuthn structural check happy without trusting client-supplied
+// values for replay defence.
 
 function extractChallengeFromClientDataJSON(b64url: string): string {
   const json = Buffer.from(b64url, "base64url").toString("utf8");
@@ -176,6 +180,12 @@ export type CoseExtractResult =
   | { ok: false; reason: string };
 
 async function defaultExtractCose(input: CoseExtractInput): Promise<CoseExtractResult> {
+  // PFL-095: the challenge is now sourced from the server-side
+  // pending_challenges record (looked up + consumed in the handler before
+  // calling us). The clientDataJSON value is parsed too, only so we can
+  // hand verifyRegistrationResponse the exact bytes the browser signed —
+  // the AUTHORITATIVE comparison (did the server issue this challenge?)
+  // already happened upstream.
   let expectedChallenge: string;
   try {
     expectedChallenge = extractChallengeFromClientDataJSON(input.clientDataJSON);
@@ -195,7 +205,7 @@ async function defaultExtractCose(input: CoseExtractInput): Promise<CoseExtractR
         },
         clientExtensionResults: {},
       } as Parameters<typeof verifyRegistrationResponse>[0]["response"],
-      expectedChallenge,                       // hackathon: trusted from client (PFL-095)
+      expectedChallenge,
       expectedRPID:            "proofline-sign.web.app",
       expectedOrigin:          "https://proofline-sign.web.app",
       requireUserVerification: true,
@@ -217,7 +227,83 @@ async function defaultExtractCose(input: CoseExtractInput): Promise<CoseExtractR
   }
 }
 
+// ─── Server-issued challenge consumption (PFL-095) ──────────────────────────
+//
+// Transactional read-then-delete against `pending_challenges`. Single-use:
+// once a challenge is consumed it can never satisfy another registration
+// (or sign) request. Expired records are deleted on access — we don't rely
+// on Firestore TTL alone because in-band cleanup keeps the collection
+// small for the demo and removes the expired record's data eagerly.
+
+async function defaultConsumeRegistrationChallenge(input: {
+  challenge: string;
+  userId:    string;
+}): Promise<ChallengeConsumeResult> {
+  const db = getFirestore();
+  const snap = await db
+    .collection("pending_challenges")
+    .where("challenge", "==", input.challenge)
+    .limit(1)
+    .get();
+
+  if (snap.empty) {
+    return {
+      ok:     false,
+      code:   "CHALLENGE_INVALID",
+      detail: "Challenge not found — request a new one via POST /v1/auth/challenge",
+    };
+  }
+
+  const docSnap = snap.docs[0];
+  const record  = docSnap.data() as PendingRegistrationChallenge;
+
+  return db.runTransaction(async (tx) => {
+    const ref   = docSnap.ref;
+    const fresh = await tx.get(ref);
+    if (!fresh.exists) {
+      return {
+        ok:     false,
+        code:   "CHALLENGE_INVALID",
+        detail: "Challenge already consumed",
+      } as const;
+    }
+
+    // Always delete: even if validation below rejects, the challenge has
+    // been observed by the world (it was in clientDataJSON) and we never
+    // want to give an attacker a second swing at it.
+    tx.delete(ref);
+
+    if (record.purpose !== REGISTRATION_CHALLENGE_PURPOSE) {
+      return {
+        ok:     false,
+        code:   "CHALLENGE_INVALID",
+        detail: `Challenge purpose is ${String(record.purpose)}, expected registration`,
+      } as const;
+    }
+    if (record.userId !== input.userId) {
+      return {
+        ok:     false,
+        code:   "CHALLENGE_INVALID",
+        detail: "Challenge does not belong to the authenticated user",
+      } as const;
+    }
+    if (record.expiresAt < Date.now()) {
+      return {
+        ok:     false,
+        code:   "CHALLENGE_EXPIRED",
+        detail: "Challenge expired — request a new one via POST /v1/auth/challenge",
+      } as const;
+    }
+
+    return { ok: true, record } as const;
+  });
+}
+
 // ─── Handler ─────────────────────────────────────────────────────────────────
+
+export type ChallengeConsumeResult =
+  | { ok: true; record: PendingRegistrationChallenge }
+  | { ok: false; code: "CHALLENGE_INVALID" | "CHALLENGE_EXPIRED"; detail: string };
 
 export interface RegisterCredentialHandlerDeps {
   /** Injectable for tests; defaults to the HMAC JWS decoder above. */
@@ -228,6 +314,17 @@ export interface RegisterCredentialHandlerDeps {
    * verifyRegistrationResponse against the live attestationObject.
    */
   extractCose?: (input: CoseExtractInput) => Promise<CoseExtractResult>;
+  /**
+   * PFL-095: override how the server-issued registration challenge is
+   * looked up and consumed. Default: transactional read+delete from
+   * `pending_challenges`. Tests inject this to assert the handler honours
+   * CHALLENGE_INVALID / CHALLENGE_EXPIRED without needing a Firestore
+   * transaction shim.
+   */
+  consumeRegistrationChallenge?: (input: {
+    challenge: string;
+    userId:    string;
+  }) => Promise<ChallengeConsumeResult>;
 }
 
 export function makeRegisterCredentialHandler(
@@ -235,6 +332,8 @@ export function makeRegisterCredentialHandler(
 ) {
   const verify     = deps.verifyAuthBearer ?? verifyAuthBearer;
   const extractCose = deps.extractCose      ?? defaultExtractCose;
+  const consumeRegistrationChallenge =
+    deps.consumeRegistrationChallenge ?? defaultConsumeRegistrationChallenge;
 
   return async function registerCredentialHandler(
     req: express.Request,
@@ -282,14 +381,49 @@ export function makeRegisterCredentialHandler(
       return;
     }
 
-    // 4. Verify the attestation and extract COSE public key bytes (PFL-094).
+    // 4. PFL-095: consume the server-issued registration challenge.
+    //    Parse `challenge` out of clientDataJSON, then look it up in
+    //    pending_challenges and atomically delete it. CHALLENGE_INVALID
+    //    (unknown / mismatched user / wrong purpose) or CHALLENGE_EXPIRED
+    //    are 400s — never 500s, since the request body itself is well-
+    //    formed. The downstream verifyRegistrationResponse call still re-
+    //    parses clientDataJSON for its own check; this consume step is the
+    //    authoritative replay-defence.
+    let challengeFromClient: string;
+    try {
+      challengeFromClient = extractChallengeFromClientDataJSON(body.clientDataJSON);
+    } catch {
+      res.status(400).json(
+        makeRFC7807Error(
+          "https://proofline.app/errors/CHALLENGE_INVALID",
+          "CHALLENGE_INVALID",
+          400,
+          "clientDataJSON did not contain a parseable challenge",
+        ),
+      );
+      return;
+    }
+    const challengeResult = await consumeRegistrationChallenge({
+      challenge: challengeFromClient,
+      userId:    decoded.userId,
+    });
+    if (!challengeResult.ok) {
+      res.status(400).json(
+        makeRFC7807Error(
+          `https://proofline.app/errors/${challengeResult.code}`,
+          challengeResult.code,
+          400,
+          challengeResult.detail,
+        ),
+      );
+      return;
+    }
+
+    // 5. Verify the attestation and extract COSE public key bytes (PFL-094).
     //    The client-supplied `body.publicKey` is SPKI/DER and incompatible
     //    with SimpleWebAuthn's assertion verifier — we ignore it and pull
     //    the COSE-encoded key out of the attestationObject instead via
     //    the injected extractor (default uses verifyRegistrationResponse).
-    //    Heads-up: the default extractor reads `expectedChallenge` from
-    //    clientDataJSON, NOT from a server-issued record — see the block
-    //    comment above `extractChallengeFromClientDataJSON` + PFL-095.
     if (body.publicKey) {
       // eslint-disable-next-line no-console
       console.warn(

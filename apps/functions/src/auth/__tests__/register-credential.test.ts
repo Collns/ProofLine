@@ -95,6 +95,7 @@ import {
   makeRegisterCredentialHandler,
   type CoseExtractInput,
   type CoseExtractResult,
+  type ChallengeConsumeResult,
 } from "../register-credential.handler.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -113,6 +114,53 @@ function stubCoseExtractor(): (input: CoseExtractInput) => Promise<CoseExtractRe
   return async () => ({ ok: true, coseB64: FAKE_COSE_B64 });
 }
 
+// PFL-095: default test challenge — base64url(32 bytes). We don't care
+// about the actual entropy in tests; we care that the handler routes the
+// value through consumeRegistrationChallenge before storing anything.
+const TEST_CHALLENGE_B64URL = Buffer.from(new Uint8Array(32).fill(7)).toString("base64url");
+
+function clientDataWithChallenge(challenge: string): string {
+  // Real WebAuthn clientDataJSON shape (minus optional fields). The
+  // handler only reads `.challenge`, so this is enough.
+  const obj = {
+    type:      "webauthn.create",
+    challenge,
+    origin:    "https://proofline-sign.web.app",
+    crossOrigin: false,
+  };
+  return Buffer.from(JSON.stringify(obj), "utf8").toString("base64url");
+}
+
+function stubConsumeChallenge(opts: {
+  ok?:        boolean;
+  userId?:    string;
+  companyId?: string;
+  code?:      "CHALLENGE_INVALID" | "CHALLENGE_EXPIRED";
+  detail?:    string;
+} = {}): (input: { challenge: string; userId: string }) => Promise<ChallengeConsumeResult> {
+  return async (input) => {
+    if (opts.ok === false) {
+      return {
+        ok:     false,
+        code:   opts.code   ?? "CHALLENGE_INVALID",
+        detail: opts.detail ?? "stub-rejected",
+      };
+    }
+    return {
+      ok:     true,
+      record: {
+        challengeId: "ch-stub-001",
+        challenge:   input.challenge,
+        userId:      opts.userId    ?? input.userId,
+        companyId:   opts.companyId ?? "co-stub",
+        purpose:     "registration",
+        createdAt:   Date.now() - 1000,
+        expiresAt:   Date.now() + 60_000,
+      },
+    };
+  };
+}
+
 function buildApp(opts: {
   verifyAuthBearer?: Parameters<typeof makeRegisterCredentialHandler>[0] extends infer T
     ? T extends { verifyAuthBearer?: infer F }
@@ -120,6 +168,7 @@ function buildApp(opts: {
       : never
     : never;
   extractCose?: (input: CoseExtractInput) => Promise<CoseExtractResult>;
+  consumeRegistrationChallenge?: (input: { challenge: string; userId: string }) => Promise<ChallengeConsumeResult>;
 } = {}) {
   const app = express();
   app.use(express.json());
@@ -129,6 +178,11 @@ function buildApp(opts: {
     // business logic without crafting real attestation bytes. Tests that
     // explicitly want to exercise rejection inject their own.
     extractCose: opts.extractCose ?? stubCoseExtractor(),
+    // PFL-095: default to a stub that approves the challenge so existing
+    // happy-path tests still pass without a live Firestore transaction
+    // mock. Tests that exercise the reject paths inject their own.
+    consumeRegistrationChallenge:
+      opts.consumeRegistrationChallenge ?? stubConsumeChallenge(),
   });
   app.post("/v1/extension/register-credential", (req, res, next) => {
     handler(req, res).catch(next);
@@ -154,7 +208,10 @@ const validBody = {
   credentialId:      "cred-touchid-abc-001",
   publicKey:         "MFkwEwYHKoZIzj0CAQYI-test-spki-bytes",
   attestationObject: "o2NmbXRkbm9uZS-test-attestation",
-  clientDataJSON:    "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0-test",
+  // PFL-095: clientDataJSON now carries a real challenge that the handler
+  // looks up in pending_challenges. The default consume stub accepts
+  // whatever string lands here.
+  clientDataJSON:    clientDataWithChallenge(TEST_CHALLENGE_B64URL),
   deviceName:        "Mac",
 };
 
@@ -527,5 +584,108 @@ describe("POST /v1/extension/register-credential", () => {
     expect(store["webauthn_credentials"]?.[validBody.credentialId]).toBeUndefined();
     const userDoc = store["users"]?.["user-bad-attest"] as Record<string, unknown>;
     expect((userDoc["devices"] as unknown[])).toHaveLength(0);
+  });
+
+  // ── PFL-095: server-issued challenge consumption ─────────────────────────
+
+  it("PFL-095: rejects with 400 CHALLENGE_INVALID when the challenge is not in pending_challenges", async () => {
+    const app = buildApp({
+      verifyAuthBearer: () => ({
+        userId: "user-no-chal", companyId: "co", extInstallId: "e",
+        iat: NOW_SEC, exp: NOW_SEC + 3600,
+      }),
+      consumeRegistrationChallenge: stubConsumeChallenge({
+        ok:     false,
+        code:   "CHALLENGE_INVALID",
+        detail: "Challenge not found — request a new one via POST /v1/auth/challenge",
+      }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/register-credential")
+      .set("Authorization", "Bearer x")
+      .send(validBody)
+      .expect(400);
+
+    expect(res.body.title).toBe("CHALLENGE_INVALID");
+    // Nothing should land in either Firestore collection on rejection —
+    // a missing challenge means we never trusted the attestation at all.
+    expect(store["webauthn_credentials"]?.[validBody.credentialId]).toBeUndefined();
+  });
+
+  it("PFL-095: rejects with 400 CHALLENGE_EXPIRED when the challenge record is past its TTL", async () => {
+    const app = buildApp({
+      verifyAuthBearer: () => ({
+        userId: "user-exp", companyId: "co", extInstallId: "e",
+        iat: NOW_SEC, exp: NOW_SEC + 3600,
+      }),
+      consumeRegistrationChallenge: stubConsumeChallenge({
+        ok:     false,
+        code:   "CHALLENGE_EXPIRED",
+        detail: "Challenge expired — request a new one via POST /v1/auth/challenge",
+      }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/register-credential")
+      .set("Authorization", "Bearer x")
+      .send(validBody)
+      .expect(400);
+
+    expect(res.body.title).toBe("CHALLENGE_EXPIRED");
+    expect(store["webauthn_credentials"]?.[validBody.credentialId]).toBeUndefined();
+  });
+
+  it("PFL-095: rejects with 400 CHALLENGE_INVALID when clientDataJSON has no parseable challenge", async () => {
+    const app = buildApp({
+      verifyAuthBearer: () => ({
+        userId: "user-junk-cdj", companyId: "co", extInstallId: "e",
+        iat: NOW_SEC, exp: NOW_SEC + 3600,
+      }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/register-credential")
+      .set("Authorization", "Bearer x")
+      .send({ ...validBody, clientDataJSON: "not-base64url-or-json-garbage" })
+      .expect(400);
+
+    expect(res.body.title).toBe("CHALLENGE_INVALID");
+    expect(res.body.detail).toMatch(/clientDataJSON/);
+  });
+
+  it("PFL-095: passes the challenge from clientDataJSON to the consumer for lookup", async () => {
+    const seen: Array<{ challenge: string; userId: string }> = [];
+    const app = buildApp({
+      verifyAuthBearer: () => ({
+        userId: "user-trace", companyId: "co-trace", extInstallId: "e",
+        iat: NOW_SEC, exp: NOW_SEC + 3600,
+      }),
+      consumeRegistrationChallenge: async (input) => {
+        seen.push(input);
+        return {
+          ok:     true,
+          record: {
+            challengeId: "ch-1",
+            challenge:   input.challenge,
+            userId:      input.userId,
+            companyId:   "co-trace",
+            purpose:     "registration",
+            createdAt:   Date.now(),
+            expiresAt:   Date.now() + 60_000,
+          },
+        };
+      },
+    });
+
+    await request(app)
+      .post("/v1/extension/register-credential")
+      .set("Authorization", "Bearer x")
+      .send(validBody)
+      .expect(200);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.challenge).toBe(TEST_CHALLENGE_B64URL);
+    expect(seen[0]?.userId).toBe("user-trace");
   });
 });
