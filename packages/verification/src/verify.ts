@@ -16,49 +16,36 @@ export interface VerifyEnvelopeInput {
   registry: RegistryView;
   now?: () => number;  // unix ms; default Date.now
   /**
-   * PFL-101: hackathon escape hatch. When true, three load-bearing
-   * verification checks are skipped because the current end-to-end
-   * pipeline cannot satisfy them yet:
+   * PFL-125 backward-compat. Old `signed_messages` rows written before
+   * PFL-125 carry a WebAuthn assertion signature without the
+   * authenticatorData + clientDataJSON needed to reconstruct what was
+   * signed. When this flag is true, such rows produce a console warning
+   * and skip the signature check rather than tripping SIGNATURE_INVALID.
+   * Newly written envelopes carry the artifacts and verify properly
+   * regardless of this flag.
    *
-   *   1. checkSignatures — the stored `signer.sig` is a WebAuthn
-   *      assertion signature over `clientDataJSON + authenticatorData`,
-   *      NOT over `canonicalize(payload)`. The signing endpoint
-   *      (sign-finalize) verifies the WebAuthn assertion server-side
-   *      via finishAssertion BEFORE recording the envelope, so the
-   *      envelope already carries an authenticator-validated signature
-   *      — just one this raw-ECDSA verifier cannot reconstruct without
-   *      the original clientDataJSON+authenticatorData (which we don't
-   *      store). Skipped under trust mode.
-   *
-   *   2. checkRoleCredentials — skipped only for credentials whose
-   *      `issuerSig` is empty. The register-credential handler stores
-   *      `issuerSig: ""` until PFL-100.1 wires up company-root signing.
-   *      Credentials with a non-empty issuerSig still get checked.
-   *
-   *   3. checkAnchor — skipped when `envelope.anchorRoot` is null/missing.
-   *      Envelopes are recorded at sign time but anchored on a delayed
-   *      batch (anchoring service). Under trust mode an unanchored
-   *      envelope is treated as `verified` with a sentinel anchor
-   *      (root=0x0…, block=0, timestamp=0).
-   *
-   * Default is `false`. Tests and any caller that wants the full
-   * cryptographic guarantees should leave it off.
-   *
-   * TODO(PFL-101.x): once (a) the signing endpoint records the
-   * raw payload signature, (b) issuerSig is real, and (c) anchoring
-   * runs synchronously enough to be present at verify time — drop
-   * this flag entirely.
+   * Defaults to false in the library so tests catch real regressions.
+   * The production verify handler turns it on.
    */
-  trustWebauthnAtSignTime?: boolean;
+  legacySignatureFallback?: boolean;
   /**
-   * PFL-106: in trust mode, the caller may supply the anchor coordinates
-   * already recorded for this envelope (root/blockNumber/timestamp stamped
-   * onto signed_messages by the anchor batch). When present it's used
-   * directly — no live `getAnchorForRoot` chain read at verify time. This
-   * lets the verify page show the REAL on-chain anchor for signed emails
-   * once the batch has run, while a not-yet-anchored envelope (no trusted
-   * anchor + null anchorRoot) still falls back to the sentinel "pending"
-   * anchor. Ignored when trustWebauthnAtSignTime is false.
+   * PFL-100.1 outstanding work: the register-credential handler still
+   * stamps `issuerSig: ""` on newly-enrolled role credentials because
+   * company-root signing infrastructure (KMS, PFL-126) isn't live yet.
+   * When this flag is true, credentials with an empty issuerSig skip
+   * the chain check; credentials that DO have an issuerSig are still
+   * verified. Drop this flag once issuerSig is populated everywhere.
+   */
+  trustUnsignedRoleCredentials?: boolean;
+  /**
+   * PFL-106: the anchor batch stamps the on-chain coordinates
+   * (root/blockNumber/timestamp) onto each signed_messages row after it
+   * runs. The verify handler reads them off the row and passes them in
+   * here so we don't re-fetch the chain at verify time. When present,
+   * checkAnchor is bypassed in favour of the trusted coordinates. When
+   * absent we fall back to the on-chain lookup, OR — paired with
+   * `trustUnsignedRoleCredentials` for not-yet-anchored envelopes — a
+   * pending sentinel anchor (root=0x0…, block=0).
    */
   trustedAnchor?: Anchor;
 }
@@ -98,13 +85,15 @@ function toVerifiedSignerInfo(s: ResolvedSigner): VerifiedSignerInfo {
     companyDomain: s.company.domain,
     companyLegalName: s.company.legalName,
     userDisplayName: s.user.displayName,
+    ...(s.info.authenticatorData ? { authenticatorData: s.info.authenticatorData } : {}),
+    ...(s.info.clientDataJSON    ? { clientDataJSON:    s.info.clientDataJSON    } : {}),
   };
 }
 
 export async function verifyEnvelope(input: VerifyEnvelopeInput): Promise<VerificationResult> {
   const nowMs = input.now?.() ?? Date.now();
   const { envelope, registry } = input;
-  const trust = input.trustWebauthnAtSignTime === true;
+  const trustUnsignedRoleCredentials = input.trustUnsignedRoleCredentials === true;
 
   const c1 = await checkPayloadIntegrity(envelope);
   if (!c1.ok) return rejected(c1);
@@ -112,24 +101,28 @@ export async function verifyEnvelope(input: VerifyEnvelopeInput): Promise<Verifi
   const c2 = await checkSignerIdentities(envelope, registry);
   if (!c2.ok) return rejected(c2);
 
-  if (!trust) {
-    const c3 = await checkSignatures(envelope, c2.signers);
-    if (!c3.ok) {
-      // F-VER-07: signer identity resolved to a verified ProofLine company,
-      // but the signature itself didn't verify — treat as spoof attempt
-      // against a known domain rather than a generic rejection.
-      if (c3.code === 'SIGNATURE_INVALID' && c2.signers.length > 0) {
-        return suspectedSpoof(c2.signers[0].company, c3.detail);
-      }
-      return rejected(c3);
+  // PFL-125: signature check is ALWAYS run. New envelopes carry the
+  // WebAuthn artifacts and verify properly; legacy envelopes without
+  // them either fall through the canonical-bytes path or — under
+  // legacySignatureFallback — log a warning and continue.
+  const c3 = await checkSignatures(envelope, c2.signers, {
+    legacySignatureFallback: input.legacySignatureFallback === true,
+  });
+  if (!c3.ok) {
+    // F-VER-07: signer identity resolved to a verified ProofLine company,
+    // but the signature itself didn't verify — treat as spoof attempt
+    // against a known domain rather than a generic rejection.
+    if (c3.code === 'SIGNATURE_INVALID' && c2.signers.length > 0) {
+      return suspectedSpoof(c2.signers[0].company, c3.detail);
     }
+    return rejected(c3);
   }
 
-  // Under trust mode, credentials with `issuerSig === ""` bypass the
-  // chain check (PFL-100.1 will provide real issuer signatures).
-  // Credentials that DO have an issuerSig are still verified — partial
-  // hardening as the company-root signing rollout completes.
-  const credsNeedingChainCheck = trust
+  // PFL-100.1: credentials with `issuerSig === ""` bypass the chain
+  // check when trustUnsignedRoleCredentials is on (no company-root KMS
+  // yet — see PFL-126). Credentials that DO carry an issuerSig are
+  // always verified.
+  const credsNeedingChainCheck = trustUnsignedRoleCredentials
     ? c2.signers.filter((s) => s.credential.issuerSig !== '')
     : c2.signers;
   if (credsNeedingChainCheck.length > 0) {
@@ -137,11 +130,20 @@ export async function verifyEnvelope(input: VerifyEnvelopeInput): Promise<Verifi
     if (!c4.ok) return rejected(c4);
   }
 
+  // Anchor resolution (PFL-106): the verify handler stamps the on-chain
+  // coordinates onto each envelope, so we prefer those over a live
+  // chain read. An un-anchored envelope (no trusted anchor + no
+  // anchorRoot) renders as a "pending" sentinel anchor when the caller
+  // permits unsigned role credentials (i.e., the in-app verify page,
+  // which already treats not-yet-anchored as a transient state). The
+  // strict path falls through to the on-chain check below.
   let anchor: Anchor;
-  if (trust && input.trustedAnchor) {
-    // Anchor coordinates already recorded for this envelope (PFL-106).
+  if (input.trustedAnchor) {
     anchor = input.trustedAnchor;
-  } else if (trust && (envelope.anchorRoot === null || envelope.anchorRoot === undefined)) {
+  } else if (
+    trustUnsignedRoleCredentials &&
+    (envelope.anchorRoot === null || envelope.anchorRoot === undefined)
+  ) {
     anchor = SENTINEL_ANCHOR;
   } else {
     const c5 = await checkAnchor(envelope, registry);

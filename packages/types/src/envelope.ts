@@ -10,6 +10,14 @@ export const SignerInfo = z.object({
   sig: z.string(),                 // base64url DER ECDSA
   signedAt: z.number().int(),
   sessionId: z.string().nullable().default(null),
+  // PFL-125: WebAuthn assertion material captured at sign time. When BOTH
+  // are present, verify-time signature checking reconstructs the bytes
+  // the authenticator actually signed (authData || sha256(clientDataJSON))
+  // and verifies `sig` against that. When absent (legacy envelopes or
+  // server-key signatures), the verifier falls back to checking `sig`
+  // against `canonicalize(payload)` directly.
+  authenticatorData: z.string().optional(),  // base64url
+  clientDataJSON:    z.string().optional(),  // base64url
 });
 export type SignerInfo = z.infer<typeof SignerInfo>;
 

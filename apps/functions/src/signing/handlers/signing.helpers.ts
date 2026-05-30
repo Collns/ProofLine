@@ -39,6 +39,12 @@ interface EmailSignedEnvelope {
     signedAt: number;
     sessionId?: string;
     path: "fresh" | "silent";
+    // PFL-125: persist the WebAuthn assertion bytes alongside the sig so
+    // verify-time can reconstruct what the authenticator actually signed
+    // (authData || sha256(clientDataJSON)) rather than relying on a
+    // trust-mode bypass.
+    authenticatorData?: string;
+    clientDataJSON?:    string;
   }>;
   payload: EmailPayload;
   payloadHash: string;

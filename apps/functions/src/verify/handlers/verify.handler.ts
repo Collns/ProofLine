@@ -67,6 +67,17 @@ function bridgeStoredEnvelope(raw: unknown): unknown {
       sig: String(sig.sig ?? ""),
       signedAt: Number(sig.signedAt ?? 0),
       sessionId: typeof sig.sessionId === "string" ? sig.sessionId : null,
+      // PFL-125: thread WebAuthn assertion artifacts through so
+      // checkSignatures can reconstruct the signed bytes. Omitted on
+      // legacy envelopes written before PFL-125 — the verify handler
+      // turns on legacySignatureFallback below so those don't trip
+      // SIGNATURE_INVALID.
+      ...(typeof sig.authenticatorData === "string"
+        ? { authenticatorData: sig.authenticatorData }
+        : {}),
+      ...(typeof sig.clientDataJSON === "string"
+        ? { clientDataJSON: sig.clientDataJSON }
+        : {}),
     };
   });
 
@@ -153,10 +164,16 @@ export function makeVerifyHandler(deps: VerifyHandlerDeps) {
             envelope,
             registry: deps.service.registry,
             now: deps.now,
-            // PFL-101: hackathon trust mode. See verifyEnvelope's
-            // VerifyEnvelopeInput.trustWebauthnAtSignTime for the full
-            // rationale and TODO chain (PFL-100.1, PFL-101.x).
-            trustWebauthnAtSignTime: true,
+            // PFL-125: signature verification runs for real. Newly
+            // written envelopes carry authenticatorData + clientDataJSON
+            // on each signer; legacy rows without them get a soft skip
+            // via legacySignatureFallback below.
+            legacySignatureFallback: true,
+            // PFL-100.1: role credentials issued by register-credential
+            // currently store `issuerSig: ""` — KMS-backed company-root
+            // signing (PFL-126) is the follow-up. Skip the chain check
+            // for those credentials only; signed credentials still verify.
+            trustUnsignedRoleCredentials: true,
             // PFL-106: surface the real on-chain anchor (stamped onto the
             // doc by the anchor batch) when present; undefined → pending.
             trustedAnchor: buildTrustedAnchor(raw),
