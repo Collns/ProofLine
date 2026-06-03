@@ -27,8 +27,10 @@
         "vitest": "catalog:"
     },
     "dependencies": {
+        "@google-cloud/kms": "5.5.0",
         "@proofline/anchoring": "workspace:*",
         "@proofline/canonical": "workspace:*",
+        "@proofline/crypto": "workspace:*",
         "@proofline/email": "workspace:*",
         "@proofline/onboarding": "workspace:*",
         "@proofline/policy": "workspace:*",
