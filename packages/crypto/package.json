@@ -5,6 +5,23 @@
     "type": "module",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "default": "./dist/index.js"
+        },
+        "./providers/gcp-kms": {
+            "types": "./dist/providers/gcp-kms.d.ts",
+            "import": "./dist/providers/gcp-kms.js",
+            "default": "./dist/providers/gcp-kms.js"
+        },
+        "./providers/stub": {
+            "types": "./dist/providers/stub.d.ts",
+            "import": "./dist/providers/stub.js",
+            "default": "./dist/providers/stub.js"
+        }
+    },
     "scripts": {
         "build": "tsc",
         "typecheck": "tsc --noEmit",

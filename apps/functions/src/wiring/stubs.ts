@@ -31,6 +31,10 @@ import type {
   RegistryEvent,
 } from "../api/onboarding/finalize.handler.js";
 import type { OnboardingRouterDeps } from "../api/onboarding/router.js";
+import {
+  makeRealKmsProvider,
+  resolveKmsConfigFromEnv,
+} from "./gcp-kms-provider.js";
 
 // ─── Stub PolicyContext ──────────────────────────────────────────────────────
 //
@@ -192,11 +196,29 @@ async function stubSendVerificationCode(to: string, code: string): Promise<void>
 }
 
 export function makeStubOnboardingDeps(): OnboardingRouterDeps {
+  // PFL-126: prefer real Cloud KMS when the env declares it. The
+  // resolveKmsConfigFromEnv helper returns null when GOOGLE_CLOUD_PROJECT
+  // or KMS_KEYRING is absent (local dev, unit tests, anonymous emulator
+  // runs), and we fall back to the sentinel-signature stub. The other
+  // providers stay stubbed for now — they're scoped to their own tickets
+  // (KYB / Stripe / anchor wiring).
+  const kmsConfig = resolveKmsConfigFromEnv(process.env);
+  const kmsProvider = kmsConfig
+    ? (() => {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[onboarding] using real Cloud KMS: project=${kmsConfig.projectId} ` +
+          `location=${kmsConfig.location} keyRing=${kmsConfig.keyRing}`,
+        );
+        return makeRealKmsProvider(kmsConfig);
+      })()
+    : stubKmsProvider;
+
   return {
     sendVerificationCode:    stubSendVerificationCode,
     kybProvider:             stubKybProvider,
     stripeIdentityProvider:  stubStripeIdentityProvider,
-    kmsProvider:             stubKmsProvider,
+    kmsProvider,
     anchorProvider:          stubOnboardingAnchorProvider,
   };
 }
