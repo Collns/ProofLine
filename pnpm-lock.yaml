@@ -136,6 +136,9 @@ importers:
 
   apps/functions:
     dependencies:
+      '@google-cloud/kms':
+        specifier: 5.5.0
+        version: 5.5.0
       '@proofline/anchoring':
         specifier: workspace:*
         version: link:../../packages/anchoring
@@ -145,6 +148,9 @@ importers:
       '@proofline/canonical':
         specifier: workspace:*
         version: link:../../packages/canonical
+      '@proofline/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@proofline/email':
         specifier: workspace:*
         version: link:../../packages/email

@@ -48,6 +48,10 @@ const EXTERNAL_PACKAGES = [
   "firebase-admin/app",
   "firebase-admin/firestore",
   "express",
+  // PFL-126: native gRPC bindings + a large transitive tree. Cheaper and
+  // more reliable to let Cloud's runtime npm install it from
+  // dist/package.json than to inline ~30MB into the function bundle.
+  "@google-cloud/kms",
 ];
 
 // Express has internal dynamic requires that esbuild can't fully bundle
@@ -105,9 +109,10 @@ const distPkg = {
   main:    "index.js",
   engines: { node: "20" },
   dependencies: {
-    express:            pickDep("express"),
+    express:             pickDep("express"),
     "firebase-admin":    pickDep("firebase-admin"),
     "firebase-functions": pickDep("firebase-functions"),
+    "@google-cloud/kms": pickDep("@google-cloud/kms"),
   },
 };
 
