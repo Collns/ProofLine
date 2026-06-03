@@ -89,6 +89,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // PFL-068: employee invitations. Server-only — owners/managers create
+    // them via POST /v1/admin/invite-employee, the extension-auth handler
+    // consumes them on first sign-in. Both happen via Admin SDK.
+    match /employee_invitations/{invitationId} {
+      allow read, write: if false;
+    }
+
     // ── Default deny — anything not explicitly matched above ─────────────
     // Replaces the old permissive catch-all (`read: if request.auth != null`)
     // that let any signed-in user read server-only collections.

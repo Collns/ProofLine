@@ -77,6 +77,9 @@ import { makeRegisterCredentialHandler } from "./auth/register-credential.handle
 // --- PFL-095: server-issued WebAuthn registration challenges
 import { makeRegistrationChallengeHandler } from "./auth/registration-challenge.handler.js";
 
+// --- PFL-068: employee invitations (owner/manager → invitee linking)
+import { makeInviteEmployeeHandler } from "./auth/invite-employee.handler.js";
+
 // --- PFL-087: real Bearer auth for signing routes
 import { requireExtensionAuth } from "./auth/require-extension-auth.middleware.js";
 
@@ -388,6 +391,31 @@ publicApp.post(
   },
 );
 publicApp.options("/v1/auth/challenge", corsMiddleware);
+
+// PFL-068: invite an employee (owner/manager only). Auth is a Firebase
+// ID token Bearer — the handler enforces role + companyId via the
+// caller's users/{uid} doc, so a client claiming a role they don't
+// have in Firestore is rejected.
+let cachedInviteEmployeeHandler:
+  | ((req: express.Request, res: express.Response) => Promise<void>)
+  | null = null;
+function inviteEmployeeHandler(): (
+  req: express.Request,
+  res: express.Response,
+) => Promise<void> {
+  if (cachedInviteEmployeeHandler) return cachedInviteEmployeeHandler;
+  cachedInviteEmployeeHandler = makeInviteEmployeeHandler();
+  return cachedInviteEmployeeHandler;
+}
+
+publicApp.post(
+  "/v1/admin/invite-employee",
+  corsMiddleware,
+  (req, res, next) => {
+    inviteEmployeeHandler()(req, res).catch(next);
+  },
+);
+publicApp.options("/v1/admin/invite-employee", corsMiddleware);
 
 // ─── PFL-062: Cosign routes (/v1/cosign/*) ───────────────────────────────────
 //
