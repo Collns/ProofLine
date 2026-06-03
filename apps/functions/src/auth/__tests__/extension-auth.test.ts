@@ -17,51 +17,68 @@ import request from "supertest";
 
 const store: Record<string, Record<string, unknown>> = {};
 
+interface WhereClause { field: string; op: string; value: unknown }
+
+function matchesAllClauses(doc: Record<string, unknown>, clauses: WhereClause[]): boolean {
+  for (const c of clauses) {
+    if (c.op !== "==") return false;
+    if (doc[c.field] !== c.value) return false;
+  }
+  return true;
+}
+
+function makeDocRef(col: string, id: string) {
+  return {
+    id,
+    ref: undefined as unknown,
+    get:    async () => ({
+      exists: Boolean(store[col]?.[id]),
+      data:   () => store[col]?.[id] ?? null,
+    }),
+    set:    async (data: unknown, opts?: { merge?: boolean }) => {
+      store[col] = store[col] ?? {};
+      if (opts?.merge && store[col][id]) {
+        store[col][id] = { ...(store[col][id] as object), ...(data as object) };
+      } else {
+        store[col][id] = data as Record<string, unknown>;
+      }
+    },
+    update: async (patch: Record<string, unknown>) => {
+      if (!store[col]?.[id]) throw new Error(`Doc ${col}/${id} not found`);
+      store[col][id] = { ...(store[col][id] as object), ...patch };
+    },
+  };
+}
+
+function makeQuery(col: string, clauses: WhereClause[]) {
+  const collect = () => {
+    const docs = store[col] ?? {};
+    return Object.entries(docs)
+      .filter(([, data]) => matchesAllClauses(data as Record<string, unknown>, clauses))
+      .map(([id, data]) => ({ id, data: () => data, ref: makeDocRef(col, id) }));
+  };
+  return {
+    where: (field: string, op: string, value: unknown) =>
+      makeQuery(col, [...clauses, { field, op, value }]),
+    limit: (n: number) => ({
+      get: async () => {
+        const docs = collect().slice(0, n);
+        return { empty: docs.length === 0, docs };
+      },
+    }),
+    get: async () => {
+      const docs = collect();
+      return { empty: docs.length === 0, docs };
+    },
+  };
+}
+
 function makeFirestoreMock() {
   return {
     collection: (col: string) => ({
-      doc: (id: string) => ({
-        get:    async () => ({
-          exists: Boolean(store[col]?.[id]),
-          data:   () => store[col]?.[id] ?? null,
-        }),
-        set:    async (data: unknown, opts?: { merge?: boolean }) => {
-          store[col] = store[col] ?? {};
-          if (opts?.merge && store[col][id]) {
-            store[col][id] = { ...(store[col][id] as object), ...(data as object) };
-          } else {
-            store[col][id] = data as Record<string, unknown>;
-          }
-        },
-        update: async (patch: Record<string, unknown>) => {
-          if (!store[col]?.[id]) throw new Error(`Doc ${col}/${id} not found`);
-          store[col][id] = { ...(store[col][id] as object), ...patch };
-        },
-      }),
-      // PFL-067: minimal where().limit().get() shim — only supports
-      // exact-match on a single field, which is all resolveCompanyIdByEmail
-      // exercises. Returns docs in insertion order.
-      where: (field: string, op: string, value: unknown) => {
-        const matches = () => {
-          const docs = store[col] ?? {};
-          return Object.entries(docs)
-            .filter(([, data]) => op === "==" && (data as Record<string, unknown>)[field] === value)
-            .map(([id, data]) => ({ id, data: () => data }));
-        };
-        const build = (limit: number) => ({
-          get: async () => {
-            const docs = matches().slice(0, limit);
-            return { empty: docs.length === 0, docs };
-          },
-        });
-        return {
-          limit: (n: number) => build(n),
-          get:   async () => {
-            const docs = matches();
-            return { empty: docs.length === 0, docs };
-          },
-        };
-      },
+      doc: (id: string) => makeDocRef(col, id),
+      where: (field: string, op: string, value: unknown) =>
+        makeQuery(col, [{ field, op, value }]),
     }),
   };
 }
@@ -358,5 +375,175 @@ describe("POST /v1/extension/auth", () => {
     expect(res.body.companyId).toBe("co-other");
     const userDoc = store["users"]!["user-consultant"] as Record<string, unknown>;
     expect(userDoc["companyId"]).toBe("co-other");
+  });
+
+  // ── PFL-068: employee invitation acceptance ───────────────────────────────
+
+  it("accepts a pending employee invitation for a new user with a personal-domain email (PFL-068)", async () => {
+    store["employee_invitations"] = {
+      "inv-sarah-001": {
+        invitationId: "inv-sarah-001",
+        email:        "sarah@gmail.com",
+        companyId:    "co-acme",
+        role:         "manager",
+        invitedBy:    "owner-uid",
+        status:       "pending",
+        createdAt:    1_700_000_000_000,
+        expiresAt:    9_999_999_999_999,
+      },
+    };
+
+    const app = buildApp({
+      verifyIdToken: async () => ({ uid: "user-sarah", email: "sarah@gmail.com" }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/auth")
+      .send({ idToken: "fake.firebase.idtoken.value", extInstallId: "ext-sarah" })
+      .expect(200);
+
+    expect(res.body.companyId).toBe("co-acme");
+    expect(res.body.needsOnboarding).toBeUndefined();
+
+    const userDoc = store["users"]!["user-sarah"] as Record<string, unknown>;
+    expect(userDoc["companyId"]).toBe("co-acme");
+    expect(userDoc["role"]).toBe("manager");
+    expect(userDoc["status"]).toBe("active");
+
+    const inv = store["employee_invitations"]!["inv-sarah-001"] as Record<string, unknown>;
+    expect(inv["status"]).toBe("accepted");
+    expect(inv["acceptedByUserId"]).toBe("user-sarah");
+    expect(typeof inv["acceptedAt"]).toBe("number");
+  });
+
+  it("falls through to needsOnboarding when no invitation matches the email (PFL-068)", async () => {
+    store["employee_invitations"] = {
+      "inv-someone-else": {
+        invitationId: "inv-someone-else",
+        email:        "other@gmail.com",
+        companyId:    "co-acme",
+        role:         "employee",
+        invitedBy:    "owner-uid",
+        status:       "pending",
+        createdAt:    1_700_000_000_000,
+        expiresAt:    9_999_999_999_999,
+      },
+    };
+
+    const app = buildApp({
+      verifyIdToken: async () => ({ uid: "user-x", email: "different@gmail.com" }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/auth")
+      .send({ idToken: "fake.firebase.idtoken.value", extInstallId: "ext-x" })
+      .expect(200);
+
+    expect(res.body.companyId).toBe("");
+    expect(res.body.needsOnboarding).toBe(true);
+  });
+
+  it("does not accept an expired invitation; flips its status to expired (PFL-068)", async () => {
+    store["employee_invitations"] = {
+      "inv-stale-001": {
+        invitationId: "inv-stale-001",
+        email:        "stale@gmail.com",
+        companyId:    "co-acme",
+        role:         "employee",
+        invitedBy:    "owner-uid",
+        status:       "pending",
+        createdAt:    1_700_000_000_000,
+        expiresAt:    1,    // expired long ago
+      },
+    };
+
+    const app = buildApp({
+      verifyIdToken: async () => ({ uid: "user-stale", email: "stale@gmail.com" }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/auth")
+      .send({ idToken: "fake.firebase.idtoken.value", extInstallId: "ext-stale" })
+      .expect(200);
+
+    expect(res.body.companyId).toBe("");
+    expect(res.body.needsOnboarding).toBe(true);
+
+    const inv = store["employee_invitations"]!["inv-stale-001"] as Record<string, unknown>;
+    expect(inv["status"]).toBe("expired");
+  });
+
+  it("domain match wins over a pending invitation (no invitation consumed) (PFL-068)", async () => {
+    store["companies"] = {
+      "co-acme": { companyId: "co-acme", domain: "acme.com" },
+    };
+    store["employee_invitations"] = {
+      "inv-bob-001": {
+        invitationId: "inv-bob-001",
+        email:        "bob@acme.com",
+        companyId:    "co-other",   // intentionally different — domain wins
+        role:         "employee",
+        invitedBy:    "owner-uid",
+        status:       "pending",
+        createdAt:    1_700_000_000_000,
+        expiresAt:    9_999_999_999_999,
+      },
+    };
+
+    const app = buildApp({
+      verifyIdToken: async () => ({ uid: "user-bob", email: "bob@acme.com" }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/auth")
+      .send({ idToken: "fake.firebase.idtoken.value", extInstallId: "ext-bob" })
+      .expect(200);
+
+    expect(res.body.companyId).toBe("co-acme");
+    // Invitation should remain pending — domain link bypassed the
+    // invitation lookup entirely.
+    const inv = store["employee_invitations"]!["inv-bob-001"] as Record<string, unknown>;
+    expect(inv["status"]).toBe("pending");
+  });
+
+  it("accepts an invitation for an existing user whose companyId is still empty (PFL-068)", async () => {
+    store["users"] = {
+      "user-prev": {
+        userId:    "user-prev",
+        email:     "prev@gmail.com",
+        companyId: "",                       // never matched a domain
+        status:    "pending",
+        devices:   [],
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      },
+    };
+    store["employee_invitations"] = {
+      "inv-prev-001": {
+        invitationId: "inv-prev-001",
+        email:        "prev@gmail.com",
+        companyId:    "co-acme",
+        role:         "employee",
+        invitedBy:    "owner-uid",
+        status:       "pending",
+        createdAt:    1_700_000_000_000,
+        expiresAt:    9_999_999_999_999,
+      },
+    };
+
+    const app = buildApp({
+      verifyIdToken: async () => ({ uid: "user-prev", email: "prev@gmail.com" }),
+    });
+
+    const res = await request(app)
+      .post("/v1/extension/auth")
+      .send({ idToken: "fake.firebase.idtoken.value", extInstallId: "ext-prev" })
+      .expect(200);
+
+    expect(res.body.companyId).toBe("co-acme");
+    const userDoc = store["users"]!["user-prev"] as Record<string, unknown>;
+    expect(userDoc["companyId"]).toBe("co-acme");
+    expect(userDoc["role"]).toBe("employee");
+    expect(userDoc["status"]).toBe("active");
   });
 });
