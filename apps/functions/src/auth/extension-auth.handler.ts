@@ -36,6 +36,10 @@ import * as crypto from "node:crypto";
 
 import type { DeviceRecord } from "@proofline/types";
 import { ERR } from "../api/onboarding/http.helpers.js";
+import {
+  EMPLOYEE_INVITATIONS_COLLECTION,
+  type EmployeeInvitation,
+} from "./invite-employee.handler.js";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -192,6 +196,59 @@ export async function resolveCompanyIdByEmail(
   return data.companyId ?? snap.docs[0].id ?? null;
 }
 
+/**
+ * PFL-068: when domain-based linking fails (personal email, unknown
+ * domain), look for a pending employee invitation matching this email.
+ * If found and unexpired, mark it accepted and return the linkage info.
+ *
+ * Returns null when there is no match — the caller falls back to the
+ * "needs onboarding" path. Expired pending invitations are flipped to
+ * "expired" on access so the admin dashboard can prune them.
+ */
+export async function consumeEmployeeInvitation(
+  firestore: FirebaseFirestore.Firestore,
+  email: string | undefined,
+  acceptingUserId: string,
+  now: number,
+): Promise<{ companyId: string; role: "employee" | "manager"; invitationId: string } | null> {
+  if (!email) return null;
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return null;
+
+  const snap = await firestore
+    .collection(EMPLOYEE_INVITATIONS_COLLECTION)
+    .where("email", "==", normalized)
+    .where("status", "==", "pending")
+    .limit(1)
+    .get();
+  if (snap.empty) return null;
+
+  const docRef = snap.docs[0].ref;
+  const record = snap.docs[0].data() as EmployeeInvitation;
+
+  if (record.expiresAt < now) {
+    // Stale pending invitation — flip to expired so it stops appearing
+    // in dashboards and isn't re-considered on the next auth attempt.
+    await docRef.set({ status: "expired" }, { merge: true });
+    return null;
+  }
+
+  await docRef.set(
+    {
+      status:           "accepted",
+      acceptedAt:       now,
+      acceptedByUserId: acceptingUserId,
+    },
+    { merge: true },
+  );
+
+  return {
+    companyId:    record.companyId,
+    role:         record.role,
+    invitationId: record.invitationId,
+  };
+}
+
 // ─── Token issuance ──────────────────────────────────────────────────────────
 
 interface IssueTokenInput {
@@ -331,10 +388,53 @@ export function makeExtensionAuthHandler(deps: ExtensionAuthHandlerDeps = {}) {
             { companyId: resolved, updatedAt: Date.now() },
             { merge: true },
           );
+        } else {
+          // PFL-068: no domain match — look for a pending employee
+          // invitation issued by an owner/manager and accept it. This
+          // is how personal-email hires (sarah@gmail.com at Acme) get
+          // linked. We also patch role + status because the invitation
+          // carries the authoritative role for this user.
+          const accepted = await consumeEmployeeInvitation(
+            firestore,
+            user.email || decoded.email,
+            decoded.uid,
+            Date.now(),
+          );
+          if (accepted) {
+            user.companyId = accepted.companyId;
+            user.role      = accepted.role;
+            user.status    = DEFAULT_STATUS;
+            await userRef.set(
+              {
+                companyId: accepted.companyId,
+                role:      accepted.role,
+                status:    DEFAULT_STATUS,
+                updatedAt: Date.now(),
+              },
+              { merge: true },
+            );
+          }
         }
       }
     } else {
-      const resolvedCompanyId = await resolveCompanyIdByEmail(firestore, decoded.email);
+      let resolvedCompanyId = await resolveCompanyIdByEmail(firestore, decoded.email);
+      let resolvedRole: "owner" | "manager" | "employee" = DEFAULT_ROLE;
+      // PFL-068: invitation path runs only when domain linking misses.
+      // Domain-matched users keep DEFAULT_ROLE; invited users inherit
+      // the role the inviter chose ("manager" or "employee").
+      if (!resolvedCompanyId) {
+        const accepted = await consumeEmployeeInvitation(
+          firestore,
+          decoded.email,
+          decoded.uid,
+          Date.now(),
+        );
+        if (accepted) {
+          resolvedCompanyId = accepted.companyId;
+          resolvedRole      = accepted.role;
+        }
+      }
+
       const now = Date.now();
       user = {
         userId:        decoded.uid,
@@ -344,9 +444,9 @@ export function makeExtensionAuthHandler(deps: ExtensionAuthHandlerDeps = {}) {
         // gates on a non-empty companyId, so un-linked users can auth but
         // can't sign until they're invited / onboarded.
         companyId:     resolvedCompanyId ?? "",
-        role:          DEFAULT_ROLE,
-        // PFL-067: "pending" until the user is linked to a company. Once a
-        // domain match exists we treat them as active immediately.
+        role:          resolvedRole,
+        // PFL-067/068: "pending" until the user is linked to a company.
+        // Domain match OR accepted invitation → active immediately.
         status:        resolvedCompanyId ? DEFAULT_STATUS : "pending",
         wireLimitUsd:  DEFAULT_WIRE_LIMIT_USD,
         dailyLimitUsd: DEFAULT_DAILY_LIMIT_USD,
