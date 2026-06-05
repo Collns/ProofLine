@@ -688,4 +688,101 @@ describe("POST /v1/extension/register-credential", () => {
     expect(seen[0]?.challenge).toBe(TEST_CHALLENGE_B64URL);
     expect(seen[0]?.userId).toBe("user-trace");
   });
+
+  // ── PFL-085: multi-device — deviceName on the DeviceRecord ────────────────
+
+  it("PFL-085: persists deviceName onto the DeviceRecord (not just the webauthn_credentials doc)", async () => {
+    store["users"] = {
+      "user-named": {
+        userId:    "user-named",
+        companyId: "co-named",
+        devices:   [],
+      },
+    };
+
+    const app = buildApp({
+      verifyAuthBearer: () => ({
+        userId: "user-named", companyId: "co-named", extInstallId: "e",
+        iat: NOW_SEC, exp: NOW_SEC + 3600,
+      }),
+    });
+
+    await request(app)
+      .post("/v1/extension/register-credential")
+      .set("Authorization", "Bearer x")
+      .send({ ...validBody, deviceName: "MacBook Pro" })
+      .expect(200);
+
+    const userDoc = store["users"]!["user-named"] as Record<string, unknown>;
+    const devices = userDoc["devices"] as Array<Record<string, unknown>>;
+    expect(devices).toHaveLength(1);
+    expect(devices[0]?.["deviceName"]).toBe("MacBook Pro");
+    // lastUsedAt is stamped by sign-finalize, not by register — registration
+    // should leave it absent.
+    expect(devices[0]?.["lastUsedAt"]).toBeUndefined();
+  });
+
+  it("PFL-085: second device gets its own deviceName; first device's name is preserved", async () => {
+    const firstDevice = {
+      credentialId: "cred-first-iphone",
+      publicKey:    "spki-first",
+      enrolledAt:   NOW_SEC * 1000 - 86_400_000,
+      deviceName:   "iPhone",
+    };
+    store["users"] = {
+      "user-two": {
+        userId:    "user-two",
+        companyId: "co-two",
+        devices:   [firstDevice],
+      },
+    };
+
+    const app = buildApp({
+      verifyAuthBearer: () => ({
+        userId: "user-two", companyId: "co-two", extInstallId: "e",
+        iat: NOW_SEC, exp: NOW_SEC + 3600,
+      }),
+    });
+
+    await request(app)
+      .post("/v1/extension/register-credential")
+      .set("Authorization", "Bearer x")
+      .send({ ...validBody, credentialId: "cred-second-macbook", deviceName: "MacBook Air" })
+      .expect(200);
+
+    const userDoc = store["users"]!["user-two"] as Record<string, unknown>;
+    const devices = userDoc["devices"] as Array<Record<string, unknown>>;
+    expect(devices).toHaveLength(2);
+    expect(devices[0]?.["deviceName"]).toBe("iPhone");      // untouched
+    expect(devices[1]?.["deviceName"]).toBe("MacBook Air");
+  });
+
+  it("PFL-085: omits deviceName when the client didn't send one (no `undefined` written to Firestore)", async () => {
+    store["users"] = {
+      "user-nameless": {
+        userId:    "user-nameless",
+        companyId: "co-nameless",
+        devices:   [],
+      },
+    };
+
+    const { deviceName: _unused, ...bodyWithoutName } = validBody;
+    void _unused;
+
+    const app = buildApp({
+      verifyAuthBearer: () => ({
+        userId: "user-nameless", companyId: "co-nameless", extInstallId: "e",
+        iat: NOW_SEC, exp: NOW_SEC + 3600,
+      }),
+    });
+
+    await request(app)
+      .post("/v1/extension/register-credential")
+      .set("Authorization", "Bearer x")
+      .send(bodyWithoutName)
+      .expect(200);
+
+    const devices = (store["users"]!["user-nameless"] as Record<string, unknown>)["devices"] as Array<Record<string, unknown>>;
+    expect(devices[0]).not.toHaveProperty("deviceName");   // omitted, not undefined
+  });
 });

@@ -147,6 +147,8 @@ const RUNTIME_ENV_KEYS = [
   "ANCHOR_CONTRACT_ADDRESS",
   "ANCHOR_CHAIN_ID",
   "FIREBASE_PROJECT_ID",
+  "KMS_KEYRING",
+  "KMS_LOCATION",
 ];
 
 async function readDotenv(path) {

@@ -18,6 +18,7 @@ import {
 } from "@proofline/types";
 import {
   buildCanonicalBytes,
+  bumpDeviceLastUsedAt,
   consumePendingChallenge,
   createSession,
   EmailSignedEnvelope,
@@ -160,6 +161,32 @@ export function makeSignFinalizeHandler(ctx: PolicyContext) {
 
     if (!policyResult.ok) {
       const { code, detail } = policyResult.error;
+      // PFL-085: discriminate the legacy DEVICE_INVALID into the more
+      // specific DEVICE_NOT_FOUND / DEVICE_REVOKED so the extension can
+      // tell apart "you need to re-enroll" from "an admin killed this
+      // credential". validatePolicy collapses both into one code; we
+      // re-read the user to recover the distinction.
+      if (code === "DEVICE_INVALID") {
+        const userForDeviceCheck = await ctx.getUser(userId);
+        const device = userForDeviceCheck?.devices.find(
+          (d) => d.credentialId === pendingChallenge.credentialId,
+        );
+        const specificCode = device && device.revokedAt !== undefined && device.revokedAt !== null
+          ? "DEVICE_REVOKED"
+          : "DEVICE_NOT_FOUND";
+        const specificDetail = specificCode === "DEVICE_REVOKED"
+          ? "Credential has been revoked"
+          : "Credential not enrolled for this user";
+        res.status(401).json(
+          makeRFC7807Error(
+            `https://proofline.app/errors/${specificCode}`,
+            specificCode,
+            401,
+            specificDetail,
+          ),
+        );
+        return;
+      }
       const status = policyErrorToHttpStatus(code);
       res.status(status).json(
         makeRFC7807Error(`https://proofline.app/errors/${code}`, code, status, detail)
@@ -177,12 +204,32 @@ export function makeSignFinalizeHandler(ctx: PolicyContext) {
       return;
     }
 
+    // PFL-085: split the device check so the client can tell apart "this
+    // credentialId isn't registered for you" (re-enroll) from "this
+    // device was revoked by an admin" (don't keep retrying). Both still
+    // refuse the signature; only the failure code differs.
     const device = user.devices.find(
       (d) => d.credentialId === pendingChallenge.credentialId
     );
     if (!device) {
-      res.status(403).json(
-        makeRFC7807Error("https://proofline.app/errors/DEVICE_INVALID", "DEVICE_INVALID", 403)
+      res.status(401).json(
+        makeRFC7807Error(
+          "https://proofline.app/errors/DEVICE_NOT_FOUND",
+          "DEVICE_NOT_FOUND",
+          401,
+          "Credential not enrolled for this user",
+        )
+      );
+      return;
+    }
+    if (device.revokedAt !== undefined && device.revokedAt !== null) {
+      res.status(401).json(
+        makeRFC7807Error(
+          "https://proofline.app/errors/DEVICE_REVOKED",
+          "DEVICE_REVOKED",
+          401,
+          "Credential has been revoked",
+        )
       );
       return;
     }
@@ -244,6 +291,10 @@ export function makeSignFinalizeHandler(ctx: PolicyContext) {
     };
 
     await recordSignedEnvelope(envelope);
+
+    // PFL-085: bump devices[].lastUsedAt on the credential that just
+    // signed. Best-effort — failure here doesn't roll back the signature.
+    await bumpDeviceLastUsedAt(userId, pendingChallenge.credentialId, now);
 
     // ── 8. Session management ─────────────────────────────────────────────────
 

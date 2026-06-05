@@ -80,6 +80,9 @@ import { makeRegistrationChallengeHandler } from "./auth/registration-challenge.
 // --- PFL-068: employee invitations (owner/manager → invitee linking)
 import { makeInviteEmployeeHandler } from "./auth/invite-employee.handler.js";
 
+// --- PFL-085: multi-device management (revoke a specific device)
+import { makeRevokeDeviceHandler } from "./auth/revoke-device.handler.js";
+
 // --- PFL-087: real Bearer auth for signing routes
 import { requireExtensionAuth } from "./auth/require-extension-auth.middleware.js";
 
@@ -416,6 +419,30 @@ publicApp.post(
   },
 );
 publicApp.options("/v1/admin/invite-employee", corsMiddleware);
+
+// PFL-085: revoke an individual WebAuthn credential. Auth is the same
+// extension JWS Bearer the rest of /v1/extension/* uses; the handler
+// enforces self-or-(owner|manager)-same-company via the users doc.
+let cachedRevokeDeviceHandler:
+  | ((req: express.Request, res: express.Response) => Promise<void>)
+  | null = null;
+function revokeDeviceHandler(): (
+  req: express.Request,
+  res: express.Response,
+) => Promise<void> {
+  if (cachedRevokeDeviceHandler) return cachedRevokeDeviceHandler;
+  cachedRevokeDeviceHandler = makeRevokeDeviceHandler();
+  return cachedRevokeDeviceHandler;
+}
+
+publicApp.post(
+  "/v1/admin/revoke-device",
+  corsMiddleware,
+  (req, res, next) => {
+    revokeDeviceHandler()(req, res).catch(next);
+  },
+);
+publicApp.options("/v1/admin/revoke-device", corsMiddleware);
 
 // ─── PFL-062: Cosign routes (/v1/cosign/*) ───────────────────────────────────
 //

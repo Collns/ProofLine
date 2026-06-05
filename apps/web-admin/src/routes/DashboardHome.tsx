@@ -7,9 +7,11 @@ import {
   fetchActiveSessions,
   type CompanyProfile,
   type AdminUser,
+  type AdminDevice,
   type AdminSignedMessage,
   type AdminSession,
 } from '../lib/admin-data';
+import { revokeDevice } from '../api/devices-client';
 
 // PFL-111: real admin dashboard reading live Firestore data (company,
 // users, signed messages, sessions). Replaces the invitations-focused
@@ -52,6 +54,8 @@ export function DashboardHome() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [messages, setMessages] = useState<AdminSignedMessage[]>([]);
   const [sessions, setSessions] = useState<AdminSession[]>([]);
+  // PFL-085: bump to trigger a refetch (post-revoke).
+  const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,7 +77,7 @@ export function DashboardHome() {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [cid]);
+  }, [cid, refreshTick]);
 
   const heading = company?.legalName ?? (cid ? 'Company dashboard' : 'Admin dashboard');
 
@@ -89,7 +93,7 @@ export function DashboardHome() {
     >
       <div className="space-y-6">
         <CompanyCard company={company} cid={cid} loading={loading} />
-        <UsersSection users={users} loading={loading} />
+        <UsersSection users={users} loading={loading} onChanged={() => setRefreshTick((n) => n + 1)} />
         <SignedMessagesSection messages={messages} loading={loading} />
         <SessionsSection sessions={sessions} loading={loading} />
       </div>
@@ -173,7 +177,9 @@ function RolePill({ role }: { role: string }) {
   );
 }
 
-function UsersSection({ users, loading }: { users: AdminUser[]; loading: boolean }) {
+function UsersSection({
+  users, loading, onChanged,
+}: { users: AdminUser[]; loading: boolean; onChanged: () => void }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -195,6 +201,7 @@ function UsersSection({ users, loading }: { users: AdminUser[]; loading: boolean
         <ul className="space-y-2">
           {users.map((u) => {
             const isOpen = expanded.has(u.userId);
+            const activeDeviceCount = u.devices.filter((d) => d.revokedAt === null).length;
             return (
               <li key={u.userId} className="rounded-xl border border-gray-200 bg-white">
                 <button
@@ -209,7 +216,10 @@ function UsersSection({ users, loading }: { users: AdminUser[]; loading: boolean
                   </div>
                   <RolePill role={u.role} />
                   <span className="shrink-0 text-xs text-gray-500">
-                    {u.devices.length} {u.devices.length === 1 ? 'device' : 'devices'}
+                    {activeDeviceCount} {activeDeviceCount === 1 ? 'device' : 'devices'}
+                    {u.devices.length > activeDeviceCount && (
+                      <span className="ml-1 text-gray-400">({u.devices.length} total)</span>
+                    )}
                   </span>
                   <span aria-hidden="true" className="shrink-0 text-gray-400">{isOpen ? '▾' : '▸'}</span>
                 </button>
@@ -219,17 +229,18 @@ function UsersSection({ users, loading }: { users: AdminUser[]; loading: boolean
                     {u.devices.length === 0 ? (
                       <p className="text-sm text-gray-500">No enrolled devices.</p>
                     ) : (
-                      <ul className="space-y-1.5">
+                      <ul className="space-y-2">
                         {u.devices.map((dev, i) => (
-                          <li key={dev.credentialId || i} className="flex items-baseline gap-2 text-sm">
-                            <span className="font-mono text-xs text-[#1F2937]">{truncate(dev.credentialId, 10, 6)}</span>
-                            <span className="text-gray-400">·</span>
-                            <span className="text-gray-500">enrolled {fmtDate(dev.enrolledAt)}</span>
-                          </li>
+                          <DeviceRow
+                            key={dev.credentialId || i}
+                            userId={u.userId}
+                            device={dev}
+                            onChanged={onChanged}
+                          />
                         ))}
                       </ul>
                     )}
-                    <p className="mt-2 text-xs text-gray-400">Status: {u.status}</p>
+                    <p className="mt-2 text-xs text-gray-400">User status: {u.status}</p>
                   </div>
                 )}
               </li>
@@ -238,6 +249,74 @@ function UsersSection({ users, loading }: { users: AdminUser[]; loading: boolean
         </ul>
       )}
     </section>
+  );
+}
+
+function DeviceRow({
+  userId, device, onChanged,
+}: { userId: string; device: AdminDevice; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const revoked = device.revokedAt !== null;
+
+  async function handleRevoke() {
+    // The revoke endpoint needs the caller's extension auth Bearer. The
+    // admin app stashes one in localStorage when the user authenticates
+    // through the sign popup; if absent, surface a friendly hint instead
+    // of failing silently.
+    const bearer = typeof window !== 'undefined'
+      ? window.localStorage.getItem('proofline-auth-token')
+      : null;
+    if (!bearer) {
+      setError('Sign in via the extension first so the dashboard has an auth token.');
+      return;
+    }
+    if (!window.confirm(
+      `Revoke device ${device.deviceName ?? truncate(device.credentialId, 10, 6)}? ` +
+      `Any active sessions on this device will be killed.`,
+    )) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await revokeDevice({ userId, credentialId: device.credentialId }, bearer);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Revoke failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="rounded-md border border-gray-100 px-3 py-2">
+      <div className="flex items-baseline gap-2 text-sm">
+        <span className="font-semibold text-[#0B1F3A]">
+          {device.deviceName ?? <span className="font-normal text-gray-500">unnamed device</span>}
+        </span>
+        <span className="font-mono text-xs text-gray-500">{truncate(device.credentialId, 10, 6)}</span>
+        {revoked && (
+          <span className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-xs font-medium text-red-700">
+            revoked
+          </span>
+        )}
+      </div>
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs text-gray-500">
+        <span>enrolled {fmtDate(device.enrolledAt)}</span>
+        <span>last used {fmtDate(device.lastUsedAt)}</span>
+        {revoked && <span>revoked {fmtDate(device.revokedAt)}</span>}
+      </div>
+      {error && <p className="mt-1 text-xs text-red-700">{error}</p>}
+      {!revoked && (
+        <button
+          type="button"
+          onClick={handleRevoke}
+          disabled={busy}
+          className="mt-2 rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {busy ? 'Revoking…' : 'Revoke'}
+        </button>
+      )}
+    </li>
   );
 }
 

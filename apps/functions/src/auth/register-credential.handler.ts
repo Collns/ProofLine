@@ -530,10 +530,16 @@ export function makeRegisterCredentialHandler(
     //    we do NOT write a flat `users/{userId}.credentialId` field.)
     //    publicKey here is the SAME COSE bytes written above — never the
     //    client's SPKI value.
+    // PFL-085: thread the user-supplied deviceName onto the DeviceRecord
+    // so multi-device users can tell their MacBook from their iPhone in
+    // the admin dashboard. Omitted when the client didn't send one
+    // (older extension versions) — Firestore rejects `undefined`, so we
+    // spread it in conditionally.
     const newDevice: DeviceRecord = {
       credentialId: body.credentialId,
       publicKey:    coseB64,
       enrolledAt:   now,
+      ...(body.deviceName ? { deviceName: body.deviceName } : {}),
     };
     if (existingUser) {
       const devices = Array.isArray(existingUser.devices) ? existingUser.devices : [];

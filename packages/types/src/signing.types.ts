@@ -126,6 +126,13 @@ export interface DeviceRecord {
   publicKey: string;
   revokedAt?: number;
   enrolledAt: number;
+  // PFL-085: human label set at registration time ("MacBook Pro",
+  // "iPhone"). Optional — older docs predate this field.
+  deviceName?: string;
+  // PFL-085: stamped by sign-finalize after a successful assertion. Lets
+  // the admin dashboard show "last used 3 days ago" and lets policy
+  // flag dormant devices for revocation review.
+  lastUsedAt?: number;
 }
 
 export interface UserRecord {
