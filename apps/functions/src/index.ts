@@ -83,6 +83,10 @@ import { makeInviteEmployeeHandler } from "./auth/invite-employee.handler.js";
 // --- PFL-085: multi-device management (revoke a specific device)
 import { makeRevokeDeviceHandler } from "./auth/revoke-device.handler.js";
 
+// --- PFL-128: user management (owner/manager only)
+import { makeUpdateRoleHandler   } from "./auth/update-role.handler.js";
+import { makeUpdateStatusHandler } from "./auth/update-status.handler.js";
+
 // --- PFL-127: admin API (Firebase Auth-scoped read endpoints)
 import { adminAuthMiddleware } from "./auth/admin-auth.middleware.js";
 import {
@@ -453,6 +457,53 @@ publicApp.post(
   },
 );
 publicApp.options("/v1/admin/revoke-device", corsMiddleware);
+
+// PFL-128: change a user's role (owner only) and status (owner/manager).
+// Both endpoints verify the Firebase ID token Bearer themselves and
+// enforce caller authorization against the persisted users/{uid} doc;
+// they intentionally don't share the GET-only adminAuthMiddleware below
+// so each handler can keep its own audit-log shape.
+let cachedUpdateRoleHandler:
+  | ((req: express.Request, res: express.Response) => Promise<void>)
+  | null = null;
+function updateRoleHandler(): (
+  req: express.Request,
+  res: express.Response,
+) => Promise<void> {
+  if (cachedUpdateRoleHandler) return cachedUpdateRoleHandler;
+  cachedUpdateRoleHandler = makeUpdateRoleHandler();
+  return cachedUpdateRoleHandler;
+}
+
+publicApp.post(
+  "/v1/admin/update-role",
+  corsMiddleware,
+  (req, res, next) => {
+    updateRoleHandler()(req, res).catch(next);
+  },
+);
+publicApp.options("/v1/admin/update-role", corsMiddleware);
+
+let cachedUpdateStatusHandler:
+  | ((req: express.Request, res: express.Response) => Promise<void>)
+  | null = null;
+function updateStatusHandler(): (
+  req: express.Request,
+  res: express.Response,
+) => Promise<void> {
+  if (cachedUpdateStatusHandler) return cachedUpdateStatusHandler;
+  cachedUpdateStatusHandler = makeUpdateStatusHandler();
+  return cachedUpdateStatusHandler;
+}
+
+publicApp.post(
+  "/v1/admin/update-status",
+  corsMiddleware,
+  (req, res, next) => {
+    updateStatusHandler()(req, res).catch(next);
+  },
+);
+publicApp.options("/v1/admin/update-status", corsMiddleware);
 
 // ─── PFL-127: admin read API (/v1/admin/{company,users,signed-messages,sessions,invitations}) ─
 //
