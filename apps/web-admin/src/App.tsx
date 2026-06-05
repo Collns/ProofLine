@@ -5,6 +5,7 @@ import { LoginPage } from './routes/LoginPage';
 import { OnboardingWizard } from './routes/OnboardingWizard';
 import { DashboardHome } from './routes/DashboardHome';
 import { DemoHub } from './routes/DemoHub';
+import { TeamPage } from './routes/TeamPage';
 import { InviteCounterparties } from './routes/invitations/InviteCounterparties';
 import { InvitationsList } from './routes/invitations/InvitationsList';
 import { InvitationDetail } from './routes/invitations/InvitationDetail';
@@ -34,6 +35,12 @@ export function App() {
         <Route
           path="/dashboard"
           element={<ProtectedRoute><DashboardHome /></ProtectedRoute>}
+        />
+        {/* PFL-128: employee invites + invitation list. The role/status
+            mutations themselves live on the dashboard's user list. */}
+        <Route
+          path="/team"
+          element={<ProtectedRoute><TeamPage /></ProtectedRoute>}
         />
         <Route
           path="/invitations"
