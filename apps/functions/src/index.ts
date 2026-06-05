@@ -83,6 +83,16 @@ import { makeInviteEmployeeHandler } from "./auth/invite-employee.handler.js";
 // --- PFL-085: multi-device management (revoke a specific device)
 import { makeRevokeDeviceHandler } from "./auth/revoke-device.handler.js";
 
+// --- PFL-127: admin API (Firebase Auth-scoped read endpoints)
+import { adminAuthMiddleware } from "./auth/admin-auth.middleware.js";
+import {
+  makeCompanyHandler,
+  makeUsersHandler,
+  makeSignedMessagesHandler,
+  makeSessionsHandler,
+  makeInvitationsHandler,
+} from "./api/admin/handlers.js";
+
 // --- PFL-087: real Bearer auth for signing routes
 import { requireExtensionAuth } from "./auth/require-extension-auth.middleware.js";
 
@@ -443,6 +453,43 @@ publicApp.post(
   },
 );
 publicApp.options("/v1/admin/revoke-device", corsMiddleware);
+
+// ─── PFL-127: admin read API (/v1/admin/{company,users,signed-messages,sessions,invitations}) ─
+//
+// Sub-router because every endpoint needs the same Firebase Auth Bearer
+// middleware. CORS still applies at the outer publicApp level via
+// corsMiddleware. The deps factory is lazy because getFirestore() needs
+// firebase-admin to be initialised — which happens at module load above.
+let cachedAdminApiRouter: express.Router | null = null;
+function adminApiRouter(): express.Router {
+  if (cachedAdminApiRouter) return cachedAdminApiRouter;
+  const router = express.Router();
+  const deps   = { getFirestore: () => getFirestore() };
+  router.use(adminAuthMiddleware);
+  const wrap =
+    (factory: (d: typeof deps) => (req: express.Request, res: express.Response) => Promise<void>) =>
+    (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+      factory(deps)(req, res).catch(next);
+    };
+  router.get("/company",         wrap(makeCompanyHandler));
+  router.get("/users",           wrap(makeUsersHandler));
+  router.get("/signed-messages", wrap(makeSignedMessagesHandler));
+  router.get("/sessions",        wrap(makeSessionsHandler));
+  router.get("/invitations",     wrap(makeInvitationsHandler));
+  cachedAdminApiRouter = router;
+  return cachedAdminApiRouter;
+}
+
+// The outer corsMiddleware here short-circuits OPTIONS preflights for
+// every nested /v1/admin/* route — no need for an extra app.options()
+// registration. The POST endpoints registered above (invite-employee,
+// revoke-device) are matched first by Express, so they aren't shadowed
+// by the GET-only sub-router below.
+publicApp.use(
+  "/v1/admin",
+  corsMiddleware,
+  (req, res, next) => adminApiRouter()(req, res, next),
+);
 
 // ─── PFL-062: Cosign routes (/v1/cosign/*) ───────────────────────────────────
 //
