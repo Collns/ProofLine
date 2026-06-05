@@ -247,6 +247,48 @@ export async function recordSignedEnvelope(
   });
 }
 
+// ─── Device usage tracking (PFL-085) ─────────────────────────────────────────
+//
+// Stamp `lastUsedAt` on the device that just successfully signed. We don't
+// fail the request if this can't write — the signature is already
+// persisted, this is observability for the admin dashboard. Transactional
+// because devices is an array field and concurrent registrations on a
+// second device would otherwise race with the bump.
+
+export async function bumpDeviceLastUsedAt(
+  userId: string,
+  credentialId: string,
+  now: number,
+): Promise<void> {
+  const db = getFirestore();
+  const userRef = db.collection("users").doc(userId);
+
+  try {
+    await db.runTransaction(async (tx: any) => {
+      const snap = await tx.get(userRef);
+      if (!snap.exists) return;
+      const data = snap.data() as { devices?: Array<Record<string, unknown>> };
+      const devices = Array.isArray(data.devices) ? data.devices : [];
+      let touched = false;
+      const updated = devices.map((d) => {
+        if (d && (d as { credentialId?: string }).credentialId === credentialId) {
+          touched = true;
+          return { ...d, lastUsedAt: now };
+        }
+        return d;
+      });
+      if (!touched) return;
+      tx.update(userRef, { devices: updated, updatedAt: now });
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[sign-finalize] failed to stamp lastUsedAt for user=${userId} ` +
+      `cred=${credentialId.slice(0, 16)}…: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 // ─── Session management ───────────────────────────────────────────────────────
 
 interface CreateSessionInput {

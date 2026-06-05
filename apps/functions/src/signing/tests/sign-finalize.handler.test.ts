@@ -574,4 +574,170 @@ describe("POST /v1/sign → /v1/sign/finalize", () => {
     expect(sig["sessionId"]).toBe("stub-session-id");
     expect(sig["path"]).toBe("silent");
   });
+
+  // ── PFL-085: per-device validation at sign-finalize ────────────────────────
+
+  /**
+   * Build an app whose finalize-step PolicyContext seats a custom set of
+   * devices on the test user, while the sign-step keeps the permissive
+   * default so we can run the sign → finalize flow and exercise the
+   * device branch independently of the upstream policy.
+   */
+  function buildAppWithUserDevices(devices: Array<{ credentialId: string; publicKey: string; revokedAt?: number; enrolledAt?: number }>) {
+    const app = express();
+    app.use(express.json());
+    app.use(attachUser);
+    app.post("/v1/sign", async (req, res, next) => {
+      const credentialId = typeof req.body?.credentialId === "string" ? req.body.credentialId : "stub";
+      const ctx = makeStubPolicyContext({ credentialId, userId: "dev-user", companyId: "dev-company" });
+      try { await makeSignHandler(ctx)(req, res); } catch (e) { next(e); }
+    });
+    app.post("/v1/sign/finalize", async (req, res, next) => {
+      const baseCtx = makeStubPolicyContext({ credentialId: "stub-ignored", userId: "dev-user", companyId: "dev-company" });
+      const ctx = {
+        ...baseCtx,
+        async getUser(userId: string) {
+          if (userId !== "dev-user") return null;
+          return {
+            userId:        "dev-user",
+            companyId:     "dev-company",
+            status:        "active" as const,
+            role:          "owner" as const,
+            wireLimitUsd:  10_000_000,
+            dailyLimitUsd: 100_000_000,
+            devices:       devices.map((d) => ({
+              credentialId: d.credentialId,
+              publicKey:    d.publicKey,
+              enrolledAt:   d.enrolledAt ?? 0,
+              ...(d.revokedAt !== undefined ? { revokedAt: d.revokedAt } : {}),
+            })),
+          };
+        },
+      };
+      try { await makeSignFinalizeHandler(ctx)(req, res); } catch (e) { next(e); }
+    });
+    app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      // eslint-disable-next-line no-console
+      console.error("[test] handler error:", err);
+      res.status(500).json({ error: err.message, stack: err.stack });
+    });
+    return app;
+  }
+
+  async function issueFinalizeChallenge(app: express.Express, opts: { credentialId: string }): Promise<{ challengeId: string; payload: EmailPayload; payloadHash: string }> {
+    const payload = makePayload();
+    const signRes = await request(app)
+      .post("/v1/sign")
+      .send({
+        payload,
+        recipientSetHash: RECIPIENT_SET_HASH,
+        credentialId:     opts.credentialId,
+        freshBiometric:   true,
+      })
+      .expect(200);
+    const challengeId = signRes.headers["x-proofline-challenge-id"] as string;
+    expect(challengeId).toBeTruthy();
+    const { canonicalize } = await import("@proofline/canonical");
+    const nodeCrypto = await import("node:crypto");
+    const payloadHash = nodeCrypto.createHash("sha256").update(canonicalize(payload)).digest("hex");
+    return { challengeId, payload, payloadHash };
+  }
+
+  it("PFL-085: returns 401 DEVICE_NOT_FOUND when the signed credentialId isn't in user.devices[]", async () => {
+    // User has device X enrolled; sign request comes in for credentialId Y.
+    const app = buildAppWithUserDevices([
+      { credentialId: "cred-X-enrolled", publicKey: "spki-x", enrolledAt: 0 },
+    ]);
+
+    const { challengeId, payloadHash } = await issueFinalizeChallenge(app, { credentialId: "cred-Y-not-enrolled" });
+
+    const res = await request(app)
+      .post("/v1/sign/finalize")
+      .set("x-proofline-challenge-id", challengeId)
+      .send({
+        assertion: {
+          credentialId:      "cred-Y-not-enrolled",
+          clientDataJSON:    "stub-client-data",
+          authenticatorData: "stub-auth-data",
+          signature:         "stub-signature",
+        },
+        payloadHash,
+        recipientSetHash: RECIPIENT_SET_HASH,
+        path:             "fresh",
+      });
+
+    expect(res.status).toBe(401);
+    expect(res.body.title).toBe("DEVICE_NOT_FOUND");
+  });
+
+  it("PFL-085: returns 401 DEVICE_REVOKED when the signed credentialId is revoked", async () => {
+    // User has device X enrolled but revoked. Sign + finalize with X.
+    const app = buildAppWithUserDevices([
+      {
+        credentialId: "cred-revoked-001",
+        publicKey:    "spki-revoked",
+        enrolledAt:   1_700_000_000_000,
+        revokedAt:    1_700_000_500_000,
+      },
+    ]);
+
+    const { challengeId, payloadHash } = await issueFinalizeChallenge(app, { credentialId: "cred-revoked-001" });
+
+    const res = await request(app)
+      .post("/v1/sign/finalize")
+      .set("x-proofline-challenge-id", challengeId)
+      .send({
+        assertion: {
+          credentialId:      "cred-revoked-001",
+          clientDataJSON:    "stub-client-data",
+          authenticatorData: "stub-auth-data",
+          signature:         "stub-signature",
+        },
+        payloadHash,
+        recipientSetHash: RECIPIENT_SET_HASH,
+        path:             "fresh",
+      });
+
+    expect(res.status).toBe(401);
+    expect(res.body.title).toBe("DEVICE_REVOKED");
+  });
+
+  it("PFL-085: stamps lastUsedAt onto the device record after a successful sign", async () => {
+    const app = buildAppWithUserDevices([
+      { credentialId: CREDENTIAL_ID, publicKey: "spki-test", enrolledAt: 1_700_000_000_000 },
+    ]);
+    // Seed the user doc in the in-memory Firestore so bumpDeviceLastUsedAt
+    // (which reads via getFirestore directly, not ctx) finds it.
+    ensureCol("users")["dev-user"] = {
+      userId:    "dev-user",
+      companyId: "dev-company",
+      devices:   [{ credentialId: CREDENTIAL_ID, publicKey: "spki-test", enrolledAt: 1_700_000_000_000 }],
+    };
+
+    const { challengeId, payloadHash } = await issueFinalizeChallenge(app, { credentialId: CREDENTIAL_ID });
+
+    const res = await request(app)
+      .post("/v1/sign/finalize")
+      .set("x-proofline-challenge-id", challengeId)
+      .send({
+        assertion: {
+          credentialId:      CREDENTIAL_ID,
+          clientDataJSON:    "stub-client-data",
+          authenticatorData: "stub-auth-data",
+          signature:         "stub-signature",
+        },
+        payloadHash,
+        recipientSetHash: RECIPIENT_SET_HASH,
+        path:             "fresh",
+      });
+
+    expect(res.status).toBe(200);
+
+    const userDoc = store["users"]?.["dev-user"] as Record<string, unknown>;
+    const devices = userDoc?.["devices"] as Array<Record<string, unknown>>;
+    expect(devices).toHaveLength(1);
+    expect(typeof devices[0]?.["lastUsedAt"]).toBe("number");
+    // Sanity bound: lastUsedAt should be a fresh (>= the assertion run) ms epoch.
+    expect((devices[0]?.["lastUsedAt"] as number) > 1_700_000_000_000).toBe(true);
+  });
 });

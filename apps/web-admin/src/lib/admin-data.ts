@@ -31,6 +31,11 @@ export interface CompanyProfile {
 export interface AdminDevice {
   credentialId: string;
   enrolledAt: number | null;
+  // PFL-085 multi-device fields. All optional — older device records
+  // predate them.
+  deviceName: string | null;
+  lastUsedAt: number | null;
+  revokedAt: number | null;
 }
 
 export interface AdminUser {
@@ -107,7 +112,10 @@ export async function fetchUsers(cid: string): Promise<AdminUser[]> {
         status: str(d.status, 'unknown'),
         devices: rawDevices.map((dev) => ({
           credentialId: str(dev.credentialId),
-          enrolledAt: num(dev.enrolledAt),
+          enrolledAt:   num(dev.enrolledAt),
+          deviceName:   typeof dev.deviceName === 'string' && dev.deviceName ? dev.deviceName : null,
+          lastUsedAt:   num(dev.lastUsedAt),
+          revokedAt:    num(dev.revokedAt),
         })),
       };
     });
