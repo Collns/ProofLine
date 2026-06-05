@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import {
   fetchCompanyProfile,
@@ -12,6 +13,12 @@ import {
   type AdminSession,
 } from '../lib/admin-data';
 import { revokeDevice } from '../api/devices-client';
+import {
+  updateUserRole,
+  updateUserStatus,
+  UserManagementError,
+} from '../api/user-management-client';
+import { useAuth } from '../contexts/AuthContext';
 
 // PFL-111: real admin dashboard reading live Firestore data (company,
 // users, signed messages, sessions). Replaces the invitations-focused
@@ -49,6 +56,8 @@ function truncate(s: string, head = 10, tail = 6): string {
 
 export function DashboardHome() {
   const cid = resolveCompanyId();
+  const { user } = useAuth();
+  const callerUid = user?.uid ?? '';
   const [loading, setLoading] = useState(true);
   const [company, setCompany] = useState<CompanyProfile | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -79,6 +88,20 @@ export function DashboardHome() {
     return () => { cancelled = true; };
   }, [cid, refreshTick]);
 
+  // PFL-128: derive the caller's role from the users list so the UI can
+  // gate role-edit (owner only) and deactivate (owner OR manager) and
+  // skip controls on the caller's own row. Falls back to "employee" so
+  // a not-yet-loaded users list never accidentally exposes controls.
+  const callerRole: 'owner' | 'manager' | 'employee' =
+    (users.find((u) => u.userId === callerUid)?.role as 'owner' | 'manager' | 'employee' | undefined) ?? 'employee';
+
+  // Optimistic in-place patch — used by role/status mutations so the
+  // user list reflects the change instantly. Errors roll back via
+  // refreshTick.
+  function patchUser(userId: string, patch: Partial<AdminUser>) {
+    setUsers((prev) => prev.map((u) => (u.userId === userId ? { ...u, ...patch } : u)));
+  }
+
   const heading = company?.legalName ?? (cid ? 'Company dashboard' : 'Admin dashboard');
 
   return (
@@ -87,13 +110,25 @@ export function DashboardHome() {
       heading={heading}
       description={
         cid
-          ? <>Live company registry, users, signed mail, and active sessions.</>
+          ? (
+            <>
+              Live company registry, users, signed mail, and active sessions.{' '}
+              <Link to="/team" className="text-[#0D6EFD] underline">Invite a teammate →</Link>
+            </>
+          )
           : <>No company selected — append <code className="font-mono text-[#0B1F3A]">?cid=&lt;companyId&gt;</code> or set <code className="font-mono text-[#0B1F3A]">proofline-company-id</code> in localStorage.</>
       }
     >
       <div className="space-y-6">
         <CompanyCard company={company} cid={cid} loading={loading} />
-        <UsersSection users={users} loading={loading} onChanged={() => setRefreshTick((n) => n + 1)} />
+        <UsersSection
+          users={users}
+          loading={loading}
+          callerUid={callerUid}
+          callerRole={callerRole}
+          onChanged={() => setRefreshTick((n) => n + 1)}
+          onOptimisticPatch={patchUser}
+        />
         <SignedMessagesSection messages={messages} loading={loading} />
         <SessionsSection sessions={sessions} loading={loading} />
       </div>
@@ -178,8 +213,15 @@ function RolePill({ role }: { role: string }) {
 }
 
 function UsersSection({
-  users, loading, onChanged,
-}: { users: AdminUser[]; loading: boolean; onChanged: () => void }) {
+  users, loading, callerUid, callerRole, onChanged, onOptimisticPatch,
+}: {
+  users: AdminUser[];
+  loading: boolean;
+  callerUid: string;
+  callerRole: 'owner' | 'manager' | 'employee';
+  onChanged: () => void;
+  onOptimisticPatch: (userId: string, patch: Partial<AdminUser>) => void;
+}) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -202,27 +244,56 @@ function UsersSection({
           {users.map((u) => {
             const isOpen = expanded.has(u.userId);
             const activeDeviceCount = u.devices.filter((d) => d.revokedAt === null).length;
+            const isSelf       = u.userId === callerUid;
+            const isInactive   = u.status === 'inactive';
             return (
-              <li key={u.userId} className="rounded-xl border border-gray-200 bg-white">
-                <button
-                  type="button"
-                  onClick={() => toggle(u.userId)}
-                  aria-expanded={isOpen}
-                  className="flex w-full items-center gap-3 p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D6EFD] focus-visible:ring-offset-2"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-[#0B1F3A]">{u.displayName}</p>
-                    <p className="truncate text-sm text-gray-600">{u.email || '—'}</p>
-                  </div>
-                  <RolePill role={u.role} />
+              <li
+                key={u.userId}
+                className={`rounded-xl border border-gray-200 bg-white ${isInactive ? 'opacity-60' : ''}`}
+              >
+                <div className="flex w-full items-center gap-3 p-4 text-left">
+                  <button
+                    type="button"
+                    onClick={() => toggle(u.userId)}
+                    aria-expanded={isOpen}
+                    className="flex min-w-0 flex-1 items-center gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D6EFD] focus-visible:ring-offset-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-[#0B1F3A]">{u.displayName}</p>
+                      <p className="truncate text-sm text-gray-600">{u.email || '—'}</p>
+                    </div>
+                  </button>
+                  <RoleControl
+                    user={u}
+                    callerUid={callerUid}
+                    callerRole={callerRole}
+                    onOptimisticPatch={onOptimisticPatch}
+                    onChanged={onChanged}
+                  />
                   <span className="shrink-0 text-xs text-gray-500">
                     {activeDeviceCount} {activeDeviceCount === 1 ? 'device' : 'devices'}
                     {u.devices.length > activeDeviceCount && (
                       <span className="ml-1 text-gray-400">({u.devices.length} total)</span>
                     )}
                   </span>
-                  <span aria-hidden="true" className="shrink-0 text-gray-400">{isOpen ? '▾' : '▸'}</span>
-                </button>
+                  {!isSelf && (
+                    <StatusControl
+                      user={u}
+                      callerRole={callerRole}
+                      onOptimisticPatch={onOptimisticPatch}
+                      onChanged={onChanged}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => toggle(u.userId)}
+                    aria-expanded={isOpen}
+                    aria-label={isOpen ? 'Collapse' : 'Expand'}
+                    className="shrink-0 text-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D6EFD]"
+                  >
+                    {isOpen ? '▾' : '▸'}
+                  </button>
+                </div>
                 {isOpen && (
                   <div className="border-t border-gray-100 px-4 py-3">
                     <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">Devices</p>
@@ -249,6 +320,149 @@ function UsersSection({
         </ul>
       )}
     </section>
+  );
+}
+
+// ─── Role control ─────────────────────────────────────────────────────────────
+//
+// PFL-128: owners see a dropdown to flip role between employee and
+// manager (the API refuses owner promotions). Non-owners and the
+// caller's own row show the static RolePill.
+
+function RoleControl({
+  user, callerUid, callerRole, onOptimisticPatch, onChanged,
+}: {
+  user: AdminUser;
+  callerUid: string;
+  callerRole: 'owner' | 'manager' | 'employee';
+  onOptimisticPatch: (userId: string, patch: Partial<AdminUser>) => void;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Can't change: caller isn't owner, target is the caller, or target
+  // is the owner (server enforces, UI shadows).
+  const canEdit =
+    callerRole === 'owner' && user.userId !== callerUid && user.role !== 'owner';
+
+  if (!canEdit) {
+    return <RolePill role={user.role} />;
+  }
+
+  async function handleChange(next: string) {
+    if (next !== 'employee' && next !== 'manager') return;
+    if (next === user.role) return;
+    setError(null);
+    const previousRole = user.role;
+    onOptimisticPatch(user.userId, { role: next });
+    setBusy(true);
+    try {
+      await updateUserRole(user.userId, next);
+      onChanged();
+    } catch (err) {
+      // Rollback the optimistic patch and surface the error.
+      onOptimisticPatch(user.userId, { role: previousRole });
+      const msg = err instanceof UserManagementError ? `${err.code}: ${err.message}` :
+                  err instanceof Error ? err.message : 'Role change failed';
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <select
+        value={user.role}
+        onChange={(e) => handleChange(e.target.value)}
+        disabled={busy}
+        aria-label={`Role for ${user.displayName}`}
+        className="rounded border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-700 focus:border-[#0D6EFD] focus:outline-none focus:ring-2 focus:ring-[#0D6EFD]/30 disabled:opacity-60"
+      >
+        <option value="employee">employee</option>
+        <option value="manager">manager</option>
+      </select>
+      {error && <span className="max-w-[200px] truncate text-xs text-red-700" title={error}>{error}</span>}
+    </div>
+  );
+}
+
+// ─── Status control ───────────────────────────────────────────────────────────
+//
+// PFL-128: owners can deactivate any non-owner; managers can only flip
+// employees. Caller's own row hides this control (the server enforces
+// SELF_CHANGE anyway). Deactivated users show a Reactivate button.
+
+function StatusControl({
+  user, callerRole, onOptimisticPatch, onChanged,
+}: {
+  user: AdminUser;
+  callerRole: 'owner' | 'manager' | 'employee';
+  onOptimisticPatch: (userId: string, patch: Partial<AdminUser>) => void;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Visibility: owners on anyone non-owner; managers on employees only.
+  const canMutate =
+    callerRole === 'owner'
+      ? user.role !== 'owner'
+      : callerRole === 'manager'
+        ? user.role === 'employee'
+        : false;
+
+  if (!canMutate) return null;
+
+  const isInactive = user.status === 'inactive';
+
+  async function handleClick() {
+    const next: 'active' | 'inactive' = isInactive ? 'active' : 'inactive';
+    const verb = isInactive ? 'Reactivate' : 'Deactivate';
+    if (!isInactive) {
+      const ok = typeof window === 'undefined'
+        ? true
+        : window.confirm(
+            `${verb} ${user.displayName || user.email}? ` +
+            `All active sessions will be killed and all enrolled devices will be revoked. ` +
+            `They will need to re-enroll their device to come back online.`,
+          );
+      if (!ok) return;
+    }
+    setError(null);
+    const previousStatus = user.status;
+    onOptimisticPatch(user.userId, { status: next });
+    setBusy(true);
+    try {
+      await updateUserStatus(user.userId, next);
+      onChanged();   // refetch so device-revoked states + session counts match server
+    } catch (err) {
+      onOptimisticPatch(user.userId, { status: previousStatus });
+      const msg = err instanceof UserManagementError ? `${err.code}: ${err.message}` :
+                  err instanceof Error ? err.message : 'Status change failed';
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={busy}
+        className={`rounded-md border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-60 ${
+          isInactive
+            ? 'border-[#0F9D58]/30 bg-white text-[#0F9D58] hover:bg-[#0F9D58]/10'
+            : 'border-red-200 bg-white text-red-700 hover:bg-red-50'
+        }`}
+      >
+        {busy ? '…' : isInactive ? 'Reactivate' : 'Deactivate'}
+      </button>
+      {error && <span className="max-w-[200px] truncate text-xs text-red-700" title={error}>{error}</span>}
+    </div>
   );
 }
 
