@@ -86,6 +86,7 @@ import { makeRevokeDeviceHandler } from "./auth/revoke-device.handler.js";
 // --- PFL-128: user management (owner/manager only)
 import { makeUpdateRoleHandler   } from "./auth/update-role.handler.js";
 import { makeUpdateStatusHandler } from "./auth/update-status.handler.js";
+import { makeRevokeSessionHandler } from "./auth/revoke-session.handler.js";
 
 // --- PFL-127: admin API (Firebase Auth-scoped read endpoints)
 import { adminAuthMiddleware } from "./auth/admin-auth.middleware.js";
@@ -504,6 +505,29 @@ publicApp.post(
   },
 );
 publicApp.options("/v1/admin/update-status", corsMiddleware);
+
+// PFL-130: revoke a single active signing session. Same Firebase ID
+// token Bearer + self-verified authorization pattern as update-status.
+let cachedRevokeSessionHandler:
+  | ((req: express.Request, res: express.Response) => Promise<void>)
+  | null = null;
+function revokeSessionHandler(): (
+  req: express.Request,
+  res: express.Response,
+) => Promise<void> {
+  if (cachedRevokeSessionHandler) return cachedRevokeSessionHandler;
+  cachedRevokeSessionHandler = makeRevokeSessionHandler();
+  return cachedRevokeSessionHandler;
+}
+
+publicApp.post(
+  "/v1/admin/revoke-session",
+  corsMiddleware,
+  (req, res, next) => {
+    revokeSessionHandler()(req, res).catch(next);
+  },
+);
+publicApp.options("/v1/admin/revoke-session", corsMiddleware);
 
 // ─── PFL-127: admin read API (/v1/admin/{company,users,signed-messages,sessions,invitations}) ─
 //

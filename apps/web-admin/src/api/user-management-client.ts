@@ -1,8 +1,9 @@
-// PFL-128: thin client for the user-management mutations.
+// PFL-128 + PFL-130: thin client for the admin mutations.
 //
-// Three POST endpoints — invite, update role, update status — all
-// authenticated by the signed-in Firebase user's ID token (Bearer).
-// Mirrors the auth-header pattern in invitations-client.ts.
+// Four POST endpoints — invite, update role, update status, revoke
+// session — all authenticated by the signed-in Firebase user's ID
+// token (Bearer). Mirrors the auth-header pattern in
+// invitations-client.ts.
 
 import { getFirebaseAuth } from '../lib/firebase';
 
@@ -128,5 +129,19 @@ export function updateUserStatus(
   return adminPost<{ userId: string; status: 'active' | 'inactive' }, UpdateUserStatusResponse>(
     '/v1/admin/update-status',
     { userId, status },
+  );
+}
+
+export interface RevokeSessionResponse {
+  ok:        true;
+  sessionId: string;
+  revokedAt: number;
+}
+
+/** PFL-130: kill one active signing session immediately. */
+export function revokeSession(sessionId: string): Promise<RevokeSessionResponse> {
+  return adminPost<{ sessionId: string }, RevokeSessionResponse>(
+    '/v1/admin/revoke-session',
+    { sessionId },
   );
 }
