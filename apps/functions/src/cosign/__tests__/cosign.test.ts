@@ -462,7 +462,7 @@ describe("POST /v1/cosign/:messageId/refresh", () => {
 
     expect(res.body).toEqual({ ok: true, freshLinkSent: true });
     expect(sendFreshLinkEmail).toHaveBeenCalledTimes(1);
-    const arg = sendFreshLinkEmail.mock.calls[0]![0] as {
+    const arg = (sendFreshLinkEmail.mock.calls[0] as unknown[])[0] as {
       messageId: string; freshToken: string; expiresAt: number;
     };
     expect(arg.messageId).toBe(messageId);

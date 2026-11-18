@@ -102,7 +102,7 @@ export const FIXTURES: Record<string, CosignContextResponse> = {
   invalid:         fixtureInvalidLink,
 };
 
-export const fixtureFinalizeOk: FinalizeCosignResponse = {
+export const fixtureFinalizeOk: Extract<FinalizeCosignResponse, { ok: true }> = {
   ok: true,
   messageId: 'msg-demo-cosign-001',
   anchorWillFollow: true,

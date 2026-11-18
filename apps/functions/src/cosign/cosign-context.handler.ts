@@ -107,7 +107,7 @@ export function makeCosignContextHandler() {
       return;
     }
 
-    const envelope = adaptStoredEnvelope(snap.data() as Record<string, unknown>);
+    const envelope = adaptStoredEnvelope(snap.data() as Parameters<typeof adaptStoredEnvelope>[0]);
 
     if (hasCosigner(envelope)) {
       respond(res, {

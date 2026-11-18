@@ -26,5 +26,7 @@ export function handleMessage(
       return { ok: true, stub: 'extracted', receivedType: msg.type };
     case 'EXTRACTION_FAILED':
       return { ok: false, error: msg.error.code };
+    default:
+      return { ok: false, error: 'unhandled_message_type' };
   }
 }

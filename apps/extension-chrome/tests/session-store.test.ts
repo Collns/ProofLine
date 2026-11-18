@@ -22,6 +22,7 @@ describe("session-store key namespacing", () => {
       token:        "tok_a",
       userId:       "user_1",
       companyId:    "co_1",
+      email:        "user_1@example.com",
       extInstallId: "ext_1",
       iat:          nowSec,
       exp:          nowSec + 3600,

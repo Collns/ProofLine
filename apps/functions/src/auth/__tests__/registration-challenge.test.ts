@@ -72,7 +72,7 @@ function okVerify(userId = "user-abc", companyId = "co-abc") {
   return (() => ({
     ok:     true as const,
     claims: { userId, companyId, extInstallId: "ext-1", iat: 1, exp: 2_000_000_000 },
-  })) as Parameters<typeof makeRegistrationChallengeHandler>[0]["verifyAuthorization"];
+  })) as NonNullable<Parameters<typeof makeRegistrationChallengeHandler>[0]>["verifyAuthorization"];
 }
 
 beforeEach(() => {
