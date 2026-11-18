@@ -13,10 +13,11 @@
  *   ANCHOR_CONTRACT_ADDRESS   → AnchorProvider contract address
  *   FIREBASE_PROJECT_ID       → Firestore client (already set by Functions)
  *
- * Behavior:
- *   - In production (NODE_ENV=production), missing env throws explicitly.
- *   - Outside production, missing env transparently falls back to stubs
- *     so local dev / tests don't need a real wallet.
+ * Behavior (PFL-169):
+ *   - The provider is chosen by ANCHOR_PROVIDER via loadConfig().
+ *   - base-sepolia with missing settings throws; there is no silent
+ *     fallback. The stub is used only when ANCHOR_PROVIDER=stub, which
+ *     loadConfig refuses in production.
  */
 
 import type { AnchorProvider, Hex32, AnchorReceipt, MerkleProof } from "@proofline/anchoring";
@@ -187,7 +188,7 @@ export function makeFirestoreAnchorStore(): AnchorStore {
   };
 }
 
-// ─── Stubs (in-memory, for local dev when env vars are absent) ────────────────
+// ─── Stub (only when ANCHOR_PROVIDER=stub is selected; never a fallback) ─────
 
 export function makeStubAnchorProvider(): AnchorProvider {
   let blockN = 1n;
@@ -258,55 +259,38 @@ function normalizeHex32(s: string): Hex32 | null {
 
 // ─── Public factory ───────────────────────────────────────────────────────────
 
-export interface AnchorEnvConfig {
-  rpcUrl?:           string;
-  deployerKey?:      string;
-  contractAddress?:  string;
-  nodeEnv?:          string;
-}
-
-export function readAnchorEnv(env: NodeJS.ProcessEnv = process.env): AnchorEnvConfig {
-  return {
-    rpcUrl:          env.BASE_SEPOLIA_RPC,
-    deployerKey:     env.DEPLOYER_PRIVATE_KEY,
-    contractAddress: env.ANCHOR_CONTRACT_ADDRESS,
-    nodeEnv:         env.NODE_ENV,
-  };
+export interface AnchorSelection {
+  providers: { anchor: "base-sepolia" | "stub" };
+  anchor?:   { rpcUrl: string; deployerKey: string; contractAddress: string };
 }
 
 /**
- * Returns fully-wired RunAnchorDeps for the scheduler / manual endpoint.
- *
- * If any required env var is missing AND NODE_ENV !== 'production',
- * falls back to the in-memory stub provider + Firestore store. This
- * lets local dev exercise the scheduler without burning Sepolia gas.
- *
- * In production, missing env throws.
+ * Builds the AnchorProvider chosen by config (PFL-169). There is no
+ * fallback: base-sepolia without settings throws, and the stub is only
+ * used when ANCHOR_PROVIDER=stub was selected (refused in production by
+ * loadConfig).
  */
+export function makeAnchorProviderFromConfig(selection: AnchorSelection): AnchorProvider {
+  if (selection.providers.anchor === "stub") return makeStubAnchorProvider();
+  const s = selection.anchor;
+  if (!s?.rpcUrl || !s.deployerKey || !s.contractAddress) {
+    throw new Error(
+      "ANCHOR_PROVIDER=base-sepolia requires BASE_SEPOLIA_RPC, DEPLOYER_PRIVATE_KEY, ANCHOR_CONTRACT_ADDRESS",
+    );
+  }
+  return makeViemBaseSepoliaAnchorProvider({
+    rpcUrl:             s.rpcUrl,
+    deployerPrivateKey: s.deployerKey as `0x${string}`,
+    contractAddress:    s.contractAddress as `0x${string}`,
+  });
+}
+
+/** Fully-wired RunAnchorDeps for the scheduler / manual endpoint. */
 export function makeAnchorRunDeps(
-  env: AnchorEnvConfig = readAnchorEnv(),
+  selection: AnchorSelection,
   overrides: Partial<RunAnchorDeps> = {},
 ): RunAnchorDeps {
-  const isProd = env.nodeEnv === "production";
-
-  let anchor: AnchorProvider;
-  if (overrides.anchor) {
-    anchor = overrides.anchor;
-  } else if (env.rpcUrl && env.deployerKey && env.contractAddress) {
-    anchor = makeViemBaseSepoliaAnchorProvider({
-      rpcUrl:             env.rpcUrl,
-      deployerPrivateKey: env.deployerKey as `0x${string}`,
-      contractAddress:    env.contractAddress as `0x${string}`,
-    });
-  } else if (isProd) {
-    throw new Error(
-      "Anchor env missing in production: require BASE_SEPOLIA_RPC, " +
-      "DEPLOYER_PRIVATE_KEY, ANCHOR_CONTRACT_ADDRESS",
-    );
-  } else {
-    console.warn("[anchor] env incomplete — falling back to stub AnchorProvider");
-    anchor = makeStubAnchorProvider();
-  }
+  const anchor = overrides.anchor ?? makeAnchorProviderFromConfig(selection);
 
   return {
     anchor,
