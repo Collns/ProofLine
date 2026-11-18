@@ -1,10 +1,57 @@
 # ProofLine — Product Requirements Document
 
-**Version:** 3.2 (Email-first, extension-primary)
+**Version:** 4.0 (Email-first, extension-primary; production hardening)
 **Project:** ProofLine — Cryptographic identity layer for B2B financial communications
 **Document type:** PRD with design specifications, integrations, and code architecture
-**Audience:** Engineering, design, product, stakeholders, AI coding assistants
-**Supersedes:** v1.0, v2.0, v3.0, v3.1
+**Audience:** Engineering, design, product, stakeholders
+**Supersedes:** v1.0, v2.0, v3.0, v3.1, v3.2
+
+---
+
+## Changelog v3.2 → v4.0
+
+```
+PRODUCTION FOCUS
+─────────────────────────────────────
+The product moves from its initial time-boxed build to a
+production product. Requirements now describe what ships
+to customers, and statuses reflect what is built today.
+
+CHANGED
+─────
+~ §15 Build Plan → Delivery Plan: current state, Phase 11
+  (Production Hardening) critical path, parallel frontend
+  track, deferred items. Previous build plan and script
+  archived verbatim to docs/archive/PRD-v3.2-hackathon-plan.md
+~ F-ON-03 Business KYB: Middesk dropped (sales-gated
+  sandbox). Pluggable KYB provider — primary Baselayer,
+  fallback Cobalt Intelligence. Covers SoS registration,
+  EIN/TIN match, officers, OFAC
+~ KYB / IDV status: adapter-ready, running on stub pending
+  vendor access; stub-verified companies require manual
+  review. Officer IDV (Stripe Identity) same status
+~ F-ON-07 manual review queue raised to P0 (required for
+  stub-verified and flagged companies)
+~ §6 requirement tables gain a Status column (Built /
+  Partial / Not built / Adapter-ready (stub)), reconciled
+  with the code on main as of 2026-11-18
+~ §7, §9 flows and architecture: pluggable KYB provider;
+  stub-verified companies routed to manual review
+~ §4 success metrics, §17 risks and open questions:
+  time-boxed-build wording replaced with production terms
+
+ADDED
+─────
++ §16 Production Requirements (F-PRD-01 … F-PRD-18): real
+  auth on every route, fail-closed configuration and
+  secrets, no development shortcuts in production builds,
+  verification strictness, provider-tagged KYB/IDV results
+  with manual review for stub-verified companies
+
+RENUMBERED
+─────
+~ Risks & Open Questions §16 → §17; Glossary §17 → §18
+```
 
 ---
 
@@ -45,7 +92,7 @@ REFRAMED
   apps/web-sender renamed to apps/web-admin
 ~ §13 Threat model → extended for extension origin
 
-CONFIRMED DEFERRED (post-hackathon)
+CONFIRMED DEFERRED
 ─────
 ~ Extension bilateral document surfaces — v1.1 (F-BIL-10/11)
 ~ Outlook Web extension — v2
@@ -89,9 +136,10 @@ CARRIED FORWARD UNCHANGED FROM v3.1
 12. API Specification
 13. Security & Privacy Requirements
 14. Performance & Reliability
-15. Build Plan & Hackathon Scope
-16. Risks & Open Questions
-17. Appendix — Glossary
+15. Delivery Plan
+16. Production Requirements
+17. Risks & Open Questions
+18. Appendix — Glossary
 
 ---
 
@@ -101,10 +149,10 @@ This Product Requirements Document defines the scope, behavior, design, and engi
 
 | Field | Value |
 |---|---|
-| Version | 3.2 |
-| Status | Approved for kickoff |
+| Version | 4.0 |
+| Status | Production hardening (Phase 11) |
 | Owners | Product lead, Engineering lead |
-| Companion docs | `TDD.md` v3.2, `docs/adr/0001`–`0014`, `PROJECT_OVERVIEW.md`, `GEMINI_REDESIGN_PROMPT.md` |
+| Companion docs | `TDD.md` v4.0, `docs/adr/0001`–`0014`, `PROJECT_OVERVIEW.md`, `GEMINI_REDESIGN_PROMPT.md` |
 
 ---
 
@@ -206,7 +254,7 @@ AI voice cloning broke phone callbacks. Deepfake video calls have already extrac
 | Extension install rate per onboarded user | ≥ 0.85 | ≥ 0.95 |
 | Fraction of signed emails using session silent path | n/a (measure) | ≥ 0.50 |
 | P0 / P1 security incidents | 0 | 0 |
-| Demo-to-pilot conversion | 30% | 50% |
+| Prospect-to-pilot conversion | 30% | 50% |
 | Insurer LOIs | 1 | 3 |
 
 ---
@@ -250,131 +298,131 @@ AI voice cloning broke phone callbacks. Deepfake video calls have already extrac
 
 ### 6.1 Onboarding & Identity Verification
 
-(Unchanged from v3.1.)
+(Unchanged from v3.1 except F-ON-03 vendor, F-ON-07 priority.)
 
-| ID | Requirement | Priority |
-|---|---|---|
-| F-ON-01 | Domain control via DNS TXT record | P0 |
-| F-ON-02 | Email codes to admin@ + postmaster@ via Resend | P0 |
-| F-ON-03 | Business KYB via Middesk | P0 sandbox / P1 prod |
-| F-ON-04 | Officer IDV via Stripe Identity | P0 sandbox / P1 prod |
-| F-ON-05 | Cloud KMS provisions P-256 root key | P0 |
-| F-ON-06 | Registry anchored on Base Sepolia | P0 |
-| F-ON-07 | Manual review queue for flagged onboardings | P1 |
-| F-ON-08 | Streamlined counterparty onboarding tier | P0 |
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-ON-01 | Domain control via DNS TXT record | P0 | Partial — onboarding on stub auth (PFL-166) |
+| F-ON-02 | Email codes to admin@ + postmaster@ via Resend | P0 | Partial — code logged, not emailed (PFL-160) |
+| F-ON-03 | Business KYB via a pluggable KYB provider (primary: **Baselayer**; fallback: **Cobalt Intelligence**). Must cover Secretary of State registration, EIN/TIN match, officers and OFAC screening. Self-serve sandbox required. Provider selected by environment (`KYB_PROVIDER=stub\|baselayer\|cobalt`); results stored with the provider name. | P0 sandbox / P1 prod | Adapter-ready (stub) — adapter-ready, running on stub pending vendor access; stub-verified companies require manual review. (PFL-161/162/165) |
+| F-ON-04 | Officer IDV via Stripe Identity (`IDV_PROVIDER=stub\|stripe`) | P0 sandbox / P1 prod | Adapter-ready (stub) — adapter exists, stub is the default (PFL-176) |
+| F-ON-05 | Cloud KMS provisions P-256 root key | P0 | Built (PFL-126) |
+| F-ON-06 | Registry anchored on Base Sepolia | P0 | Built (PFL-114) |
+| F-ON-07 | Manual review queue for flagged onboardings and for any company verified by a stub KYB/IDV provider (F-PRD-17) | P0 | Not built (PFL-177, PFL-142) |
+| F-ON-08 | Streamlined counterparty onboarding tier | P0 | Not built (PFL-026) |
 
 ### 6.2 Identity & Access Management
 
-| ID | Requirement | Priority |
-|---|---|---|
-| F-IAM-01 | Three roles: owner, manager, employee | P0 |
-| F-IAM-02 | Each user enrolls one or more devices via WebAuthn passkey | P0 |
-| F-IAM-03 | Each role has per-email and per-day USD authority limits | P0 |
-| F-IAM-04 | Owners can revoke any device; managers can revoke employee devices | P0 |
-| F-IAM-05 | Revocations propagate to registry within 5 seconds | P0 |
-| F-IAM-06 | Lost-device social recovery via M-of-N guardian co-signing | P2 |
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-IAM-01 | Three roles: owner, manager, employee | P0 | Built |
+| F-IAM-02 | Each user enrolls one or more devices via WebAuthn passkey | P0 | Built (PFL-085) |
+| F-IAM-03 | Each role has per-email and per-day USD authority limits | P0 | Partial — limits hardcoded (PFL-041) |
+| F-IAM-04 | Owners can revoke any device; managers can revoke employee devices | P0 | Built (PFL-129) |
+| F-IAM-05 | Revocations propagate to registry within 5 seconds | P0 | Built — propagation time not yet measured |
+| F-IAM-06 | Lost-device social recovery via M-of-N guardian co-signing | P2 | Not built |
 
 ### 6.3 Email Signing (rewritten for extension model)
 
-| ID | Requirement | Priority |
-|---|---|---|
-| F-SIG-01 | Outbound emails composed in Gmail Web are signed at send time by the ProofLine Chrome extension over the canonical email payload (subject, body, To, Cc, Bcc, threadId, timestamp, nonce) | P0 |
-| F-SIG-02 | Each signed email carries a 24h validity window via signed `expiresAt` and a unique nonce | P0 |
-| F-SIG-03 | Single-sig path when email is not marked as wire instruction OR amount is within signer's authority | P0 |
-| F-SIG-04 | Co-sign required when email is explicitly marked as wire instruction above signer's per-email authority OR daily aggregate is exceeded; cosign request via Resend with deep link (F-SIG-08) | P0 |
-| F-SIG-05 | Approver biometric-confirms over the exact same canonical payload (always fresh biometric for cosign — no session shortcut) | P0 |
-| F-SIG-06 | Memo / body screened by Gemini for social-engineering patterns when wire-instruction mark is set | P1 |
-| F-SIG-07 | Signed envelopes stored immutably; audit log append-only | P0 |
-| F-SIG-08 | Cosign email links are JWS tokens scoped to one messageId, signed by company root, with `exp` claim per company policy. Default 30 min; configurable post-hackathon (5 min – 24 h hard cap). | P0 |
-| F-SIG-09 | Signing surface MUST re-fetch envelope from registry and re-verify `payloadHash` against displayed canonical bytes BEFORE prompting biometric. URL params never trusted as source of truth. | P0 |
-| F-SIG-10 | If a cosign link is expired or replayed, signing surface refuses and offers one-tap "request fresh link" that re-emails the eligible approver. | P0 |
-| F-SIG-11 | **ALWAYS-ON POLICY VALIDATION.** Every signing request — silent or fresh — runs the FULL policy pipeline server-side: session validation, user-active check, role check, per-email and per-day authority limits, device validation, counterparty status, anomaly heuristics, cosign requirement evaluation. Sessions never shortcut these checks. The session ONLY saves the biometric prompt; it never saves a policy check. | P0 |
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-SIG-01 | Outbound emails composed in Gmail Web are signed at send time by the ProofLine Chrome extension over the canonical email payload (subject, body, To, Cc, Bcc, threadId, timestamp, nonce) | P0 | Built — signed via the Sign button; Send is not gated (PFL-096) |
+| F-SIG-02 | Each signed email carries a 24h validity window via signed `expiresAt` and a unique nonce | P0 | Partial — nonce dedupe is per instance (PFL-172) |
+| F-SIG-03 | Single-sig path when email is not marked as wire instruction OR amount is within signer's authority | P0 | Built |
+| F-SIG-04 | Co-sign required when email is explicitly marked as wire instruction above signer's per-email authority OR daily aggregate is exceeded; cosign request via Resend with deep link (F-SIG-08) | P0 | Partial — evaluation built; wire marking not mounted (PFL-135); cosign email not sent (PFL-160) |
+| F-SIG-05 | Approver biometric-confirms over the exact same canonical payload (always fresh biometric for cosign — no session shortcut) | P0 | Partial — cosigner assertion not enforced (PFL-171) |
+| F-SIG-06 | Memo / body screened by Gemini for social-engineering patterns when wire-instruction mark is set | P1 | Not built (PFL-028) |
+| F-SIG-07 | Signed envelopes stored immutably; audit log append-only | P0 | Built |
+| F-SIG-08 | Cosign email links are JWS tokens scoped to one messageId, signed by company root, with `exp` claim per company policy. Default 30 min; configurable per company via F-ADM-06 (5 min – 24 h hard cap). | P0 | Partial — server endpoints built (PFL-062); secret binding pending (PFL-169) |
+| F-SIG-09 | Signing surface MUST re-fetch envelope from registry and re-verify `payloadHash` against displayed canonical bytes BEFORE prompting biometric. URL params never trusted as source of truth. | P0 | Partial — check built; counterparty portal on fixtures (PFL-171) |
+| F-SIG-10 | If a cosign link is expired or replayed, signing surface refuses and offers one-tap "request fresh link" that re-emails the eligible approver. | P0 | Partial — refresh link logged, not emailed (PFL-160) |
+| F-SIG-11 | **ALWAYS-ON POLICY VALIDATION.** Every signing request — silent or fresh — runs the FULL policy pipeline server-side: session validation, user-active check, role check, per-email and per-day authority limits, device validation, counterparty status, anomaly heuristics, cosign requirement evaluation. Sessions never shortcut these checks. The session ONLY saves the biometric prompt; it never saves a policy check. | P0 | Partial — pipeline runs on every request; PolicyContext partly in-memory (PFL-172) |
 
 ### 6.4 Per-Recipient Signing Sessions
 
-| ID | Requirement | Priority |
-|---|---|---|
-| F-SES-01 | A signing session opens when a user successfully completes a fresh WebAuthn ceremony for a specific recipient (or recipient set in group emails). Scoped to recipient set + user + company. | P0 |
-| F-SES-02 | Session TTL: 15 minutes sliding (resets on each successful use), 60 minutes hard cap. Configurable per company in v1.1 (F-ADM-07). | P0 |
-| F-SES-03 | Within an active session, extension uses silent WebAuthn assertions (`userVerification: discouraged`) to sign emails to the session's recipient(s) without re-prompting biometric. Each email STILL produces a real WebAuthn assertion bound to the canonical payload. | P0 |
-| F-SES-04 | Session record lives server-side in Firestore. Authority belongs to the server. Extension holds a short-lived JWS session token in `chrome.storage.local` (isolated from Gmail's page context). | P0 |
-| F-SES-05 | Different recipient (or different recipient set for group emails) = new session = fresh biometric. Cc/Bcc do NOT receive separate sessions; signed payload covers all addresses. Group email sessions are keyed on a sorted-set hash of all To: addresses. | P0 |
-| F-SES-06 | Session auto-revokes when: device is revoked, user role changes, user is deactivated, anomaly heuristic fires, hard cap reached, user logs out, admin manually revokes. | P0 |
-| F-SES-07 | High-value emails (marked as wire instruction above company's high-value threshold) BYPASS the silent path and ALWAYS require fresh biometric, regardless of session state. | P0 |
-| F-SES-08 | Cosign approvals ALWAYS require fresh biometric. No session shortcut for cosign. | P0 |
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-SES-01 | A signing session opens when a user successfully completes a fresh WebAuthn ceremony for a specific recipient (or recipient set in group emails). Scoped to recipient set + user + company. | P0 | Built |
+| F-SES-02 | Session TTL: 15 minutes sliding (resets on each successful use), 60 minutes hard cap. Configurable per company in v1.1 (F-ADM-07). | P0 | Built |
+| F-SES-03 | Within an active session, extension uses silent WebAuthn assertions (`userVerification: discouraged`) to sign emails to the session's recipient(s) without re-prompting biometric. Each email STILL produces a real WebAuthn assertion bound to the canonical payload. | P0 | Partial — session-token key is per-process (PFL-172) |
+| F-SES-04 | Session record lives server-side in Firestore. Authority belongs to the server. Extension holds a short-lived JWS session token in `chrome.storage.local` (isolated from Gmail's page context). | P0 | Partial — session-token key is per-process (PFL-172) |
+| F-SES-05 | Different recipient (or different recipient set for group emails) = new session = fresh biometric. Cc/Bcc do NOT receive separate sessions; signed payload covers all addresses. Group email sessions are keyed on a sorted-set hash of all To: addresses. | P0 | Built |
+| F-SES-06 | Session auto-revokes when: device is revoked, user role changes, user is deactivated, anomaly heuristic fires, hard cap reached, user logs out, admin manually revokes. | P0 | Partial — device and admin revocation built (PFL-085, PFL-130) |
+| F-SES-07 | High-value emails (marked as wire instruction above company's high-value threshold) BYPASS the silent path and ALWAYS require fresh biometric, regardless of session state. | P0 | Partial — wire marking not mounted (PFL-135) |
+| F-SES-08 | Cosign approvals ALWAYS require fresh biometric. No session shortcut for cosign. | P0 | Partial — cosigner assertion not enforced (PFL-171) |
 
 ### 6.5 Verification
 
-| ID | Requirement | Priority |
-|---|---|---|
-| F-VER-01 | Public verification page renders one of four states: Verified, Bilateral, Suspected Spoof, Rejected | P0 |
-| F-VER-02 | Page shows exact email/document details signed plus signer identities | P0 |
-| F-VER-03 | Page surfaces on-chain anchor block & tx hash with link to Basescan | P0 |
-| F-VER-04 | Verification API endpoint for plugin / programmatic clients | P1 |
-| F-VER-05 | Page is mobile-first | P0 |
-| F-VER-06 | "Unverified sender" page exists for senders not on ProofLine | P0 |
-| F-VER-07 | If a message arrives appearing to be from a verified ProofLine domain but body has no signature, surface as SUSPECTED_SPOOF with explicit warning. Distinct from F-VER-06. | P0 |
-| F-VER-08 | Sender-side inline HTML embed: extension injects table-based, inline-styled verification banner at top of outgoing message body. Renders natively in Gmail/Outlook with no recipient install. | P0 |
-| F-VER-09 | Recipient-side inline verification badge in Gmail Web: when recipient also has the extension, extension renders richer verification UI in the message header. | P0 |
-| F-VER-10 | Outlook Web extension support and Outlook desktop add-in for receiver-side rendering | P2 |
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-VER-01 | Public verification page renders one of four states: Verified, Bilateral, Suspected Spoof, Rejected | P0 | Built |
+| F-VER-02 | Page shows exact email/document details signed plus signer identities | P0 | Built |
+| F-VER-03 | Page surfaces on-chain anchor block & tx hash with link to Basescan | P0 | Built |
+| F-VER-04 | Verification API endpoint for plugin / programmatic clients | P1 | Built |
+| F-VER-05 | Page is mobile-first | P0 | Built |
+| F-VER-06 | "Unverified sender" page exists for senders not on ProofLine | P0 | Built |
+| F-VER-07 | If a message arrives appearing to be from a verified ProofLine domain but body has no signature, surface as SUSPECTED_SPOOF with explicit warning. Distinct from F-VER-06. | P0 | Built (PFL-048) |
+| F-VER-08 | Sender-side inline HTML embed: extension injects table-based, inline-styled verification banner at top of outgoing message body. Renders natively in Gmail/Outlook with no recipient install. | P0 | Built |
+| F-VER-09 | Recipient-side inline verification badge in Gmail Web: when recipient also has the extension, extension renders richer verification UI in the message header. | P0 | Built (PFL-048) |
+| F-VER-10 | Outlook Web extension support and Outlook desktop add-in for receiver-side rendering | P2 | Not built (Phase 10) |
 
 ### 6.6 Async Bilateral Verification (Documents)
 
 (Portal handles both drafter and counterparty in v1.)
 
-| ID | Requirement | Priority |
-|---|---|---|
-| F-BIL-01 | Verified party can draft a bilateral document in counterparty portal | P0 |
-| F-BIL-02 | Drafter signs over canonical payload; document state PENDING_COUNTERPARTY | P0 |
-| F-BIL-03 | Counterparty receives signed link via Resend; reviews in counterparty portal | P0 |
-| F-BIL-04 | Counterparty signs over the SAME canonical bytes; document BILATERAL_SIGNED | P0 |
-| F-BIL-05 | Both signatures bound to same payload hash | P0 |
-| F-BIL-06 | Documents have configurable expiry (default 14 days) | P0 |
-| F-BIL-07 | Either party can revoke before the other signs | P0 |
-| F-BIL-08 | Bilateral documents anchored on-chain | P0 |
-| F-BIL-09 | Status webhook fires when counterparty signs | P1 |
-| F-BIL-10 | Bilateral document drafting via Chrome extension popup (DEFERRED v1.1) | P2 |
-| F-BIL-11 | Bilateral document reviewing inline in Gmail/Outlook (DEFERRED v1.1) | P2 |
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-BIL-01 | Verified party can draft a bilateral document in counterparty portal | P0 | Partial — drafter on stub auth (PFL-166) |
+| F-BIL-02 | Drafter signs over canonical payload; document state PENDING_COUNTERPARTY | P0 | Built (PFL-024/025) |
+| F-BIL-03 | Counterparty receives signed link via Resend; reviews in counterparty portal | P0 | Partial — no email sent (PFL-160) |
+| F-BIL-04 | Counterparty signs over the SAME canonical bytes; document BILATERAL_SIGNED | P0 | Partial — counterparty identity not yet server-derived (PFL-166, PFL-171) |
+| F-BIL-05 | Both signatures bound to same payload hash | P0 | Built |
+| F-BIL-06 | Documents have configurable expiry (default 14 days) | P0 | Built |
+| F-BIL-07 | Either party can revoke before the other signs | P0 | Built |
+| F-BIL-08 | Bilateral documents anchored on-chain | P0 | Partial — not yet covered end-to-end (PFL-023) |
+| F-BIL-09 | Status webhook fires when counterparty signs | P1 | Not built |
+| F-BIL-10 | Bilateral document drafting via Chrome extension popup (DEFERRED v1.1) | P2 | Not built (deferred) |
+| F-BIL-11 | Bilateral document reviewing inline in Gmail/Outlook (DEFERRED v1.1) | P2 | Not built (deferred) |
 
 ### 6.7 Counterparty Invitation & Network Growth
 
-| ID | Requirement | Priority |
-|---|---|---|
-| F-INV-01 | Verified company can invite a counterparty by email | P0 |
-| F-INV-02 | Invitation includes contextual messaging | P0 |
-| F-INV-03 | Invitee onboards via streamlined flow | P0 |
-| F-INV-04 | Invitee onboarding cost can be sponsored by inviter | P1 |
-| F-INV-05 | Invitations expire after 30 days | P1 |
-| F-INV-06 | Bulk import: invite up to 100 counterparties from CSV | P1 |
-| F-INV-07 | Network coverage dashboard | P1 |
-| F-INV-08 | Network landing page after onboarding: prominent "invite counterparties" CTA | P0 |
-| F-INV-09 | Post-onboarding flow includes "install the ProofLine extension" step with one-click Chrome Web Store link | P0 |
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-INV-01 | Verified company can invite a counterparty by email | P0 | Partial — UI on fixtures; backend not built (PFL-026) |
+| F-INV-02 | Invitation includes contextual messaging | P0 | Partial — UI on fixtures; backend not built (PFL-026) |
+| F-INV-03 | Invitee onboards via streamlined flow | P0 | Not built (PFL-026) |
+| F-INV-04 | Invitee onboarding cost can be sponsored by inviter | P1 | Not built |
+| F-INV-05 | Invitations expire after 30 days | P1 | Not built (PFL-026) |
+| F-INV-06 | Bulk import: invite up to 100 counterparties from CSV | P1 | Partial — UI on fixtures; backend not built (PFL-026) |
+| F-INV-07 | Network coverage dashboard | P1 | Partial — UI on fixtures (PFL-026) |
+| F-INV-08 | Network landing page after onboarding: prominent "invite counterparties" CTA | P0 | Partial — UI on fixtures (PFL-026) |
+| F-INV-09 | Post-onboarding flow includes "install the ProofLine extension" step with one-click Chrome Web Store link | P0 | Partial — Chrome Web Store link is a placeholder (PFL-139) |
 
 ### 6.8 Admin & Observability
 
-| ID | Requirement | Priority |
-|---|---|---|
-| F-ADM-01 | Owners see a dashboard of users, devices, signed emails, bilateral docs, invitations | P0 |
-| F-ADM-02 | Admin can export signed audit bundle | P1 |
-| F-ADM-03 | All sensitive actions emit structured audit events | P0 |
-| F-ADM-04 | Per-tenant rate-limiting and anomaly detection | P1 |
-| F-ADM-05 | Errors reported to Sentry with trace ID | P0 |
-| F-ADM-06 | Owners can configure cosign link expiry (5 min – 24 h, default 30 min), bilateral signing window default (1 h – 90 days, default 14 d), per-amount-tier overrides for cosign expiry. v1 hardcoded; v1.1 admin UI. | P1 |
-| F-ADM-07 | Owners can view active signing sessions, revoke any session immediately, configure session TTL (5 / 15 / 30 / 60 min, default 15 sliding), configure high-value threshold (default $50,000) above which fresh biometric is always required. v1 hardcoded; v1.1 admin UI. | P1 |
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-ADM-01 | Owners see a dashboard of users, devices, signed emails, bilateral docs, invitations | P0 | Partial — users, devices, sessions built (PFL-120–130); invitations on fixtures |
+| F-ADM-02 | Admin can export signed audit bundle | P1 | Not built |
+| F-ADM-03 | All sensitive actions emit structured audit events | P0 | Partial — user, device, role and session actions audited |
+| F-ADM-04 | Per-tenant rate-limiting and anomaly detection | P1 | Not built |
+| F-ADM-05 | Errors reported to Sentry with trace ID | P0 | Partial — Sentry adapter exists, not wired |
+| F-ADM-06 | Owners can configure cosign link expiry (5 min – 24 h, default 30 min), bilateral signing window default (1 h – 90 days, default 14 d), per-amount-tier overrides for cosign expiry. v1 hardcoded; v1.1 admin UI. | P1 | Not built — hardcoded |
+| F-ADM-07 | Owners can view active signing sessions, revoke any session immediately, configure session TTL (5 / 15 / 30 / 60 min, default 15 sliding), configure high-value threshold (default $50,000) above which fresh biometric is always required. v1 hardcoded; v1.1 admin UI. | P1 | Partial — view/revoke sessions built (PFL-130); TTL and threshold hardcoded (PFL-041) |
 
 ### 6.9 Chrome Extension
 
-| ID | Requirement | Priority |
-|---|---|---|
-| F-EXT-01 | Manifest v3 Chrome extension distributed via Chrome Web Store | P0 |
-| F-EXT-02 | Extension injects "Sign with ProofLine" toolbar control into Gmail Web compose, reply, forward UIs | P0 |
-| F-EXT-03 | At send time, extension extracts canonical email payload, posts to ProofLine API, receives signed envelope with inline HTML banner, injects banner at top of email body, allows Gmail to send normally | P0 |
-| F-EXT-04 | Extension displays active session status in toolbar | P0 |
-| F-EXT-05 | Extension detects inbound emails with ProofLine signatures and renders verification badge in message header (F-VER-09) | P0 |
-| F-EXT-06 | User can mark outgoing email as a wire instruction via extension UI; triggers high-value path (always fresh biometric, mandatory amount field, Gemini screening, cosign evaluation) | P0 |
-| F-EXT-07 | Extension stores session token and user identity in `chrome.storage.local` (isolated from page JS) | P0 |
-| F-EXT-08 | WebAuthn ceremonies happen in popup windows pointing to `proofline.app/sign/*` (correct RP ID origin); extension never holds private key material | P0 |
-| F-EXT-09 | Extension auto-detects Gmail DOM changes and surfaces an update notification if injection breaks; falls back gracefully (does not silently send unsigned emails) | P0 |
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-EXT-01 | Manifest v3 Chrome extension distributed via Chrome Web Store | P0 | Partial — Chrome Web Store listing pending (PFL-139) |
+| F-EXT-02 | Extension injects "Sign with ProofLine" toolbar control into Gmail Web compose, reply, forward UIs | P0 | Built |
+| F-EXT-03 | At send time, extension extracts canonical email payload, posts to ProofLine API, receives signed envelope with inline HTML banner, injects banner at top of email body, allows Gmail to send normally | P0 | Partial — signs via the Sign button; Send not gated on signing (PFL-096) |
+| F-EXT-04 | Extension displays active session status in toolbar | P0 | Built |
+| F-EXT-05 | Extension detects inbound emails with ProofLine signatures and renders verification badge in message header (F-VER-09) | P0 | Built (PFL-048) |
+| F-EXT-06 | User can mark outgoing email as a wire instruction via extension UI; triggers high-value path (always fresh biometric, mandatory amount field, Gemini screening, cosign evaluation) | P0 | Partial — module built, not mounted (PFL-135) |
+| F-EXT-07 | Extension stores session token and user identity in `chrome.storage.local` (isolated from page JS) | P0 | Built |
+| F-EXT-08 | WebAuthn ceremonies happen in popup windows pointing to `proofline.app/sign/*` (correct RP ID origin); extension never holds private key material | P0 | Built |
+| F-EXT-09 | Extension auto-detects Gmail DOM changes and surfaces an update notification if injection breaks; falls back gracefully (does not silently send unsigned emails) | P0 | Partial — fallback selectors built; no Send blocking (PFL-096) |
 
 ### 6.10 Anti-features
 
@@ -396,7 +444,7 @@ AI voice cloning broke phone callbacks. Deepfake video calls have already extrac
 
 ### 6.11 Environment Variables Manifest
 
-(Unchanged; see `.env.example` in repo bundle.)
+See `.env.example` in the repo. Production adds explicit environment and provider selection — `PROOFLINE_ENV`, `EMAIL_PROVIDER`, `ANCHOR_PROVIDER`, `KMS_PROVIDER`, `KYB_PROVIDER`, `IDV_PROVIDER` — and vendor keys (e.g. `BASELAYER_API_KEY`). Rules are defined in §16.2.
 
 ---
 
@@ -412,9 +460,11 @@ AI voice cloning broke phone callbacks. Deepfake video calls have already extrac
    ▼
 [Email round-trip]         ◄── Resend → admin@ + postmaster@
    ▼
-[Business KYB]             ◄── Middesk
+[Business KYB]             ◄── KYB provider (Baselayer;
+                                fallback Cobalt Intelligence)
    ▼
 [Officer KYC]              ◄── Stripe Identity
+   │  stub-verified or flagged → manual review (F-ON-07)
    ▼
 [Key ceremony]             ◄── Cloud KMS root key
                                 + officer's first WebAuthn device
@@ -581,7 +631,7 @@ Alice opens admin → Counterparties → "Invite counterparty"
 Pastes 50 vendor emails
 Resend sends per-vendor invitations
    ▼
-Vendor clicks → streamlined onboarding (DNS + email + Middesk)
+Vendor clicks → streamlined onboarding (DNS + email + KYB provider)
 Vendor's company verified · root key minted · anchored
    ▼
 Vendor prompted to install ProofLine extension (one-click)
@@ -666,7 +716,7 @@ Table-based, inline-styled HTML. Renders in Gmail/Outlook with no recipient inst
 
 ### 8.8 Onboarding Animation
 
-P1 polish item if hour 19+ has slack. (Storyboard unchanged from v3.1 §8.9.)
+P1 polish item; not scheduled in Phase 11. (Storyboard unchanged from v3.1 §8.9.)
 
 ### 8.9 Accessibility
 
@@ -705,8 +755,9 @@ WCAG 2.2 AA. Focus rings, 4.5:1 contrast, keyboard reachability for every flow i
          ┌───────────────┼───────────────┐
          ▼               ▼               ▼
    External APIs   Google services   On-chain
-   ─ Middesk       ─ Cloud KMS       ─ Base Sepolia
-   ─ Stripe Identity ─ Gemini API
+   ─ Baselayer /   ─ Cloud KMS       ─ Base Sepolia
+     Cobalt (KYB)  ─ Gemini API
+   ─ Stripe Identity
    ─ Resend
    ─ Sentry
 ```
@@ -720,7 +771,7 @@ WCAG 2.2 AA. Focus rings, 4.5:1 contrast, keyboard reachability for every flow i
 - **Always-on policy validation** — every signing request runs the full pipeline server-side, regardless of session state
 - **Verification is stateless and public**
 - **Append-only event logs** — envelopes, audit events, revocations, sessions never mutated
-- **All third-party APIs accessed through adapters** — Middesk, Stripe Identity, Resend, etc., are swappable
+- **All third-party APIs accessed through adapters** — KYB (Baselayer, Cobalt Intelligence), Stripe Identity, Resend, etc., are swappable and selected explicitly by environment; no silent fallback to a stub
 
 ---
 
@@ -1007,97 +1058,138 @@ RFC 7807 problem details. New error codes:
 
 ---
 
-## 15. Build Plan & Hackathon Scope
+## 15. Delivery Plan
 
-### 15.1 Day Zero Deliverables
+The product is past its initial build and is being hardened for production. Work is tracked on the project Kanban board by phase; Phase 11 (Production Hardening) is the current phase. Two engineering tracks run in parallel: **Track A** (backend / Cloud Functions) and **Track B** (frontend / extension). Production readiness requirements are defined in §16.
 
-(v3.1 + extension-specific.)
+### 15.1 Current State (2026-11-18)
 
-```
-☐ Both engineers run scripts/bootstrap.sh
-☐ GitHub repo + kanban populated
-☐ Firebase project + Editor role for teammate
-☐ Cloud KMS keyring `proofline-roots` created
-☐ Base Sepolia deployer wallet funded via faucet
-☐ All API keys in shared 1Password vault
-☐ .env.example committed; .env.local populated
-☐ Chrome extension developer mode enabled on both machines
-☐ CI green on main with bootstrap commit
-```
+| Area | State |
+|---|---|
+| Extension signing (Gmail Sign button, popup WebAuthn, server-issued challenges, real assertion verification) | Built |
+| Extension auth, multi-device, per-recipient sessions + silent path | Built; session-token key is per-process (PFL-172) |
+| Always-on policy pipeline | Built; PolicyContext partly in-memory with default policy values (PFL-172); limits hardcoded (PFL-041) |
+| Verify API, public verify page, inbound Gmail badge (PFL-048) | Built |
+| Cloud KMS company roots (PFL-126), Base Sepolia anchoring (PFL-114) | Built |
+| Admin dashboard with Firebase Auth: users, devices, sessions, user management, employee invitations (PFL-120–130, PFL-068) | Built |
+| Firestore security rules (PFL-122) | Built |
+| Cosign server endpoints (PFL-062), bilateral API + state machine (PFL-024/025) | Built; cosign assertion not enforced and counterparty portal on fixtures (PFL-171) |
+| Onboarding + bilateral authentication | Stub auth (PFL-166); finalize has a bypass flag (PFL-167) |
+| Business KYB (Baselayer / Cobalt) and officer IDV (Stripe Identity) | Adapter-ready (stub): adapter-ready, running on stub pending vendor access; stub-verified companies require manual review. |
+| Outbound email (Resend) | Adapter exists, not wired; no email is sent (PFL-160) |
+| Wire-instruction marking UI | Module built, not mounted (PFL-135) |
+| Gmail Send blocking on sign failure | Not built (PFL-096) |
+| Counterparty invitations | Backend not built; UI on fixtures (PFL-026 / PFL-132) |
+| Gemini memo screening | Not built (PFL-028) |
 
-### 15.2 Hackathon Build Plan (24h)
+### 15.2 Phase 11 — Production Hardening (critical path)
 
-| Hour | Workstream | Notable deliverables |
+| Order | Task(s) | Outcome |
 |---|---|---|
-| 0–2 | Bootstrap | Workspace · CI · Firebase · Anchor.sol skeleton · extension manifest |
-| 2–5 | Primitives | crypto · canonical (incl. email payloads) · types · golden vectors · Anchor.sol deployed |
-| 5–8 | Identity & onboarding | webauthn · kms · onboarding wizard in web-admin · DNS+email |
-| 8–11 | KYB integrations + extension scaffolding | kyb adapters · Middesk + Stripe Identity · extension manifest + Gmail content script |
-| 11–13 | **Integration checkpoint — onboarding E2E pass on staging** | |
-| 13–16 | Email signing core | policy (always-on pipeline) · sessions · sign endpoint · extension popup ceremony · silent path |
-| 16–19 | Signing E2E + verification | Sender-side embed · in-Gmail verify badge · public verify page · session admin (hardcoded TTL) |
-| 19–22 | Bilateral portal + cosign + invites + demo data | Counterparty portal · cosign deep link · invitation flow · pre-anchor demo data · slide deck |
-| 22–24 | **Joint — rehearse, fix, deploy, record backup video** | |
+| 1 | PFL-166 | Real Firebase authentication on onboarding and bilateral routes |
+| 2 | PFL-167 | Bypass flag removed; onboarding finalize enforces every prior gate |
+| 3 | PFL-169 (+ PFL-170) | Explicit provider selection, fail-closed config and bound secrets; anchor admin endpoint locked down |
+| 4 | PFL-160 | Outbound email via Resend (cosign, OTP, invitations, bilateral notices) |
+| 5 | PFL-162 / PFL-161 / PFL-165 / PFL-176; PFL-177 + PFL-142 | KYB/IDV provider slot with Baselayer, Cobalt and Stripe Identity adapters; manual review queue for stub-verified or flagged companies |
+| 6 | PFL-135 | Wire-instruction marking UI mounted in Gmail compose |
+| 7 | PFL-096 | Gmail Send blocked when signing fails |
+| 8 | PFL-171 → PFL-136 | Cosign hardening, then cosign end-to-end |
+| 9 | PFL-026 / PFL-132 | Counterparty invitations backend and emails |
+| 10 | PFL-023 (then PFL-053) | API-level end-to-end test, then extension end-to-end test |
 
-### 15.3 Demo Script (180 seconds)
+**Parallel frontend track (B):** PFL-168 (remove fixtures and skip controls from production builds), PFL-174, PFL-175, PFL-178, PFL-179.
 
-```
-T+0s    Hook: "$2.9B lost to wire fraud last year. Watch."
-T+10s   Live attack: spoofed email arrives in Gmail, no badge
-T+25s   Onboard "Acme Title" — animated stepper through DNS →
-        Middesk → Stripe Identity → KMS → Base Sepolia anchor
-        → install extension
-T+50s   Acme invites a partner ("Scotiabank") — onboards live
-        in 60 seconds via streamlined flow
-T+110s  Sarah composes email in REAL Gmail with extension —
-        marks as wire instruction, $400k → blocked, needs
-        manager cosign per policy
-T+125s  Cosign email arrives on Bob's phone → tap link →
-        biometric → both signatures attached
-T+140s  Recipient opens email in Gmail · sees green inline
-        verification banner · clicks Verify →
-        ✅ green page, signers shown, anchor tx linked
-T+155s  Attacker tampers with account number →
-        ❌ TAMPERED, exact field mismatch
-T+170s  Show on-chain Merkle anchor on Basescan —
-        "Provable forever, even if our servers vanish"
-T+185s  Close: "Phone callbacks die under deepfakes.
-        We're not a tool — we're cryptographic infrastructure
-        for the AI era, delivered where operators already work."
-```
+### 15.3 Deferred
+
+| Item | Phase |
+|---|---|
+| Outlook Web + desktop, Base mainnet, attachment signing, reply-chain hashing, Stripe Billing, SOC 2 | Phase 10 |
+| Public website | Phase 9 |
+| Bilateral document surfaces in the extension (PFL-054 / PFL-055) | v1.1 |
 
 ---
 
-## 16. Risks & Open Questions
+## 16. Production Requirements
 
-### 16.1 Risks
+These requirements gate any production deployment. They are stated at the requirements level; implementation is specified in `TDD.md`. Each maps to Phase 11 tasks (§15.2).
+
+### 16.1 Authentication on Every Route
+
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-PRD-01 | Admin, onboarding and bilateral-drafter routes require a verified Firebase ID token. The acting user and company are derived from the token, never from the request body, query string or local storage. | P0 | Partial — admin built; onboarding + bilateral on stub auth (PFL-166) |
+| F-PRD-02 | Signing routes require the extension-bound token (`/v1/extension/auth`). | P0 | Built |
+| F-PRD-03 | Cosign and counterparty routes are authorized by scoped JWS link tokens. Signer identity is derived server-side from the token and the verified WebAuthn assertion, never from the client body or URL. | P0 | Partial (PFL-171) |
+| F-PRD-04 | No placeholder identities (`dev-user`, `dev-company`) or placeholder bearer tokens exist in any production code path. | P0 | Not met (PFL-166) |
+
+### 16.2 Fail-Closed Configuration
+
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-PRD-05 | The deployment environment is set explicitly with `PROOFLINE_ENV=production\|staging\|development`. Production behavior never depends on `NODE_ENV`, which Cloud Functions does not set. | P0 | Not met (PFL-169) |
+| F-PRD-06 | Every external provider is selected explicitly and logged at startup: `EMAIL_PROVIDER=resend\|stub`, `ANCHOR_PROVIDER=base-sepolia\|stub` (mainnet later), `KMS_PROVIDER=gcp\|stub`, `KYB_PROVIDER=stub\|baselayer\|cobalt`, `IDV_PROVIDER=stub\|stripe`. No silent fallback to a stub. | P0 | Not met (PFL-169, PFL-162) |
+| F-PRD-07 | In production, stub email, anchoring and KMS providers are refused at startup. | P0 | Not met (PFL-169) |
+| F-PRD-08 | All secrets are bound as Functions secrets with no hardcoded fallback. A missing secret, or a real provider configured without its key, is a startup error. | P0 | Not met (PFL-169) |
+| F-PRD-09 | Administrative anchoring triggers require platform-admin authentication. | P0 | Not met (PFL-170) |
+
+### 16.3 No Development Shortcuts in Production Builds
+
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-PRD-10 | No client-settable bypass flags on any server endpoint; onboarding finalize enforces ownership and every prior step gate. | P0 | Not met (PFL-167) |
+| F-PRD-11 | No "skip" controls that mark onboarding steps verified. | P0 | Not met (PFL-168) |
+| F-PRD-12 | Fixtures are reachable only under `import.meta.env.DEV` and are tree-shaken from production bundles; no query-parameter fixture modes on public domains. | P0 | Not met (PFL-168) |
+| F-PRD-13 | No placeholder landing routes; public roots serve a real landing or login page. Development data is created only by a dev-only seed script. | P0 | Not met (PFL-168) |
+
+### 16.4 Verification Strictness
+
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-PRD-14 | No unbounded legacy signature fallback: envelopes with an invalid signature never verify. Any legacy path is limited to records before a fixed cutoff and is flagged as such. | P0 | Not met |
+| F-PRD-15 | Role credentials are signed by the company's Cloud KMS root key; unsigned role credentials are rejected. | P0 | Not met |
+
+### 16.5 KYB / IDV and Manual Review
+
+| ID | Requirement | Priority | Status |
+|---|---|---|---|
+| F-PRD-16 | KYB and IDV results are stored with the provider name that produced them. | P0 | Not met (PFL-162) |
+| F-PRD-17 | In production, a company whose KYB or IDV result came from a stub provider is set to `onboardingStatus: pending_review` and routed to the platform review queue (F-ON-07). It is never auto-approved. | P0 | Not met (PFL-177, PFL-142) |
+| F-PRD-18 | Switching from stub to a live KYB/IDV provider requires only keys and an environment change, with no code change. | P0 | Not met (PFL-162) |
+
+---
+
+## 17. Risks & Open Questions
+
+### 17.1 Risks
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | Two-sided cold start | High | High | Cluster saturation; insurer mandate; counterparty invite |
 | Incumbent extends to crypto signing | Medium | High | Move fast on AI-era + on-chain anchor differentiator |
 | Regulatory pushback on on-chain | Low | Medium | Anchor only Merkle roots; no PII on-chain |
-| Chrome Web Store approval delays | Medium | Medium | Submit early; have unpacked-extension fallback for hackathon |
-| Gmail DOM changes break content script | Medium | Medium | F-EXT-09 graceful degradation; pin demo to specific Gmail UI version |
+| Chrome Web Store approval delays | Medium | Medium | Submit early (PFL-139); unpacked-extension distribution for pilot customers until listed |
+| Gmail DOM changes break content script | Medium | Medium | F-EXT-09 graceful degradation; fallback selectors; extension end-to-end tests (PFL-053) |
 | Manifest v3 service worker quirks | Medium | Medium | Test in clean Chrome profile; document quirks |
 | Silent WebAuthn variance | Medium | Low | Document expectations; sessions still reduce prompts dramatically on most platforms |
-| KMS / chain outage during demo | Medium | Medium | Pre-anchor demo data; backup video |
+| KMS / chain outage | Medium | Medium | Signing continues; anchoring queues and retries; anchor-lag alert (§14.2) |
+| KYB/IDV vendor access delayed | Medium | Medium | Adapter-ready provider slot; stub-verified companies routed to manual review (F-PRD-17); Cobalt Intelligence as fallback to Baselayer |
+| Production shortcuts left in place | Medium | High | Production Requirements (§16) gate deployment; fail-closed startup checks |
 | Insurer partnership slower than hoped | Medium | Medium | Parallel-track regulator + direct enterprise sales |
 
-### 16.2 Open Questions
+### 17.2 Open Questions
 
 | Question | Owner | Decide by |
 |---|---|---|
-| Anchor batching cadence | Eng A | Hour 14 |
-| Streamlined counterparty KYB depth | Product + Legal | Hour 12 |
+| Anchor batching cadence | Eng A | Pre-pilot |
+| Streamlined counterparty KYB depth | Product + Legal | Before PFL-026 |
 | Default session TTL — 15 or 30 min | Product | Pre-pilot |
 | Default high-value threshold — $50k or $100k | Product | Pre-pilot |
-| Bilateral document types beyond initial three | Product | Post-hackathon |
+| Bilateral document types beyond initial three | Product | Post-launch |
 | Pricing model | Product | Pre-pilot |
 
 ---
 
-## 17. Appendix — Glossary
+## 18. Appendix — Glossary
 
 | Term | Meaning |
 |---|---|
@@ -1121,4 +1213,4 @@ T+185s  Close: "Phone callbacks die under deepfakes.
 
 ---
 
-**Document status:** v3.2, email-first + extension-primary. All decisions locked. Companion docs: TDD v3.2, ADRs 0001–0014, PROJECT_OVERVIEW v3.2.
+**Document status:** v4.0, email-first + extension-primary, production hardening (Phase 11). Companion docs: TDD v4.0, ADRs 0001–0014, PROJECT_OVERVIEW. Archived v3.2 build plan: `docs/archive/PRD-v3.2-hackathon-plan.md`.

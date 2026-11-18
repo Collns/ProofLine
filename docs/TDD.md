@@ -1,14 +1,62 @@
 # ProofLine — Technical Design Document
 
-**Version:** 3.2 (Email-first pivot — extension as primary compose surface)
-**Companion to:** PRD.md v3.2
-**Audience:** Engineers, reviewers, AI coding assistants
-**Scope:** Implementation details, contracts, integrations, deployment
-**Supersedes:** v3.0, v3.1
+**Version:** 4.0 (Production plan — extension-first product, production hardening)
+**Companion to:** PRD.md v4.0
+**Audience:** Engineers, reviewers
+**Scope:** Implementation details, contracts, integrations, configuration, deployment
+**Supersedes:** v3.0, v3.1, v3.2
 
 ---
 
-## Changelog from v3.0
+## Changelog v3.2 → v4.0
+
+```
+v4.0 — PRODUCTION PLAN
+──────────────────────
+ProofLine moves from a time-boxed prototype to a
+production product. This revision aligns the TDD with
+the code on main (reconciled 2026-11-18) and defines
+what production requires.
+
+ADDED
+─────
++ §2.1 Implementation status — what is built, what is
+  partial, what is not built (reconciled with code)
++ §7.0 Provider selection — env-driven provider slots
+  for KYB, IDV, email, anchoring, KMS
++ §17 Production Requirements & Configuration —
+  config module, PROOFLINE_ENV, provider env table,
+  secrets via Functions defineSecret (no fallback),
+  auth matrix per route group, no demo paths in prod
+  builds, verification strictness, manual review
+
+CHANGED
+───────
+~ KYB vendor: Middesk dropped (sales-gated sandbox).
+  Baselayer is primary, Cobalt Intelligence fallback
+  (§2, §3, §4.6, §5.1, §7.1, §14, §16)
+~ §7.1 rewritten around the Baselayer adapter, env
+  selection, async webhook for tin_pending, Cobalt
+  fallback, stub behaviour, manual review routing
+~ §7.2 Stripe Identity described as adapter-ready
+  behind IDV_PROVIDER
+~ KYB / IDV status: adapter-ready, running on stub
+  pending vendor access; stub-verified companies
+  require manual review
+~ §16 Deployment topology describes the current
+  deployment and the production delta
+~ §4.6 lists the provider files that actually exist
+  (no composite provider)
+
+REMOVED (archived verbatim to
+docs/archive/TDD-v3.2-demo-sections.md)
+─────────
+- §6.3 time-boxed presentation failure plan
+- §16.1 prototype deployment topology
+- Bootstrap / "Day Zero" status line
+```
+
+## Changelog v3.0 → v3.2
 
 ```
 v3.2 — EMAIL-FIRST PIVOT
@@ -61,7 +109,7 @@ UNCHANGED
 This TDD complements the PRD. The PRD answers *what* and *why*; this document answers *how*. Where they overlap, the PRD wins on intent and this document wins on mechanics.
 
 Read alongside:
-- `docs/PRD.md` v3.2 — product requirements
+- `docs/PRD.md` v4.0 — product requirements
 - `docs/adr/0001`–`0014` — individual architectural decisions
 - `scaffolding/` — bootstrap script, env manifest, config templates
 
@@ -85,13 +133,44 @@ Read alongside:
 │ Append-only event logs     →   Wires, bilateral docs,    │
 │                                 revocations, audit       │
 │                                                          │
-│ Adapter pattern for        →   Middesk, Stripe, Resend,  │
-│ external services               Sentry all swappable     │
+│ Adapter pattern for        →   KYB, IDV, email, chain,   │
+│ external services               KMS env-selected         │
+│                                                          │
+│ Fail closed in production  →   No silent stub fallback;  │
+│                                 missing config = no boot │
 │                                                          │
 │ Time and randomness        →   Tests don't depend on     │
 │ are injected                    now() or Math.random()   │
 └──────────────────────────────────────────────────────────┘
 ```
+
+### 2.1 Implementation Status (reconciled with `main`, 2026-11-18)
+
+Status values: **Built** (real, in the production path) · **Partial** (real but with a known gap) · **Adapter-ready (stub)** (adapter code exists; edge runs a stub) · **Not built**.
+
+| Area | Status | Notes |
+|---|---|---|
+| Extension sign flow (Gmail compose Sign button, popup WebAuthn ceremony, server-issued challenges, WebAuthn verification) | Built | `/v1/sign`, `/v1/auth/challenge` |
+| Extension auth + multi-device | Built | `/v1/extension/auth`, per-device validation and revocation (PFL-085) |
+| Sessions + silent signing path | Partial | Session-token key is generated per process; tokens only verify on the issuing instance (PFL-172) |
+| Always-on policy pipeline (§11.6) | Partial | Runs on every sign; `PolicyContext` is partly in-memory with default company policy (PFL-172); limits hardcoded (PFL-041) |
+| Verify API + public verify page | Built | `/v1/verify` |
+| Inbound verification badge in Gmail | Built | verified / bilateral / suspected_spoof / rejected / unverified_sender + sidebar (PFL-048) |
+| Company root keys in Cloud KMS | Built | PFL-126 |
+| Anchoring on Base Sepolia | Built | PFL-114; mainnet deferred |
+| Admin dashboard (Firebase Auth: users, devices, sessions, user management) | Built | PFL-120..130 |
+| Employee invitations | Built | PFL-068 |
+| Firestore security rules | Built | PFL-122 |
+| Cosign server endpoints | Partial | PFL-062; cosigner assertion not enforced, counterparty portal in fixture mode (PFL-171) |
+| Bilateral API + state machine | Partial | PFL-024/025; route group on stub auth (PFL-166) |
+| Onboarding API | Partial | Stub auth (PFL-166); `demoMode` finalize bypass (PFL-167) |
+| Business KYB (Baselayer / Cobalt) | Adapter-ready (stub) | adapter-ready, running on stub pending vendor access; stub-verified companies require manual review |
+| Officer IDV (Stripe Identity) | Adapter-ready (stub) | adapter-ready, running on stub pending vendor access; stub-verified companies require manual review |
+| Outbound email (Resend) | Not built (wiring) | Adapter exists in `packages/email`; functions send no email yet (PFL-160) |
+| Wire-instruction marking UI | Not built (wiring) | `content/wire-fields.ts` exists, not mounted (PFL-135) |
+| Counterparty invitations | Not built | Backend missing; admin UI on fixtures (PFL-026 / PFL-132) |
+| Gemini memo screening | Not built | `packages/ai` is empty (PFL-028) |
+| Block Gmail Send on sign failure | Not built | No Send interception (PFL-096) |
 
 ---
 
@@ -131,8 +210,8 @@ Read alongside:
        ┌─────────┬──────┬────┼──────┬────┬─────────┐
        ▼         ▼      ▼    ▼      ▼    ▼         ▼
    ┌────────┐┌──────┐┌──────┐┌──────┐┌────┐┌─────────┐
-   │ Cloud  ││Stripe││Mid-  ││Resend││Sen-││  Base   │
-   │ KMS    ││ID    ││desk  ││      ││try ││  Sep.   │
+   │ Cloud  ││Stripe││Base- ││Resend││Sen-││  Base   │
+   │ KMS    ││ID    ││layer ││      ││try ││  Sep.   │
    └────────┘└──────┘└──────┘└──────┘└────┘└─────────┘
 
    Web admin app (app.proofline.web.app) used for:
@@ -142,6 +221,11 @@ Read alongside:
     ─ Counterparty invitation management
     ─ Session admin (view, revoke, configure)
    NOT used for: drafting/signing emails (extension does this)
+
+   Provider boxes are env-selected slots (§7.0, §17):
+    ─ Baselayer = KYB slot (Cobalt Intelligence fallback)
+    ─ Stripe ID = IDV slot
+    ─ Both run on stub today pending vendor access
 ```
 
 ### 3.2 Surface Architecture
@@ -303,7 +387,7 @@ export interface AnchorProvider {
 
 Implementation uses **viem** for Base Sepolia. Contract documented in §6.
 
-### 4.6 `@proofline/kyb` — NEW DETAIL
+### 4.6 `@proofline/kyb`
 
 ```typescript
 export interface KYBProvider {
@@ -313,14 +397,22 @@ export interface KYBProvider {
 
 export type BusinessLookupInput = {
   legalName: string;
-  ein: string;
+  ein: string;                    // optional once name+address lookup lands
   state: string;
   country: "US";
+  // planned (PFL-161): city / address — Baselayer needs
+  // city + state at minimum
+};
+
+export type KYBFlag = {
+  type: string;                   // e.g. sanctions_hit, tin_mismatch, tin_pending
+  severity: "low" | "medium" | "high";
+  detail?: string;
 };
 
 export type BusinessVerification = {
   ok: boolean;
-  vendorRef: string;             // e.g. Middesk business ID
+  vendorRef: string;              // vendor business / search ID
   flags: KYBFlag[];               // sanctions hit, name mismatch, etc
   officers: { name: string; role: string }[];
   raw: unknown;                   // full vendor response, for audit
@@ -341,11 +433,15 @@ export type OfficerVerification = {
 };
 ```
 
+Business KYB and officer IDV are two separate providers; each throws `WRONG_PROVIDER` on the other's method. There is no composite provider — the functions edge injects one KYB provider and one IDV provider, each selected by env (§7.0).
+
 Implementations:
-- `@proofline/kyb/providers/middesk.ts` — Middesk for `verifyBusiness`
-- `@proofline/kyb/providers/stripe-identity.ts` — Stripe Identity for `verifyOfficer`
-- `@proofline/kyb/providers/composite.ts` — Composes both into a single provider
-- `@proofline/kyb/providers/stub.ts` — Deterministic for tests
+- `@proofline/kyb/providers/baselayer.ts` — Baselayer for `verifyBusiness` (primary; planned, PFL-161 — see §7.1)
+- `@proofline/kyb/providers/cobalt.ts` — Cobalt Intelligence for `verifyBusiness` (fallback; planned, PFL-165)
+- `@proofline/kyb/providers/stripe-identity.ts` — Stripe Identity for `verifyOfficer` (exists; not wired at the edge)
+- `@proofline/kyb/providers/stub.ts` — Deterministic; used by tests and, today, by the functions edge
+
+Status: adapter-ready, running on stub pending vendor access; stub-verified companies require manual review. The legacy `providers/middesk.ts` adapter was never wired and is removed by PFL-163.
 
 ### 4.7 `@proofline/email` — NEW DETAIL
 
@@ -371,6 +467,8 @@ type SendInput = {
 Implementations:
 - `@proofline/email/providers/resend.ts` — Resend
 - `@proofline/email/providers/stub.ts` — Captures sends in memory for tests
+
+Status: the Resend adapter exists but is not yet wired into `apps/functions`; cosign links, onboarding codes and bilateral notifications are currently logged or stubbed. Wiring via `EMAIL_PROVIDER` is PFL-160 (§7.0, §17).
 
 ### 4.8 `@proofline/observability` — NEW DETAIL
 
@@ -402,6 +500,8 @@ export interface InvitationProvider {
   expire(): Promise<void>;
 }
 ```
+
+Status: not built. `packages/invitations` is empty and `/v1/invitations` is not mounted; the admin UI falls back to fixtures (PFL-026 / PFL-132). Employee invitations (`employee_invitations`, PFL-068) are a separate, built flow.
 
 ### 4.10 `@proofline/sessions` — NEW
 
@@ -566,7 +666,7 @@ Service worker lifecycle: Manifest v3 service workers are non-persistent. State 
 ### 5.1 Onboarding (full integration path)
 
 ```
-Owner    Web Sender    Functions    Middesk    Stripe ID    KMS    Chain    Resend
+Owner    Web Admin     Functions    Baselayer  Stripe ID    KMS    Chain    Resend
  │           │            │            │           │           │      │         │
  │─signup───▶│            │            │           │           │      │         │
  │           │─/onboard──▶│            │           │           │      │         │
@@ -586,12 +686,19 @@ Owner    Web Sender    Functions    Middesk    Stripe ID    KMS    Chain    Rese
  │                                                                              │
  │           │─/kyb──────▶│                                                     │
  │           │             │─verifyBusiness─▶│                                  │
- │           │             │                 │ Middesk runs:                    │
- │           │             │                 │ - Sec of State                   │
- │           │             │                 │ - EIN match                      │
- │           │             │                 │ - sanctions                      │
+ │           │             │                 │ POST /searches                   │
+ │           │             │                 │ (Prefer: wait=N) runs:           │
+ │           │             │                 │ - Sec of State registrations     │
+ │           │             │                 │ - IRS TIN match                  │
+ │           │             │                 │ - officers                       │
+ │           │             │                 │ - OFAC / PEP watchlist           │
  │           │             │◀─verification───│                                  │
- │           │             │ store result    │                                  │
+ │           │             │ store kybResult │                                  │
+ │           │             │ (+ provider)    │                                  │
+ │           │             │                 │                                  │
+ │           │             │ if tin_pending: │                                  │
+ │           │             │◀─webhook────────│ BusinessSearch.updated           │
+ │           │             │ update kybResult│                                  │
  │                                                                              │
  │           │─/kyc──────▶│                                                     │
  │           │             │─verifyOfficer─────────────▶│                       │
@@ -611,6 +718,13 @@ Owner    Web Sender    Functions    Middesk    Stripe ID    KMS    Chain    Rese
  │           │◀─verified───│                                                    │
  │◀─welcome──│             │                                                    │
 ```
+
+Notes on the current implementation:
+- The KYB column is the KYB provider slot: Baselayer (primary) or Cobalt Intelligence (fallback), selected by `KYB_PROVIDER` (§7.0). Today the edge runs the stub provider. The officer step uses the IDV slot (`IDV_PROVIDER`, Stripe Identity), also on stub today.
+- In production, a company whose KYB or IDV result came from the stub is set to `onboardingStatus = pending_review` and placed in the platform review queue (PFL-142) instead of `verified`. It is never auto-approved.
+- `/finalize` must enforce ownership and every prior-step gate. The `demoMode` bypass that exists today is removed by PFL-167.
+- Email codes go through the `EmailProvider` once PFL-160 lands; today they are logged.
+- All `/v1/onboard/*` calls require a Firebase ID token; the owner is the token UID, never a body field (PFL-166).
 
 ### 5.2 Sign + Co-Sign
 
@@ -889,63 +1003,162 @@ contract ProofLineAnchor {
 
 (Foundry tests, deploy script, and viem TypeScript client identical to TDD v2.0 §6.2–§6.4 — see prior version.)
 
-### 6.3 Demo Anti-Failure Plan
+### 6.3 Anchoring Operations
 
-```
-30 min before demo:
-  ─ All "test fixture" companies pre-onboarded and anchored
-  ─ All "test wire" envelopes pre-signed and anchored
-  ─ Anchor tx hashes recorded in demo notes
-  ─ One "live anchor" reserved for the climactic beat
-
-If chain or RPC fails on stage:
-  ─ Switch to cached tx hash from rehearsal
-  ─ Narrate: "in production this anchors every N minutes"
-```
+- Anchoring is real on Base Sepolia (PFL-114); a scheduled function (`anchorBatchScheduler`) batches registry events into a Merkle root and posts it. Base mainnet is deferred (Phase 10).
+- Provider is explicit: `ANCHOR_PROVIDER=base-sepolia|stub`. `stub` is refused when `PROOFLINE_ENV=production`; the verify router never falls back to a stub chain reader (§17).
+- If the chain or RPC is unavailable, events remain unanchored until the next successful batch. No cached or fabricated receipt is ever substituted.
+- The manual trigger `POST /v1/admin/anchor/run` (`anchorAdmin`) currently has no auth. It is locked to platform-admin Firebase auth or removed (PFL-170).
 
 ---
 
 ## 7. External Integrations — Implementation Detail
 
-### 7.1 Middesk
+### 7.0 Provider Selection
+
+Every external integration sits behind a package interface (§4) and is chosen at the functions edge from environment configuration. Selection happens once per cold start in the config module (§17.1), is logged, and never changes silently at runtime.
+
+```
+  Slot        Env var          Values                     Today (main)
+  ─────────   ──────────────   ────────────────────────   ─────────────────
+  KYB         KYB_PROVIDER     stub | baselayer | cobalt  stub (hard-coded)
+  IDV         IDV_PROVIDER     stub | stripe              stub (hard-coded)
+  Email       EMAIL_PROVIDER   resend | stub              stub (not wired)
+  Anchoring   ANCHOR_PROVIDER  base-sepolia | stub        base-sepolia
+  KMS         KMS_PROVIDER     gcp | stub                 gcp when env set
+```
+
+Rules (full table with defaults and secrets in §17.3):
+- Adding vendor keys and flipping the env var makes a provider live — no code change.
+- A stub in use is logged at startup (`[config] KYB_PROVIDER=stub`). There is never a silent fallback from a real provider to a stub.
+- A real provider configured without its key is a startup error.
+- Every stored verification result records the provider name (`kybResult.provider`, `kycResult.provider`) so stub results can be identified and routed to manual review later.
+
+Today `makeStubOnboardingDeps()` in `apps/functions/src/wiring/stubs.ts` hard-codes the KYB, IDV, email-code and onboarding-anchor providers; only KMS is env-selected (`resolveKmsConfigFromEnv`). PFL-162 adds `resolveKybConfigFromEnv` / IDV selection next to it; PFL-169 moves all slots into the config module.
+
+### 7.1 Business KYB — Baselayer (primary), Cobalt Intelligence (fallback)
+
+**Status:** adapter-ready, running on stub pending vendor access; stub-verified companies require manual review.
+
+Middesk was dropped because its sandbox is sales-gated. Baselayer is primary because it offers a self-serve free sandbox and returns Secretary of State, IRS TIN match, officers and OFAC/PEP screening from one call. Cobalt Intelligence is the fallback (self-serve free account on live data).
+
+#### 7.1.1 Baselayer API shape
+
+- `POST /searches` with `name`, `address` (city + state minimum), optional `tin`, optional officers and website.
+- Header `Prefer: wait=N` holds the request until the search completes or N seconds elapse, so it fits the existing synchronous `kyb.handler.ts` call.
+- Response fields used: `registrations[]` (SoS), `tin_matched` (IRS; `null` while the IRS is unavailable), `business_officers[]`, `watchlist_hits[]` (OFAC / PEP), `warnings[]`, `verified`, `state`, `id`.
+- When `tin_matched` is `null`, Baselayer later sends a `BusinessSearch.updated` webhook with the final value.
+- Sandbox: self-serve and free, but accepts only Baselayer's predefined test businesses (inputs must match exactly). Production pricing starts at $150/month.
+
+Mapping to `BusinessVerification` (§4.6):
+
+| Field | Source |
+|---|---|
+| `ok` | `verified && tin_matched !== false && watchlist_hits.length === 0` |
+| `vendorRef` | search `id` |
+| `flags` | `warnings` + mismatches (`tin_mismatch`) + watchlist codes (`sanctions_hit`) + `tin_pending` / `search_pending` |
+| `officers` | `business_officers` → `{ name, role }` |
+| `raw` | full search response, for audit |
+
+#### 7.1.2 Adapter sketch
+
+Against the existing `KYBProvider` interface in `packages/kyb/src/types.ts`. Not yet implemented (PFL-161); field names must be confirmed against the sandbox response.
 
 ```typescript
-// packages/kyb/src/providers/middesk.ts
-export function makeMiddeskProvider(config: { apiKey: string }): KYBProvider {
+// packages/kyb/src/providers/baselayer.ts
+import type { KYBProvider, BusinessLookupInput, BusinessVerification, KYBFlag } from "../types.js";
+
+export interface BaselayerConfig {
+  apiKey: string;
+  baseUrl?: string;          // sandbox vs prod host per Baselayer docs
+  waitSeconds?: number;      // Prefer: wait=N (default 25, under the Functions timeout)
+  fetch?: typeof globalThis.fetch;
+}
+
+export function makeBaselayerProvider(cfg: BaselayerConfig): KYBProvider {
+  const f = cfg.fetch ?? globalThis.fetch;
   return {
-    async verifyBusiness(input) {
-      const res = await fetch("https://api.middesk.com/v1/businesses", {
+    async verifyBusiness(input: BusinessLookupInput): Promise<BusinessVerification> {
+      const res = await f(`${cfg.baseUrl}/searches`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${config.apiKey}`,
+          "X-API-Key": cfg.apiKey,
           "Content-Type": "application/json",
+          Prefer: `wait=${cfg.waitSeconds ?? 25}`,
         },
         body: JSON.stringify({
           name: input.legalName,
-          tin: { tin: input.ein },
-          addresses: [{ state: input.state }],
+          tin: input.ein?.replace(/\D/g, ""),
+          address: { state: input.state },        // Baselayer wants city+state minimum: extend BusinessLookupInput
         }),
       });
-      const data = await res.json();
-      // Poll until status === 'completed' (Middesk is async)
-      const final = await pollUntilComplete(data.id, config.apiKey);
+      if (!res.ok) throw new Error(`BASELAYER_HTTP_${res.status}`);
+      const s = await res.json();
+
+      const flags: KYBFlag[] = [
+        ...(s.warnings ?? []).map((w: any) => ({ type: `warning:${w.code ?? w}`, severity: "medium" as const, detail: w.message })),
+        ...(s.watchlist_hits ?? []).map((h: any) => ({ type: "sanctions_hit", severity: "high" as const, detail: h.list ?? h.source })),
+        ...(s.tin_matched === false ? [{ type: "tin_mismatch", severity: "high" as const }] : []),
+        ...(s.tin_matched == null ? [{ type: "tin_pending", severity: "low" as const, detail: "IRS unavailable; awaiting BusinessSearch.updated" }] : []),
+        ...(s.state !== "COMPLETED" ? [{ type: "search_pending", severity: "low" as const }] : []),
+      ];
 
       return {
-        ok: final.status === "completed" && final.review_status === "approved",
-        vendorRef: final.id,
-        flags: extractFlags(final),
-        officers: extractOfficers(final),
-        raw: final,
+        ok: Boolean(s.verified) && s.tin_matched !== false && !(s.watchlist_hits?.length),
+        vendorRef: s.id,
+        flags,
+        officers: (s.business_officers ?? []).map((o: any) => ({ name: o.name, role: o.titles?.[0] ?? o.title ?? "officer" })),
+        raw: s,
       };
     },
-    verifyOfficer: async () => { throw new Error("Use stripe-identity provider"); },
+    async verifyOfficer() {
+      throw new Error("WRONG_PROVIDER: use Stripe Identity for verifyOfficer");
+    },
   };
 }
 ```
 
-Sandbox: `https://api-sandbox.middesk.com`. Webhook for async completion supported.
+#### 7.1.3 Async completion (`tin_pending` / `search_pending`)
 
-### 7.2 Stripe Identity
+```
+kyb.handler ──verifyBusiness──▶ Baselayer (Prefer: wait=25)
+     │◀── result (tin_matched=null → flag tin_pending)
+     │ store companies/{id}.kybResult
+     │   { provider, vendorRef, ok, flags, status: "pending" }
+     │ onboarding continues; finalize gate waits on kybResult
+     │
+     ⋮  (IRS back online)
+     │
+POST /v1/webhooks/kyb/baselayer ◀── BusinessSearch.updated
+     │ verify webhook signature (BASELAYER_WEBHOOK_SECRET)
+     │ look up company by vendorRef
+     │ re-map search → BusinessVerification
+     │ update kybResult { ok, flags, status: "complete" }
+     │ tin_mismatch / watchlist hit → pending_review (PFL-142)
+```
+
+Edge changes (PFL-162): add `resolveKybConfigFromEnv` (`KYB_PROVIDER`, `BASELAYER_API_KEY`) beside `resolveKmsConfigFromEnv`; add the webhook route; extend `BusinessLookupInput` with optional `city` / `address`. The Functions timeout for the KYB route must exceed `waitSeconds`.
+
+#### 7.1.4 Cobalt Intelligence fallback (`KYB_PROVIDER=cobalt`)
+
+- Self-serve free account on live data. Planned adapter: `packages/kyb/src/providers/cobalt.ts` (PFL-165).
+- `verifyBusiness()` fans out to three calls: SoS search (status, officers, registered agent), a separate TIN verification call, and a separate OFAC call. Results are merged into one `BusinessVerification` with the same flag vocabulary as Baselayer.
+- The SoS search can take 15–30 s or return a `retryId` that must be polled. The function serving the KYB route needs a timeout of at least 120 s.
+- Also usable as an inexpensive SoS cross-check.
+
+#### 7.1.5 Stub behaviour and manual review
+
+- `providers/stub.ts` returns a deterministic `ok: true` result. It exists for tests and for environments without vendor access.
+- When the stub is selected, startup logs it explicitly. The stored `kybResult.provider` is `"stub"`.
+- In `PROOFLINE_ENV=production`, any company whose KYB (or IDV) result came from the stub is set to `onboardingStatus = pending_review` and placed in the platform review queue (PFL-142). It is never auto-approved. A reviewer approves or rejects; the decision is audited.
+- Real-provider results with `ok=false` or any flag of severity `medium` or higher also route to the review queue.
+- The "skip" buttons in the onboarding wizard that wrote `vendorRef: 'demo-skipped'` are removed (PFL-168); dev data comes from a dev-only seed script.
+
+### 7.2 Officer IDV — Stripe Identity (`IDV_PROVIDER=stripe`)
+
+**Status:** adapter-ready, running on stub pending vendor access; stub-verified companies require manual review. The adapter in `packages/kyb/src/providers/stripe-identity.ts` exists (PFL-013); the edge injects `stubStripeIdentityProvider` until `IDV_PROVIDER` selection lands (PFL-162 / PFL-176). Setting `IDV_PROVIDER=stripe` requires `STRIPE_SECRET_KEY` and `STRIPE_IDENTITY_WEBHOOK_SECRET`; a missing key is a startup error. The current onboarding KYC step calls `verifyOfficer` synchronously; the production flow is session + webhook as below. The web-admin KYC step must fail closed when no Stripe publishable key is configured (no simulated success).
+
+Simplified sketch (the shipped adapter follows the same shape):
 
 ```typescript
 // packages/kyb/src/providers/stripe-identity.ts
@@ -955,7 +1168,7 @@ export function makeStripeIdentityProvider(config: { secretKey: string }): KYBPr
   const stripe = new Stripe(config.secretKey, { apiVersion: "2024-06-20" });
 
   return {
-    verifyBusiness: async () => { throw new Error("Use middesk provider"); },
+    verifyBusiness: async () => { throw new Error("WRONG_PROVIDER: use a KYB business provider"); },
     async verifyOfficer(input) {
       const session = await stripe.identity.verificationSessions.create({
         type: "document",
@@ -1026,6 +1239,8 @@ export function makeResendProvider(config: { apiKey: string; fromDomain: string 
 ```
 
 Templates in `packages/email/templates/` as React Email components.
+
+Status: adapter exists (PFL-014) but is not wired at the functions edge. PFL-160 selects it via `EMAIL_PROVIDER=resend` (requires `RESEND_API_KEY`, `RESEND_FROM_DOMAIN`) and injects it into the onboarding email-code step, cosign refresh and bilateral notifications. Verification codes are never logged. Link hosts in templates (invite, verify) come from config, and interpolated values are HTML-escaped.
 
 ### 7.4 Sentry
 
@@ -1114,7 +1329,11 @@ export async function createCompanyRootKey(client, opts: {
 }
 ```
 
+Status: built — company root keys are created in Cloud KMS (PFL-126). Today the edge selects real KMS when `GOOGLE_CLOUD_PROJECT` (or `KMS_PROJECT`) and `KMS_KEYRING` are set and otherwise falls back to a stub signer; PFL-169 replaces this with explicit `KMS_PROVIDER=gcp|stub`, with `stub` refused in production. Role credentials issued at registration must be signed by the company KMS root (PFL-100.1), which removes the need to trust unsigned role credentials during verification (§17.6).
+
 ### 7.6 Gemini
+
+Status: not built. `packages/ai` is empty; the sketch below is the target design for PFL-028 (memo screening of wire-instruction payloads in the sign pipeline).
 
 ```typescript
 // packages/ai/src/providers/gemini.ts
@@ -1175,6 +1394,8 @@ Counterparty receives a signed link:
 https://counterparty.proofline.web.app/sign/{docId}?t={signedToken}
 ```
 Token is a JWS signed by inviter's company root, scoping access to one document. Signing surface MUST follow the 6-step pre-biometric verification per ADR-0010 (re-fetch + re-verify before triggering WebAuthn ceremony).
+
+The counterparty's identity (`userId`, `companyId`) is derived server-side from the token and the verified WebAuthn assertion — never from the request body or URL query. Today `sign-as-counterparty` and the portal still read these from the body / URL; fixed under PFL-166 / PFL-171. Link-token secrets (`BILATERAL_JWT_SECRET`, `COSIGN_REFRESH_SECRET`) are bound as Functions secrets with no hardcoded fallback (§17.4).
 
 ### 11.3 Verification Page Auth
 
@@ -1331,6 +1552,8 @@ The token is the **proof of holding**. The extension presents it on every signin
 
 A token whose corresponding server session has been revoked is rejected by the server even if the JWS is still cryptographically valid. The token is necessary but not sufficient.
 
+**Known gap (PFL-172):** the session-token signing key is currently generated in process, so a token only verifies on the instance that issued it and silent signing works only on a warm container. Production requires a persistent key (Cloud KMS or Secret Manager) shared by all instances.
+
 ### 11.6 Always-On Policy Validation Pipeline
 
 **This is the critical security invariant per ADR-0014.**
@@ -1449,6 +1672,8 @@ The session ONLY allows the WebAuthn ceremony to use `userVerification: "discour
 
 The session is purely a UX optimization for biometric prompts.
 
+**Known gap (PFL-172 / PFL-041):** in `wiring/firestore-policy-context.ts` only `getUser` reads Firestore today. Company policy uses a built-in default, and daily totals, counterparty lookup, anomaly checks, session read/revoke and nonce dedupe are permissive in-memory implementations (nonces are not shared across instances). Wire limits are hardcoded ($500k per email / $2M daily). Production requires a Firestore-backed `PolicyContext` and a `companies/{id}.policy` document editable via the admin API.
+
 
 
 ---
@@ -1502,7 +1727,7 @@ Structured JSON only. Required fields per line: `timestamp, level, traceId, requ
 
 ### 14.1 Required Environment
 
-See `scaffolding/env.example` for the full manifest. Bootstrap script verifies all required vars before allowing any app to start.
+See `.env.example` for the manifest and §17.3 for every provider variable with its allowed values and defaults. The functions config module (§17.1) validates required variables at startup.
 
 ### 14.2 Running Locally
 
@@ -1531,12 +1756,15 @@ pnpm --filter @proofline/extension-chrome dev
 
 Emulators wire Functions ↔ Firestore ↔ Auth locally. The Anchor contract calls go to live Base Sepolia (cheap enough for dev).
 
-External services in dev mode:
-- Middesk → sandbox API
-- Stripe Identity → test mode
-- Resend → "test" mailbox
+External services in development (`PROOFLINE_ENV=development`):
+- KYB → `KYB_PROVIDER=stub` by default; `baselayer` against the Baselayer sandbox (predefined test businesses only) or `cobalt` with a free Cobalt account
+- IDV → `IDV_PROVIDER=stub` by default; `stripe` with Stripe test-mode keys
+- Email → `EMAIL_PROVIDER=stub` by default; `resend` with a test domain
+- Anchoring → Base Sepolia
 - Sentry → dev project
-- Gemini → real API (free tier)
+- Gemini → real API (free tier), once PFL-028 lands
+
+Development data (companies, users, devices) comes from a dev-only seed script against the emulators, not from skip buttons or fixture modes in the apps.
 
 The extension uses live `proofline.app` for WebAuthn ceremony popups even in dev (because `localhost` doesn't work as a WebAuthn RP origin from a chrome-extension context). Set up a `dev.proofline.app` subdomain pointing to your dev Firebase Hosting deploy for end-to-end testing.
 
@@ -1566,13 +1794,14 @@ PRs cannot merge to main without all green.
 
 ## 16. Deployment Topology
 
-### 16.1 Hackathon
+### 16.1 Current Deployment
 
 ```
                   ┌────────────────────┐
                   │  Firebase Hosting   │
                   │  *.web.app          │
-                  │   sender, verify,   │
+                  │   admin, sign,      │
+                  │   verify,           │
                   │   counterparty      │
                   └─────────┬──────────┘
                             │
@@ -1581,38 +1810,129 @@ PRs cannot merge to main without all green.
                   │   (us-central1)    │
                   └─────────┬──────────┘
                             │
-       ┌─────┬─────┬────────┼────────┬─────┬──────┐
-       ▼     ▼     ▼        ▼        ▼     ▼      ▼
-   Firestore  KMS  Middesk  Stripe  Resend Sentry Base
-                            Identity                Sepolia
+     ┌──────┬──────┬────────┼────────┬──────┬──────┐
+     ▼      ▼      ▼        ▼        ▼      ▼      ▼
+ Firestore KMS  Baselayer  Stripe  Resend Sentry  Base
+               / Cobalt  Identity                Sepolia
+               (KYB slot) (IDV slot)
 ```
 
-Single region, single project, free tiers. ~$0/month at demo volume.
+Single region, single project. Cloud KMS and Base Sepolia are live. The KYB and IDV slots run on stub pending vendor access; Resend is not yet wired (PFL-160).
 
-### 16.2 Production (post-hackathon)
+### 16.2 Production Delta
 
 ```
-+ Multi-region failover for Functions + Firestore
++ PROOFLINE_ENV=production with explicit providers and
+  fail-closed config (§17)
++ All secrets bound via Functions defineSecret
++ Separate staging and production projects
 + Cloud KMS in dedicated keyring with IAM least-privilege
-+ Migrate anchoring from Base Sepolia to Base mainnet
 + Cloud Armor / WAF in front of public verification endpoints
-+ Secret Manager for all credentials (replaces .env)
 + Cloud Trace + Cloud Monitoring + Sentry alerting
-+ SOC 2 audit prep
++ Later (Phase 10): Base mainnet anchoring, multi-region
+  failover, SOC 2
 ```
 
 ---
 
-## 17. Open Implementation Questions
+## 17. Production Requirements & Configuration
 
-(See PRD v3.0 §18.2 — same list, decisions captured as ADRs when resolved.)
+The PRD states *what* production requires; this section states *how* the code meets it. Work is tracked in Phase 11 (Production Hardening); ticket references are given per item.
+
+### 17.1 Config Module
+
+All functions configuration is read in one module (`apps/functions/src/config/`, PFL-169) at cold start:
+
+1. Read `PROOFLINE_ENV` and every provider variable from `process.env` and bound secrets.
+2. Validate values against the allowed sets in §17.3. Unknown values are a startup error.
+3. Apply production rules (§17.3 "Prod rule" column). A violation is a startup error — the function refuses to serve.
+4. Log one line per slot (`[config] env=production KYB_PROVIDER=stub IDV_PROVIDER=stub EMAIL_PROVIDER=resend ...`). Secret values are never logged.
+5. Export a frozen, typed `Config` object. No other module reads `process.env` directly; wiring code (today `wiring/stubs.ts`) builds providers from `Config` only.
+
+There is no fallback chain (`a ?? b ?? "default"`) for anything security-relevant. The build (`esbuild.config.mjs`) fails for staging / production targets when required configuration is missing instead of deploying "with stubs".
+
+### 17.2 `PROOFLINE_ENV`
+
+`PROOFLINE_ENV=production|staging|development` must be set explicitly for every deployed function. Cloud Functions v2 does not set `NODE_ENV=production`, so `NODE_ENV` is never used to decide behaviour; existing `NODE_ENV` checks (e.g. the anchoring stub fallback) are replaced. A missing `PROOFLINE_ENV` is a startup error in deployed environments; only the local emulator may default to `development`.
+
+### 17.3 Provider Environment Variables
+
+| Variable | Allowed values | Default | Prod rule | Required secrets when real |
+|---|---|---|---|---|
+| `PROOFLINE_ENV` | `production` \| `staging` \| `development` | none (emulator: `development`) | must be `production` | — |
+| `KYB_PROVIDER` | `stub` \| `baselayer` \| `cobalt` | `stub` | `stub` allowed but logged; stub-verified companies → `pending_review` (§7.1.5) | `BASELAYER_API_KEY`, `BASELAYER_WEBHOOK_SECRET` / `COBALT_API_KEY` |
+| `IDV_PROVIDER` | `stub` \| `stripe` | `stub` | `stub` allowed but logged; stub-verified officers → `pending_review` | `STRIPE_SECRET_KEY`, `STRIPE_IDENTITY_WEBHOOK_SECRET` |
+| `EMAIL_PROVIDER` | `resend` \| `stub` | `stub` (development only) | `stub` refused | `RESEND_API_KEY` (+ `RESEND_FROM_DOMAIN`) |
+| `ANCHOR_PROVIDER` | `base-sepolia` \| `stub` (mainnet later) | `stub` (development only) | `stub` refused | `DEPLOYER_PRIVATE_KEY` (+ `BASE_SEPOLIA_RPC`, `ANCHOR_CONTRACT_ADDRESS`) |
+| `KMS_PROVIDER` | `gcp` \| `stub` | `stub` (development only) | `stub` refused | IAM on the keyring (+ `KMS_PROJECT`, `KMS_LOCATION`, `KMS_KEYRING`) |
+
+General rules:
+- A real provider selected without its key is a startup error in every environment.
+- Keys + env flip = live; no code change.
+- Every stored verification result records `provider`.
+
+Non-provider secrets (always required outside development, no defaults): `PROOFLINE_AUTH_JWT_SECRET`, `BILATERAL_JWT_SECRET`, `COSIGN_REFRESH_SECRET`, and the persistent session-token signing key (PFL-172).
+
+### 17.4 Secrets
+
+- Every secret is declared with `defineSecret()` from `firebase-functions/params` and listed in the function's `secrets: [...]` option. Today only `PROOFLINE_AUTH_JWT_SECRET` is bound this way.
+- No hardcoded fallbacks. Literals such as `"dev-secret-change-in-prod"` in `jws.helpers.ts`, `cosign.helpers.ts`, `extension-auth.handler.ts`, `register-credential.handler.ts` and `require-extension-auth.middleware.ts` are removed (PFL-169).
+- A missing secret is a startup error, not a warning.
+- Secrets are set per project with `firebase functions:secrets:set`; `.env` files are for the local emulator only.
+- Web apps receive only public configuration (Firebase web config, API base URL, Stripe publishable key) via build-time env; a missing value fails the build instead of falling back to a hardcoded project.
+
+### 17.5 Auth Matrix
+
+| Route group | Caller | Auth | Identity source | Today |
+|---|---|---|---|---|
+| `/v1/admin/*` (dashboard reads, invite-employee, revoke-device, update-role, update-status, revoke-session) | Web admin | Firebase ID token (`adminAuthMiddleware`); sensitive actions add fresh WebAuthn | Token UID → user record → `companyId` | Built |
+| `/v1/onboard/*` | Web admin wizard | Firebase ID token | Token UID (owner); never `body.ownerUserId` or `?uid=` | Stub auth (`dev-user` / `dev-company`) — PFL-166 |
+| `/v1/bilateral/*` (drafter side) | Web admin / portal | Firebase ID token | Token UID | Stub auth — PFL-166 |
+| Bilateral counterparty sign | Counterparty portal | JWS link token + WebAuthn assertion | Derived server-side from token + assertion | Body / URL identity — PFL-166 / PFL-171 |
+| `/v1/cosign/*` | Cosigner via link | JWS link token + verified WebAuthn assertion (rejected on failure) | Derived server-side | Assertion best-effort — PFL-171 |
+| `/v1/sign`, `/v1/sign-silent` | Extension | Extension JWS (`requireExtensionAuth`) + session token where applicable | Token claims, re-checked against Firestore | Built |
+| `/v1/extension/auth`, `/v1/extension/register-credential`, `/v1/auth/challenge` | Extension / sign popup | Firebase ID token → extension JWS; server-issued challenges | Token UID | Built |
+| `/v1/verify/*`, public verify page | Anyone | None (read-only) | — | Built |
+| `/v1/webhooks/kyb/*`, Stripe Identity webhook | Vendors | Vendor signature verification | Vendor reference lookup | Planned (PFL-162) |
+| `anchorAdmin` (`/v1/admin/anchor/run`) | Platform operator | Platform-admin Firebase auth, or removed | Token UID | No auth — PFL-170 |
+
+`stubAuthMiddleware` and the `dev-user` / `dev-company` identities are deleted. `LEGACY_DEMO_COMPANY_ID` and the `PLACEHOLDER_CREDENTIAL_ID` sentinel are removed; the extension forces credential registration instead of signing with a placeholder.
+
+### 17.6 No Demo Paths in Production Builds
+
+- `finalize` has no `demoMode`; it enforces ownership and every prior-step gate (PFL-167). The web-admin client no longer sends `demoMode`.
+- No "skip" buttons in the onboarding wizard (PFL-168).
+- Fixtures and fixture modes (`?fixture=`, `resolveMode()`, `DEV_PLACEHOLDER_TOKEN`) exist only under `import.meta.env.DEV` and are tree-shaken from production bundles. The counterparty portal defaults to live mode.
+- No demo landing routes (`DemoHub`, fixture pages on `/`); public routes land on login or real pages.
+- The extension never fabricates a "Verified" banner when the server returns none; it fails and retries.
+- Explorer network, hosts, Chrome Web Store link and banner links come from config, not literals.
+- Development data is created by a dev-only seed script.
+
+### 17.7 Verification Strictness
+
+- No unbounded legacy signature fallback. `legacySignatureFallback` is restricted to envelopes recorded before a fixed cutoff (and flagged in the result), or removed.
+- Role credentials are signed by the company KMS root at registration (PFL-100.1); `trustUnsignedRoleCredentials` is removed and the issuer chain is always checked.
+- The cosigner's WebAuthn assertion must verify or the cosign is rejected.
+- Nonce replay protection is backed by Firestore, not per-instance memory (PFL-172).
+
+### 17.8 Manual Review
+
+- Companies whose KYB or IDV result came from the stub provider are set to `onboardingStatus = pending_review` in production and appear in the platform review queue (PFL-142, Phase 6 platform admin). They are never auto-approved.
+- Real-provider results with `ok=false` or a flag of severity `medium` or higher go to the same queue.
+- Approve / reject decisions are recorded with reviewer identity and timestamp in the audit log, and a company cannot finalize while `pending_review`.
 
 ---
 
-## 18. Glossary
+## 18. Open Implementation Questions
 
-(Canonical glossary in PRD v3.0 §19. TDD-specific terms preserved from v2.0 §17.)
+(See PRD §18.2 — decisions captured as ADRs when resolved.)
 
 ---
 
-**Document status:** v3.0, integration-ready. Implementation should follow this document for the *how*; refer to PRD v3.0 for the *why*. Begin Day Zero per `scaffolding/bootstrap.sh`.
+## 19. Glossary
+
+(Canonical glossary in the PRD. TDD-specific terms preserved from v2.0 §17.)
+
+---
+
+**Document status:** v4.0, production plan. Implementation should follow this document for the *how*; refer to PRD v4.0 for the *why*. Production hardening work is tracked in Phase 11 (§17).
