@@ -60,16 +60,16 @@ export interface EnrollOfficerRequest {
 }
 export interface EnrollOfficerResponse {
   stripeSessionId: string;
-  clientSecret: string;
+  /** null when the identity provider verified synchronously (see `verified`). */
+  clientSecret: string | null;
   officerEmail: string;
   message: string;
+  /** True when the server already recorded the officer as verified. */
+  verified?: boolean;
 }
 
 export interface FinalizeRequest {
   companyId: string;
-  // PFL-103: skip server-side prior-step gates (onboardingStatus + KYC)
-  // so a demo-skipped onboarding can still finalize.
-  demoMode?: boolean;
 }
 export interface FinalizeResponse {
   ok: boolean;

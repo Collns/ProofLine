@@ -99,8 +99,8 @@ export function makeEnrollOfficerHandler(deps: {
 
     const officers = company.kybResult?.officers ?? [];
     // If KYB returned officers, enforce the email is from that list.
-    // (We match by normalized domain — Middesk doesn't give us email addresses,
-    //  only names+roles, so this is a best-effort cross-check.)
+    // (We match by normalized domain — KYB providers return officer names
+    //  and roles, not email addresses, so this is a best-effort cross-check.)
     const officerDomain = officerEmail.split("@")[1]?.toLowerCase();
     if (officers.length > 0 && officerDomain !== company.domain.toLowerCase()) {
       // Warn but don't hard-block — officer may use personal email for KYC.
@@ -124,6 +124,31 @@ export function makeEnrollOfficerHandler(deps: {
     } catch (err) {
       console.error("[enroll-officer] Stripe Identity call failed", err);
       res.status(502).json(ERR.internal("Identity provider unavailable. Please retry."));
+      return;
+    }
+
+    // A provider that returns a completed verification synchronously (the
+    // stub IDV provider today) is recorded as verified right away. Stripe
+    // Identity returns a pending session and is completed by the webhook.
+    // Provider labelling and production review routing: PFL-162 / PFL-177.
+    if (stripeResult.ok && stripeResult.documentVerified && stripeResult.livenessConfirmed) {
+      const verifiedAt = Date.now();
+      await updateCompany(companyId, {
+        officerEnrollment: {
+          stripeSessionId:    stripeResult.vendorRef,
+          stripeClientSecret: "",
+          officerEmail,
+          verifiedAt,
+        },
+        onboardingStatus: "pending_finalize",
+      });
+      res.status(201).json({
+        stripeSessionId: stripeResult.vendorRef,
+        clientSecret:    null,
+        officerEmail,
+        verified:        true,
+        message:         "Officer identity verified.",
+      });
       return;
     }
 

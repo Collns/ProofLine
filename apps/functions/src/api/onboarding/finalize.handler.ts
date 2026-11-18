@@ -69,12 +69,39 @@ interface RoleCredential {
 
 const FinalizeRequestSchema = z.object({
   companyId: z.string().min(1),
-  // PFL-103: when true, skip the prior-step gates (onboardingStatus +
-  // officer KYC) so the demo flow can finalize a company whose
-  // DNS/email/KYB/KYC steps were demo-skipped. KMS key + role credential
-  // + anchor + status='verified' still run for real.
-  demoMode: z.boolean().optional(),
 });
+
+/**
+ * Every onboarding gate must be satisfied before finalize mints the
+ * company root key (PFL-167). Returns the first unmet gate, or null.
+ */
+export function firstUnmetGate(company: {
+  dnsVerifiedAt?: number;
+  emailVerifiedAt?: number;
+  kybResult?: { ok: boolean };
+  officerEnrollment?: { verifiedAt?: unknown };
+}): { code: string; detail: string } | null {
+  if (!company.dnsVerifiedAt) {
+    return { code: "DNS_NOT_VERIFIED", detail: "Domain ownership (DNS TXT record) has not been verified." };
+  }
+  if (!company.emailVerifiedAt) {
+    return { code: "EMAIL_NOT_VERIFIED", detail: "The owner email address has not been verified." };
+  }
+  if (!company.kybResult) {
+    return { code: "KYB_INCOMPLETE", detail: "Business verification (KYB) has not been run." };
+  }
+  if (!company.kybResult.ok) {
+    return { code: "KYB_FAILED", detail: "Business verification (KYB) did not pass." };
+  }
+  if (!company.officerEnrollment?.verifiedAt) {
+    return {
+      code: "KYC_INCOMPLETE",
+      detail: "Officer identity verification has not been confirmed yet. " +
+        "Complete the identity check or wait for its result.",
+    };
+  }
+  return null;
+}
 
 // PFL-103: derive a human display name for the owner's seeded user doc.
 // "owner@acme-title.com" → "Owner".
@@ -120,54 +147,46 @@ export function makeFinalizeHandler(deps: {
       return;
     }
 
-    const { companyId, demoMode } = parseResult.data;
+    const { companyId } = parseResult.data;
     const { userId }    = (req as any).user as { userId: string };
 
-    // ── 2. Load company ───────────────────────────────────────────────────────
+    // ── 2. Load company + ownership ───────────────────────────────────────────
 
     const company = await getCompany(companyId);
     if (!company) {
       res.status(404).json(ERR.notFound(`Company ${companyId} not found`));
       return;
     }
-    // The company doc's ownerUserId is the authoritative owner (recorded at
-    // /start from the caller's verified Firebase UID). demoMode still skips
-    // this check; it is removed in PFL-167.
+    // ownerUserId was recorded at /start from the caller's verified
+    // Firebase UID; only that user may finalize.
     const ownerUserId = company.ownerUserId;
-    if (!demoMode && ownerUserId !== userId) {
+    if (ownerUserId !== userId) {
       res.status(403).json(ERR.forbidden());
       return;
     }
 
-    // PFL-103: demoMode relaxes the prior-step gates. We still refuse to
-    // re-finalize an already-verified company even in demo mode.
-    if (!demoMode) {
-      const allowedStatuses = ["pending_kyc", "pending_finalize"];
-      if (!allowedStatuses.includes(company.onboardingStatus)) {
-        res.status(409).json(
-          ERR.conflict(
-            "ONBOARDING_STEP_INVALID",
-            `Finalize not allowed in status: ${company.onboardingStatus}`
-          )
-        );
-        return;
-      }
-
-      // ── 3. Guard: KYC must be complete ──────────────────────────────────────
-      if (!company.officerEnrollment?.verifiedAt) {
-        res.status(422).json(
-          ERR.unprocessable(
-            "KYC_INCOMPLETE",
-            "Officer identity verification has not been confirmed yet. " +
-            "Please complete the Stripe Identity flow or wait for the webhook."
-          )
-        );
-        return;
-      }
-    } else if (company.onboardingStatus === "verified") {
+    if (company.onboardingStatus === "verified") {
       res.status(409).json(
         ERR.conflict("ONBOARDING_STEP_INVALID", "Company is already verified")
       );
+      return;
+    }
+    const allowedStatuses = ["pending_kyc", "pending_finalize"];
+    if (!allowedStatuses.includes(company.onboardingStatus)) {
+      res.status(409).json(
+        ERR.conflict(
+          "ONBOARDING_STEP_INVALID",
+          `Finalize not allowed in status: ${company.onboardingStatus}`
+        )
+      );
+      return;
+    }
+
+    // ── 3. Guard: every prior step must be complete ───────────────────────────
+
+    const unmet = firstUnmetGate(company);
+    if (unmet) {
+      res.status(422).json(ERR.unprocessable(unmet.code, unmet.detail));
       return;
     }
 
@@ -260,8 +279,8 @@ export function makeFinalizeHandler(deps: {
       anchorBlockNumber = anchorResult.blockNumber;
     } catch (err) {
       console.error("[finalize] Anchor postAnchor failed", err);
-      // Non-fatal for hackathon — we still complete onboarding.
-      // Log and continue; anchor can be retried by the batch job.
+      // Non-fatal: onboarding completes and anchorTxHash stays empty.
+      // There is no automatic re-anchor of this registry root yet.
       anchorTxHash     = "";
       anchorBlockNumber = 0;
       console.warn("[finalize] Proceeding without confirmed anchor. Will retry via batch.");
@@ -287,7 +306,7 @@ export function makeFinalizeHandler(deps: {
 
     // ── 10b. Link the owner's user doc to this company (PFL-103, fixes D+E) ────
     // The extension auth handler reads companyId from users/{uid} on the
-    // existing-user path; new users get DEMO_COMPANY_ID. Seeding the owner's
+    // existing-user path. Seeding the owner's
     // user doc here means that once they auth via the extension they sign
     // under the REAL company, and the owner is shapeUser-resolvable at
     // verify time (companyId + displayName + role + status all present).
