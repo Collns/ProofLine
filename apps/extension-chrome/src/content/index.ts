@@ -5,6 +5,7 @@ import { tryInject } from './inject-toolbar.js';
 import { injectBannerIntoCompose } from './inject-banner.js';
 import { isBackgroundToContentMessage } from '../shared/types.js';
 import { readComposeId } from './shared.js';
+import { installSendGuard, setSignState } from './send-guard.js';
 
 // Content-script entry. Runs once per Gmail tab. We use a single
 // MutationObserver on document.body — cheaper than polling and catches
@@ -75,16 +76,22 @@ function listenForBackgroundMessages(): void {
       }
       const result = injectBannerIntoCompose(compose, message.bannerHtml);
       log('content', 'banner injected', result);
+      // PFL-096: only a message that carries the banner counts as signed.
+      setSignState(compose, result.ok ? 'signed' : 'failed');
       sendResponse({ ok: result.ok });
       return false;
     }
     if (message.type === 'SIGN_FAILED') {
       warn('content', 'sign failed', message.code, message.message);
+      const compose = findComposeByComposeId(message.composeId);
+      if (compose) setSignState(compose, 'failed');
       sendResponse({ ok: true });
       return false;
     }
     if (message.type === 'PAYLOAD_NEEDS_COSIGN') {
       log('content', 'cosign required', message.approvers);
+      const compose = findComposeByComposeId(message.composeId);
+      if (compose) setSignState(compose, 'cosign_pending');
       sendResponse({ ok: true });
       return false;
     }
@@ -117,6 +124,13 @@ function start(): void {
   log('content', 'ProofLine content script loaded');
 
   listenForBackgroundMessages();
+
+  // PFL-096: block Gmail Send while signing is pending, failed, waiting on a
+  // cosigner, or for an unsigned wire instruction.
+  installSendGuard(document, {
+    findComposes: findComposeContainers,
+    onSendUnsigned: (compose) => warn('content', 'send unsigned chosen', readComposeId(compose)),
+  });
 
   // Resolve auth status, then sweep (refreshAuthStatus runs sweep() itself
   // when the flag flips). Also run an initial sweep for inbound-message
