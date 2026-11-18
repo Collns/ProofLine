@@ -16,6 +16,7 @@ import { revokeDevice } from '../api/devices-client';
 import {
   updateUserRole,
   updateUserStatus,
+  revokeSession,
   UserManagementError,
 } from '../api/user-management-client';
 import { useAuth } from '../contexts/AuthContext';
@@ -88,6 +89,14 @@ export function DashboardHome() {
     return () => { cancelled = true; };
   }, [cid, refreshTick]);
 
+  // PFL-130: auto-refresh so the sessions list tracks reality without a
+  // manual reload. Sections only skeleton when they have no data, so
+  // the periodic refetch never flashes.
+  useEffect(() => {
+    const id = window.setInterval(() => setRefreshTick((n) => n + 1), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
   // PFL-128: derive the caller's role from the users list so the UI can
   // gate role-edit (owner only) and deactivate (owner OR manager) and
   // skip controls on the caller's own row. Falls back to "employee" so
@@ -130,7 +139,14 @@ export function DashboardHome() {
           onOptimisticPatch={patchUser}
         />
         <SignedMessagesSection messages={messages} loading={loading} />
-        <SessionsSection sessions={sessions} loading={loading} />
+        <SessionsSection
+          sessions={sessions}
+          users={users}
+          loading={loading}
+          callerUid={callerUid}
+          callerRole={callerRole}
+          onChanged={() => setRefreshTick((n) => n + 1)}
+        />
       </div>
     </AppShell>
   );
@@ -580,8 +596,15 @@ function SignedMessagesSection({
 // ─── Active sessions ───────────────────────────────────────────────────────
 
 function SessionsSection({
-  sessions, loading,
-}: { sessions: AdminSession[]; loading: boolean }) {
+  sessions, users, loading, callerUid, callerRole, onChanged,
+}: {
+  sessions: AdminSession[];
+  users: AdminUser[];
+  loading: boolean;
+  callerUid: string;
+  callerRole: 'owner' | 'manager' | 'employee';
+  onChanged: () => void;
+}) {
   return (
     <section aria-labelledby="sessions-heading" className="space-y-3">
       <h2 id="sessions-heading" className="text-xs font-semibold uppercase tracking-widest text-gray-400">
@@ -594,22 +617,93 @@ function SessionsSection({
       ) : (
         <ul className="space-y-2">
           {sessions.map((s) => (
-            <li key={s.id} className="rounded-xl border border-gray-200 bg-white p-4">
-              <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                <p className="text-sm font-medium text-[#0B1F3A]">{truncate(s.userId, 12, 6)}</p>
-                <p className="text-xs text-gray-500">
-                  authorized {fmtDate(s.authorizedAt)} · expires {fmtDate(s.expiresAt)}
-                </p>
-              </div>
-              <p className="mt-0.5 truncate text-sm text-gray-600">
-                <span className="text-gray-400">recipient</span>{' '}
-                <span className="font-mono text-xs">{truncate(s.recipient, 12, 6)}</span>
-              </p>
-            </li>
+            <SessionRow
+              key={s.id}
+              session={s}
+              owner={users.find((u) => u.userId === s.userId)}
+              callerUid={callerUid}
+              callerRole={callerRole}
+              onChanged={onChanged}
+            />
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+// PFL-130: one active session with an admin kill switch. Visibility
+// mirrors the server matrix (owner → any; manager → own or employee
+// sessions); the server enforces it regardless.
+function SessionRow({
+  session: s, owner, callerUid, callerRole, onChanged,
+}: {
+  session: AdminSession;
+  owner: AdminUser | undefined;
+  callerUid: string;
+  callerRole: 'owner' | 'manager' | 'employee';
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canRevoke =
+    callerRole === 'owner' ||
+    (callerRole === 'manager' && (s.userId === callerUid || owner?.role === 'employee'));
+
+  const who = owner ? (owner.displayName || owner.email) : truncate(s.userId, 12, 6);
+
+  async function handleRevoke() {
+    if (!window.confirm(
+      `Revoke this signing session for ${who}? ` +
+      `Their next silent sign will fail and they'll need to re-authorize with their passkey.`,
+    )) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await revokeSession(s.id);
+      onChanged();
+    } catch (err) {
+      const msg = err instanceof UserManagementError ? `${err.code}: ${err.message}` :
+                  err instanceof Error ? err.message : 'Revoke failed';
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="rounded-xl border border-gray-200 bg-white p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <p className="min-w-0 truncate text-sm font-medium text-[#0B1F3A]">{who}</p>
+        <p className="text-xs text-gray-500">
+          authorized {fmtDate(s.authorizedAt)} · expires {fmtDate(s.expiresAt)}
+        </p>
+      </div>
+      <p className="mt-0.5 truncate text-sm text-gray-600">
+        <span className="text-gray-400">recipient</span>{' '}
+        <span className="font-mono text-xs">{truncate(s.recipient, 12, 6)}</span>
+        <span className="ml-3 text-gray-400">signs</span>{' '}
+        <span className="text-xs">{s.signCount ?? 0}</span>
+        {s.lastUsedAt !== null && (
+          <>
+            <span className="ml-3 text-gray-400">last used</span>{' '}
+            <span className="text-xs">{fmtDate(s.lastUsedAt)}</span>
+          </>
+        )}
+      </p>
+      {error && <p className="mt-1 text-xs text-red-700">{error}</p>}
+      {canRevoke && (
+        <button
+          type="button"
+          onClick={handleRevoke}
+          disabled={busy}
+          className="mt-2 rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {busy ? 'Revoking…' : 'Revoke session'}
+        </button>
+      )}
+    </li>
   );
 }
 
