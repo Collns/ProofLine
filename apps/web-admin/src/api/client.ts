@@ -56,9 +56,10 @@ function isFixtureMode(): boolean {
 
 // ── Auth header ──────────────────────────────────────────────────────────────
 //
-// PFL-121: use the signed-in user's real Firebase ID token. Falls back to a
-// cached token in localStorage (written by AuthContext), then to a dev
-// placeholder so unauthenticated/local flows still hit the API.
+// PFL-121: use the signed-in user's real Firebase ID token, falling back to
+// the cached token in localStorage (written by AuthContext). With no token
+// the request goes out without Authorization and the API answers 401
+// (PFL-166: no placeholder tokens).
 async function authHeader(): Promise<Record<string, string>> {
   let token: string | null = null;
   try {
@@ -70,7 +71,7 @@ async function authHeader(): Promise<Record<string, string>> {
   if (!token && typeof window !== 'undefined') {
     token = window.localStorage.getItem('firebase-id-token');
   }
-  return { Authorization: `Bearer ${token ?? 'DEV_PLACEHOLDER_TOKEN'}` };
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 // ── Generic POST helper ──────────────────────────────────────────────────────
@@ -103,34 +104,13 @@ async function postJson<TReq, TRes>(path: string, body: TReq): Promise<TRes> {
 
 // ── Endpoints ────────────────────────────────────────────────────────────────
 
-// PFL-121: resolve the owner's real Firebase UID for the start request.
-// Prefer the authenticated user's UID; fall back to the legacy ?uid= URL
-// param / localStorage bridge for unauthenticated/demo flows.
-function resolveOwnerUid(): string | undefined {
-  try {
-    const uid = getFirebaseAuth().currentUser?.uid;
-    if (uid && uid.length > 0) return uid;
-  } catch {
-    /* auth not configured — fall through to param/storage */
-  }
-  if (typeof window === 'undefined') return undefined;
-  const fromParam = new URLSearchParams(window.location.search).get('uid');
-  if (fromParam && fromParam.trim().length > 0) return fromParam.trim();
-  const fromStorage = window.localStorage.getItem('proofline-owner-uid');
-  if (fromStorage && fromStorage.trim().length > 0) return fromStorage.trim();
-  return undefined;
-}
-
 export async function startOnboarding(input: StartRequest): Promise<StartResponse> {
   if (isFixtureMode()) {
     await sleep(FIXTURE_LATENCY_MS);
     return { ...fixtureStartResponse, domain: input.domain };
   }
-  // Inject the owner UID unless the caller already set one.
-  const body: StartRequest = input.ownerUserId
-    ? input
-    : { ...input, ownerUserId: resolveOwnerUid() };
-  return postJson<StartRequest, StartResponse>('/start', body);
+  // The server takes the owner from the verified ID token (PFL-166).
+  return postJson<StartRequest, StartResponse>('/start', input);
 }
 
 export async function verifyDns(input: VerifyDnsRequest): Promise<VerifyDnsResponse> {

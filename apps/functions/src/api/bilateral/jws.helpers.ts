@@ -6,9 +6,12 @@
  * deep-link URL per TDD §11.2.
  *
  * Token format: a compact JWS (HS256, shared secret from env) with claims:
- *   { sub: docId, iss: "proofline-bilateral", exp: expiresAt, drafterId: companyId }
+ *   { sub: docId, iss: "proofline-bilateral", exp: expiresAt,
+ *     drafterId: drafterCompanyId, cp: counterpartyCompanyId }
  *
- * The token is the auth on /sign-as-counterparty — no Firebase auth required.
+ * The token is the auth on /sign-as-counterparty. The counterparty's
+ * company identity comes from the signed `cp` claim (PFL-166), never from
+ * the request body. Tokens without `cp` or `exp` are rejected.
  * Secret comes from BILATERAL_JWT_SECRET env var.
  */
 
@@ -20,9 +23,10 @@ const SECRET = process.env["BILATERAL_JWT_SECRET"] ?? "dev-secret-change-in-prod
 
 export async function buildCounterpartyJwsLink(opts: {
   baseUrl:          string;
-  docId:            string;
-  drafterCompanyId: string;
-  expiresAt:        number;
+  docId:                 string;
+  drafterCompanyId:      string;
+  counterpartyCompanyId: string;
+  expiresAt:             number;
 }): Promise<string> {
   const header  = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
   const payload = b64url(JSON.stringify({
@@ -30,6 +34,7 @@ export async function buildCounterpartyJwsLink(opts: {
     iss:       "proofline-bilateral",
     exp:       opts.expiresAt,
     drafterId: opts.drafterCompanyId,
+    cp:        opts.counterpartyCompanyId,
   }));
 
   const sigInput = `${header}.${payload}`;
@@ -45,10 +50,11 @@ export async function buildCounterpartyJwsLink(opts: {
 // ─── Verify ───────────────────────────────────────────────────────────────────
 
 interface VerifyOk {
-  ok:        true;
-  docId:     string;
-  drafterId: string;
-  exp:       number;
+  ok:             true;
+  docId:          string;
+  drafterId:      string;
+  counterpartyId: string;
+  exp:            number;
 }
 
 interface VerifyFail {
@@ -88,7 +94,10 @@ export async function verifyCounterpartyJwsToken(
   }
 
   const nowSec = Math.floor(Date.now() / 1000);
-  if (typeof claims["exp"] === "number" && claims["exp"] < nowSec) {
+  if (typeof claims["exp"] !== "number") {
+    return { ok: false, detail: "Token has no expiry" };
+  }
+  if (claims["exp"] < nowSec) {
     return { ok: false, detail: "Token has expired" };
   }
 
@@ -96,11 +105,19 @@ export async function verifyCounterpartyJwsToken(
     return { ok: false, detail: "Invalid token issuer" };
   }
 
+  if (typeof claims["sub"] !== "string" || claims["sub"].length === 0) {
+    return { ok: false, detail: "Token has no document id" };
+  }
+  if (typeof claims["cp"] !== "string" || claims["cp"].length === 0) {
+    return { ok: false, detail: "Token has no counterparty company" };
+  }
+
   return {
-    ok:        true,
-    docId:     String(claims["sub"]),
-    drafterId: String(claims["drafterId"]),
-    exp:       Number(claims["exp"]),
+    ok:             true,
+    docId:          claims["sub"],
+    drafterId:      String(claims["drafterId"]),
+    counterpartyId: claims["cp"],
+    exp:            claims["exp"],
   };
 }
 

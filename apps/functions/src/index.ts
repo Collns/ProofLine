@@ -101,6 +101,9 @@ import {
 // --- PFL-087: real Bearer auth for signing routes
 import { requireExtensionAuth } from "./auth/require-extension-auth.middleware.js";
 
+// --- PFL-166: Firebase ID-token auth for onboarding + bilateral
+import { makeFirebaseAuth } from "./auth/firebase-auth.middleware.js";
+
 // --- PFL-062: cosign HTTP wiring
 import { makeCosignRouter } from "./cosign/router.js";
 
@@ -226,26 +229,13 @@ publicApp.get("/healthz", (_req, res) => {
 // mounted on the signing routes below — which is the chain that feeds
 // PolicyContext.getUser(userId) → users/{realUID} → devices[].
 //
-// `stubAuthMiddleware` is intentionally kept for /v1/onboard and
-// /v1/bilateral: bilateral does its own auth via X-ProofLine-Bilateral-
-// Token (the stub is a pass-through provider of req.user); onboarding
-// will get real auth in a separate ticket.
+// PFL-166: /v1/onboard requires a verified Firebase ID token (the caller
+// may not belong to a company yet). /v1/bilateral accepts an optional
+// Firebase ID token for an active company user; drafter routes require
+// it, counterparty routes authenticate with the signed deep-link token.
 
-function stubAuthMiddleware(
-  req: express.Request,
-  _res: express.Response,
-  next: express.NextFunction,
-): void {
-  const _bearer = typeof req.headers.authorization === "string"
-    ? req.headers.authorization
-    : "";
-  void _bearer;
-  (req as express.Request & { user: { userId: string; companyId: string } }).user = {
-    userId:    "dev-user",
-    companyId: "dev-company",
-  };
-  next();
-}
+const onboardingAuth = makeFirebaseAuth({ requireCompany: false });
+const bilateralAuth  = makeFirebaseAuth({ requireCompany: true, optional: true });
 
 // ─── Signing routes (/v1/sign, /v1/sign-silent, /v1/sign/finalize) ───────────
 
@@ -262,9 +252,15 @@ function withPerRequestPolicyCtx(factory: SignHandlerFactory): express.RequestHa
     const user = (req as express.Request & {
       user?: { userId?: string; companyId?: string };
     }).user;
+    // requireExtensionAuth always sets req.user; refuse rather than invent
+    // an identity if that ever changes.
+    if (!user?.userId || !user.companyId) {
+      res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "Missing authenticated user" } });
+      return;
+    }
     const ctx = makeFirestorePolicyContext(getFirestore(), {
-      userId:    user?.userId    ?? "dev-user",
-      companyId: user?.companyId ?? "dev-company",
+      userId:    user.userId,
+      companyId: user.companyId,
     });
     try {
       await factory(ctx)(req, res);
@@ -294,16 +290,16 @@ function onboardingRouter(): express.Router {
 publicApp.use(
   "/v1/onboard",
   corsMiddleware,
-  stubAuthMiddleware,
+  onboardingAuth,
   (req, res, next) => onboardingRouter()(req, res, next),
 );
 
 // ─── PFL-025: Bilateral routes (/v1/bilateral/*) ─────────────────────────────
 //
 // sign-as-counterparty is auth'd by the JWS token in the request header
-// rather than a Bearer token — stubAuthMiddleware is a pass-through so it
-// won't block it. X-ProofLine-Bilateral-Token is added to the CORS
-// allow-headers above.
+// rather than a Bearer token, so bilateralAuth is optional at the mount
+// and the router enforces a company user on the drafter routes.
+// X-ProofLine-Bilateral-Token is added to the CORS allow-headers above.
 
 let cachedBilateralRouter: express.Router | null = null;
 function bilateralRouter(): express.Router {
@@ -324,7 +320,7 @@ function bilateralRouter(): express.Router {
 publicApp.use(
   "/v1/bilateral",
   corsMiddleware,
-  stubAuthMiddleware,
+  bilateralAuth,
   (req, res, next) => bilateralRouter()(req, res, next),
 );
 
@@ -360,8 +356,7 @@ publicApp.options("/v1/extension/auth", corsMiddleware);
 // ─── PFL-069: WebAuthn credential registration ───────────────────────────────
 //
 // Authenticated via the Bearer JWS issued by /v1/extension/auth — the
-// handler decodes it locally (HS256, PROOFLINE_AUTH_JWT_SECRET) rather than going
-// through stubAuthMiddleware, which lies and always returns the dev user.
+// handler decodes it locally (HS256, PROOFLINE_AUTH_JWT_SECRET).
 
 let cachedRegisterCredHandler:
   | ((req: express.Request, res: express.Response) => Promise<void>)

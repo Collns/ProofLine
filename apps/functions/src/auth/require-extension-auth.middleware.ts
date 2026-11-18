@@ -13,12 +13,8 @@
  *              userId, companyId, extInstallId, iat, exp }
  *   sig:     HMAC-SHA256(header.payload, PROOFLINE_AUTH_JWT_SECRET)
  *
- * Why a new middleware lives here (not just upgrading stubAuthMiddleware
- * in index.ts): /v1/onboard and /v1/bilateral still rely on the pass-
- * through stub today (bilateral does its own auth via the X-ProofLine-
- * Bilateral-Token header; onboarding will get real auth in a separate
- * ticket). Sign routes are the only place that needs the real user UID
- * threaded through to PolicyContext.getUser.
+ * Scope: the signing routes. /v1/onboard and /v1/bilateral use the
+ * Firebase ID-token middleware (firebase-auth.middleware.ts, PFL-166).
  *
  * HACKATHON CAVEAT: the HMAC secret is process.env.PROOFLINE_AUTH_JWT_SECRET
  * with a hardcoded dev fallback. Same secret as the issuer; same single-

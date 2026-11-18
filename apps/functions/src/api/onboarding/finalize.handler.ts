@@ -130,12 +130,9 @@ export function makeFinalizeHandler(deps: {
       res.status(404).json(ERR.notFound(`Company ${companyId} not found`));
       return;
     }
-    // PFL-105: the company doc's ownerUserId is the authoritative owner
-    // (recorded at /start from the real Firebase UID). req.user.userId is
-    // the stub "dev-user" until the admin app gets real auth, so the
-    // ownership check is only meaningful — and only enforced — when NOT in
-    // demo mode. The real owner UID drives the credential + user-doc seed
-    // below regardless of mode.
+    // The company doc's ownerUserId is the authoritative owner (recorded at
+    // /start from the caller's verified Firebase UID). demoMode still skips
+    // this check; it is removed in PFL-167.
     const ownerUserId = company.ownerUserId;
     if (!demoMode && ownerUserId !== userId) {
       res.status(403).json(ERR.forbidden());

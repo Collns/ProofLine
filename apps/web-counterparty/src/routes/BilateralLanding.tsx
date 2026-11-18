@@ -26,8 +26,6 @@ export function BilateralLanding() {
   const { docId = '' }            = useParams<{ docId: string }>();
   const [searchParams]            = useSearchParams();
   const token                     = searchParams.get('t') ?? '';
-  const counterpartyCompanyId     = searchParams.get('cid') ?? '';
-  const counterpartyUserId        = searchParams.get('uid') ?? '';
 
   const [phase, setPhase]         = useState<Phase>('loading');
   const [doc, setDoc]             = useState<DocSummary | null>(null);
@@ -115,9 +113,9 @@ export function BilateralLanding() {
         },
         body: JSON.stringify({
           docId,
-          sig:       JSON.stringify(assertion),
-          companyId: counterpartyCompanyId,
-          userId:    counterpartyUserId,
+          // The server derives the counterparty company from the signed
+          // link token; no identity is sent from the client (PFL-166).
+          sig: JSON.stringify(assertion),
         }),
       });
 
