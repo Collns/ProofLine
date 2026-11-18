@@ -164,4 +164,4 @@ export function makeRequireExtensionAuth(
 }
 
 /** Default middleware instance — wire-and-forget for index.ts. */
-export const requireExtensionAuth = makeRequireExtensionAuth();
+export const requireExtensionAuth: express.RequestHandler = makeRequireExtensionAuth();

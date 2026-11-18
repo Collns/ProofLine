@@ -224,4 +224,4 @@ export function makeAdminAuth(deps: AdminAuthDeps = {}): express.RequestHandler 
 }
 
 /** Convenience default — used by index.ts when wiring routes. */
-export const adminAuthMiddleware = makeAdminAuth();
+export const adminAuthMiddleware: express.RequestHandler = makeAdminAuth();
