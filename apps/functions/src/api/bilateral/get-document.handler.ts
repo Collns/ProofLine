@@ -22,8 +22,9 @@ export function makeGetDocumentHandler(deps: BilateralRouterDeps) {
       return;
     }
 
-    // Allow access via Firebase auth OR a valid JWS deep-link token.
-    const user = (req as any).user as { userId: string; companyId: string } | undefined;
+    // Allow access via Firebase auth (caller's company must be a party to
+    // the document) OR a valid JWS deep-link token scoped to this docId.
+    const user = (req as any).user as { userId: string; companyId?: string } | undefined;
     const token = req.headers["x-proofline-bilateral-token"] as string | undefined;
 
     if (!user && !token) {
@@ -31,7 +32,19 @@ export function makeGetDocumentHandler(deps: BilateralRouterDeps) {
       return;
     }
 
-    if (!user && token) {
+    if (user) {
+      const docResult = await deps.bilateralService.getDocument(docId);
+      if (!docResult.ok) {
+        res.status(404).json(ERR.notFound(docResult.detail));
+        return;
+      }
+      const { drafterCompanyId, counterpartyCompanyId } = docResult.value.payload;
+      if (!user.companyId
+          || (user.companyId !== drafterCompanyId && user.companyId !== counterpartyCompanyId)) {
+        res.status(403).json(ERR.forbidden("Caller's company is not a party to this document"));
+        return;
+      }
+    } else if (token) {
       const tokenResult = await verifyCounterpartyJwsToken(token);
       if (!tokenResult.ok || tokenResult.docId !== docId) {
         res.status(401).json(ERR.unauthorized("Invalid or mismatched token"));

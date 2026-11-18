@@ -23,16 +23,32 @@ import { makeSignAsDrafterHandler }      from "./sign-as-drafter.handler.js";
 import { makeSignAsCounterpartyHandler } from "./sign-as-counterparty.handler.js";
 import { makeGetDocumentHandler }        from "./get-document.handler.js";
 import { makeRevokeHandler }             from "./revoke.handler.js";
-import type { BilateralRouterDeps }      from "./types.js";
+import { ERR, type BilateralRouterDeps } from "./types.js";
+
+function requireCompanyUser(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+): void {
+  const user = (req as express.Request & { user?: { userId?: string; companyId?: string } }).user;
+  if (!user?.userId || !user.companyId) {
+    res.status(401).json(ERR.unauthorized("Sign in with a company account to use this endpoint"));
+    return;
+  }
+  next();
+}
 
 export function makeBilateralRouter(deps: BilateralRouterDeps): express.Router {
   const router = express.Router();
 
-  router.post("/draft",                 makeDraftHandler(deps));
-  router.post("/sign-as-drafter",       makeSignAsDrafterHandler(deps));
+  // Drafter routes need a verified company user (set by the Firebase auth
+  // middleware mounted in index.ts). Counterparty routes authenticate with
+  // the signed deep-link token instead.
+  router.post("/draft",                 requireCompanyUser, makeDraftHandler(deps));
+  router.post("/sign-as-drafter",       requireCompanyUser, makeSignAsDrafterHandler(deps));
   router.post("/sign-as-counterparty",  makeSignAsCounterpartyHandler(deps));
   router.get( "/:id",                   makeGetDocumentHandler(deps));
-  router.post("/:id/revoke",            makeRevokeHandler(deps));
+  router.post("/:id/revoke",            requireCompanyUser, makeRevokeHandler(deps));
 
   return router;
 }

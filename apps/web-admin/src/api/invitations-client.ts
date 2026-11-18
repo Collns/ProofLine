@@ -62,7 +62,7 @@ async function authHeader(): Promise<Record<string, string>> {
   if (!token && typeof window !== 'undefined') {
     token = window.localStorage.getItem('firebase-id-token');
   }
-  return { Authorization: `Bearer ${token ?? 'DEV_PLACEHOLDER_TOKEN'}` };
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 // ── HTTP helpers ─────────────────────────────────────────────────────────────

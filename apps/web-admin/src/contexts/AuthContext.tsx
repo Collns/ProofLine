@@ -21,6 +21,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { getFirebaseAuth, getDb } from '../lib/firebase';
 
 const ID_TOKEN_KEY = 'firebase-id-token';
+// Legacy key from the old ?uid= owner bridge; only cleared on sign-out now.
 const OWNER_UID_KEY = 'proofline-owner-uid';
 const COMPANY_ID_KEY = 'proofline-company-id';
 const EMAIL_FOR_SIGNIN_KEY = 'proofline-email-for-signin';
@@ -63,12 +64,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Cache the ID token + uid so the API clients (and the onboarding
-      // owner-uid resolver) can read them even outside React.
+      // Cache the ID token so the API clients can read it outside React.
       try {
         const token = await u.getIdToken();
         window.localStorage.setItem(ID_TOKEN_KEY, token);
-        window.localStorage.setItem(OWNER_UID_KEY, u.uid);
       } catch { /* ignore token cache failure */ }
 
       // Resolve companyId from users/{uid}. Missing doc → new user who

@@ -42,6 +42,8 @@ export interface BilateralService {
   signAsCounterparty(docId: string, actor: ActorRef, sig: string): Promise<Result<BilateralDocument>>;
   revoke(docId: string, by: ActorRef): Promise<Result<void>>;
   getStatus(docId: string): Promise<Result<BilateralStatus>>;
+  /** Full document, for party-membership checks at the API edge. */
+  getDocument(docId: string): Promise<Result<BilateralDocument>>;
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -193,6 +195,14 @@ export function makeBilateralService(deps: BilateralServiceDeps): BilateralServi
       const doc = await store.get(docId);
       if (!doc) return fail('DOC_NOT_FOUND', `Document ${docId} not found`);
       return { ok: true, value: deriveStatus(doc, now()) };
+    },
+
+    // ── getDocument ───────────────────────────────────────────────────────────
+
+    async getDocument(docId: string): Promise<Result<BilateralDocument>> {
+      const doc = await store.get(docId);
+      if (!doc) return fail('DOC_NOT_FOUND', `Document ${docId} not found`);
+      return { ok: true, value: doc };
     },
   };
 }

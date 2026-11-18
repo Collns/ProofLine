@@ -57,8 +57,9 @@ export function makeSignAsDrafterHandler(deps: BilateralRouterDeps) {
     const signLink = await buildCounterpartyJwsLink({
       baseUrl:          deps.counterpartyPortalBaseUrl,
       docId,
-      drafterCompanyId: companyId,
-      expiresAt:        doc.payload.expiresAt,
+      drafterCompanyId:      companyId,
+      counterpartyCompanyId: doc.payload.counterpartyCompanyId,
+      expiresAt:             doc.payload.expiresAt,
     });
 
     await deps.email.sendBilateralRequest(

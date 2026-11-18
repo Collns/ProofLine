@@ -6,7 +6,9 @@
  *
  * Counterparty signs the document → transitions to BILATERAL_SIGNED.
  * Auth: JWS token from the deep-link (validated via X-ProofLine-Bilateral-Token header).
- * No Firebase Auth required — the signed JWS is the auth.
+ * The counterparty company comes from the token's signed `cp` claim and the
+ * user id from a verified Firebase ID token when one is present (PFL-166).
+ * Any companyId / userId in the request body is ignored.
  */
 
 import * as express from "express";
@@ -17,8 +19,6 @@ import { verifyCounterpartyJwsToken } from "./jws.helpers.js";
 const SignAsCounterpartySchema = z.object({
   docId:     z.string().min(1),
   sig:       z.string().min(1),     // base64url WebAuthn assertion signature
-  companyId: z.string().min(1),     // counterparty's companyId (self-declared, verified by state machine)
-  userId:    z.string().min(1),     // counterparty's userId
 });
 
 export function makeSignAsCounterpartyHandler(deps: BilateralRouterDeps) {
@@ -45,7 +45,7 @@ export function makeSignAsCounterpartyHandler(deps: BilateralRouterDeps) {
       res.status(400).json(ERR.badRequest(parsed.error.message));
       return;
     }
-    const { docId, sig, companyId, userId } = parsed.data;
+    const { docId, sig } = parsed.data;
 
     // Token must scope to the same docId.
     if (tokenResult.docId !== docId) {
@@ -54,11 +54,13 @@ export function makeSignAsCounterpartyHandler(deps: BilateralRouterDeps) {
     }
 
     // ── 3. Sign ───────────────────────────────────────────────────────────────
-    const result = await deps.bilateralService.signAsCounterparty(
-      docId,
-      { userId, companyId },
-      sig,
-    );
+    const authedUser = (req as express.Request & { user?: { userId?: string } }).user;
+    const actor = {
+      companyId: tokenResult.counterpartyId,
+      userId:    authedUser?.userId ?? `link:${docId}`,
+    };
+
+    const result = await deps.bilateralService.signAsCounterparty(docId, actor, sig);
 
     if (!result.ok) {
       const statusMap: Record<string, number> = {
