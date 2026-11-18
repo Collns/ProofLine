@@ -377,8 +377,14 @@ describe("Onboarding E2E — happy path", () => {
         ein: "33-3333333", state: "IL", ownerEmail: "x@nokyc.com",
       });
     const cid = startRes.body.companyId;
-    // Manually advance to pending_kyc but don't set verifiedAt
+    // Manually advance to pending_kyc with every earlier gate met, but
+    // don't set officerEnrollment.verifiedAt
     (store["companies"][cid] as any).onboardingStatus      = "pending_kyc";
+    (store["companies"][cid] as any).dnsVerifiedAt         = Date.now();
+    (store["companies"][cid] as any).emailVerifiedAt       = Date.now();
+    (store["companies"][cid] as any).kybResult             = {
+      ok: true, vendorRef: "kyb_ok", flags: [], officers: [], verifiedAt: Date.now(),
+    };
     (store["companies"][cid] as any).officerEnrollment     = {
       stripeSessionId: "vs_test", stripeClientSecret: "sec", officerEmail: "x@nokyc.com",
       // verifiedAt intentionally absent
