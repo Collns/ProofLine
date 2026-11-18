@@ -530,4 +530,4 @@ Two engineers visible: `dan-od` (main author) and `Collns` (kms + crypto + kyb b
 
 ---
 
-**Audit complete.** Full data summarized above. Report written by Claude as a read-only audit; no source files modified.
+**Audit complete.** Full data summarized above. Read-only audit; no source files modified.
