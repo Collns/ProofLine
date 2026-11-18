@@ -12,6 +12,14 @@ export const BusinessLookupInput = z.object({
   ein: z.string(),
   state: z.string(),
   country: z.literal('US'),
+  // Optional address / context fields. Some vendors (e.g. Baselayer)
+  // need at least city + state for an address match; others use them to
+  // narrow a Secretary of State search.
+  street: z.string().optional(),
+  city: z.string().optional(),
+  zip: z.string().optional(),
+  website: z.string().optional(),
+  officerNames: z.array(z.string()).optional(),
 });
 export type BusinessLookupInput = z.infer<typeof BusinessLookupInput>;
 
@@ -24,6 +32,14 @@ export const BusinessVerification = z.object({
     role: z.string(),
   })),
   raw: z.unknown(),
+  /** Which provider produced this result ("stub", "baselayer", "cobalt", ...). */
+  provider: z.string().optional(),
+  /**
+   * True when the vendor has not finished (e.g. IRS outage, slow state
+   * registry). ok is false while pending; a later webhook / poll result
+   * replaces it.
+   */
+  pending: z.boolean().optional(),
 });
 export type BusinessVerification = z.infer<typeof BusinessVerification>;
 
