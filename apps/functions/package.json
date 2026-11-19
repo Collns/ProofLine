@@ -33,6 +33,7 @@
         "@proofline/canonical": "workspace:*",
         "@proofline/crypto": "workspace:*",
         "@proofline/email": "workspace:*",
+        "@proofline/invitations": "workspace:*",
         "@proofline/kyb": "workspace:*",
         "@proofline/onboarding": "workspace:*",
         "@proofline/policy": "workspace:*",
