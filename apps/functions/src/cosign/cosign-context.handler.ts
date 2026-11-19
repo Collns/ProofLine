@@ -30,9 +30,9 @@ import {
   adaptStoredEnvelope,
   resolveCosignSignerInfo,
   hasCosigner,
-  newCosignChallenge,
 } from "./cosign.helpers.js";
 import type { CosignContextResponse } from "./cosign.types.js";
+import { canonicalize } from "@proofline/canonical";
 
 // Challenges are short-lived — the user has roughly one biometric prompt
 // to use them before the next refresh.
@@ -145,7 +145,11 @@ export function makeCosignContextHandler() {
     const signer = await resolveCosignSignerInfo(envelope, firestore);
 
     // 4. Mint + persist a cosign challenge.
-    const cosignChallenge = newCosignChallenge();
+    // The challenge is the canonical payload bytes, exactly like the sender's
+    // (/v1/sign), so the approver's assertion binds to this payload and the
+    // envelope still passes @proofline/verification's challenge check.
+    // Replay is moot: the message is single-use (COSIGNED after one approval).
+    const cosignChallenge = Buffer.from(canonicalize(envelope.payload)).toString("base64url");
     const nowSec = Math.floor(Date.now() / 1000);
     await firestore.collection("cosign_challenges").doc(messageId).set({
       messageId,

@@ -65,7 +65,7 @@ export function sendBlockReason(compose: Element): string | null {
   if (state === 'signed') return null;
   if (state === 'pending') return 'ProofLine is still signing this email.';
   if (state === 'failed') return 'ProofLine signing failed, so this email is not signed.';
-  if (state === 'cosign_pending') return 'This wire is waiting for a cosigner. Send it after an approver has cosigned.';
+  if (state === 'cosign_pending') return 'This wire is waiting for a cosigner. ProofLine unblocks Send as soon as an approver cosigns.';
   if (isWire(compose)) return 'This email is marked as a wire instruction and has not been signed.';
   return null;
 }

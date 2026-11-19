@@ -231,14 +231,15 @@ export function SignStart() {
         return;
       }
 
-      // PFL-136: signed by the sender, waiting for an approver. Report it to
-      // the extension as not signed so the send stays blocked.
+      // PFL-136: signed by the sender, waiting for an approver. The
+      // extension keeps the send blocked and releases it once cosigned.
       if (finalizeResp.cosign) {
         await deliver({
-          kind: 'error',
+          kind: 'cosign_pending',
           ceremonyId: params.ceremonyId,
-          code: 'COSIGN_PENDING',
-          message: 'This wire is waiting for a cosigner. Do not send it until it has been approved.',
+          envelopeId: finalizeResp.cosign.envelopeId,
+          approverCount: finalizeResp.cosign.approverCount,
+          linkExpiresAt: finalizeResp.cosign.linkExpiresAt,
         });
         setPhase({ kind: 'cosign-pending', approverCount: finalizeResp.cosign.approverCount, emailed: finalizeResp.cosign.emailed });
         return;
@@ -338,7 +339,9 @@ export function SignStart() {
               ? `We emailed ${phase.approverCount === 1 ? 'your approver' : `${phase.approverCount} approvers`} a link to cosign this wire.`
               : 'Your signature is recorded, but the approval email could not be sent. Ask an approver to request a fresh link.'}
           </p>
-          <p className="text-sm font-medium text-gray-900">Do not send the email until the wire has been approved.</p>
+          <p className="text-sm font-medium text-gray-900">
+            Keep the email open in Gmail. ProofLine adds the approval to it and unblocks Send once an approver has cosigned.
+          </p>
           <button type="button" className="text-sm text-[#0D6EFD] underline" onClick={() => window.close()}>Close</button>
         </div>
       </div>

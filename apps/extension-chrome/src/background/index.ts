@@ -30,6 +30,7 @@ import {
   handleWindowClosed,
 } from "./popup-manager.js";
 import { openPopupCeremony } from "./popup-launcher.js";
+import { getSignStatus } from "./api-client.js";
 import {
   clearAuthToken,
   getAuthToken,
@@ -102,6 +103,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 interface ContentRouteResult {
   status?:        string;
+  bannerHtml?:    string;
+  linkExpiresAt?: number;
   signed?:        boolean;
   loggedOut?:     boolean;
   authenticated?: boolean;
@@ -191,6 +194,16 @@ async function routeContentMessage(
       return { status: "cleared" };
     }
 
+    case "COSIGN_STATUS": {
+      const envelopeId = stringOrThrow(msg["envelopeId"], "envelopeId");
+      const st = await getSignStatus(envelopeId);
+      return {
+        status: st.status,
+        ...(st.banner ? { bannerHtml: st.banner } : {}),
+        ...(st.linkExpiresAt ? { linkExpiresAt: st.linkExpiresAt } : {}),
+      };
+    }
+
     case "SIGN_BUTTON_CLICKED":
       // Stub-ack only — the real flow runs from PAYLOAD_EXTRACTED, which
       // arrives shortly after with the canonical payload bytes. Keeping
@@ -220,11 +233,12 @@ async function routeContentMessage(
         const code    = err instanceof Error ? extractErrCode(err.message) : "INTERNAL";
         const detail  = err instanceof Error ? err.message : String(err);
         if (sender.tab?.id != null) {
-          // PFL-136: the sender signed but the wire still needs a cosigner.
-          // Keep Gmail send blocked with the cosign message, not a failure.
-          void postToTab(sender.tab.id, code === "COSIGN_PENDING"
-            ? { type: "PAYLOAD_NEEDS_COSIGN", composeId, approvers: [] }
-            : { type: "SIGN_FAILED", composeId, code, message: detail });
+          void postToTab(sender.tab.id, {
+            type: "SIGN_FAILED",
+            composeId,
+            code,
+            message: detail,
+          });
         }
         console.error("[background] sign flow failed", { composeId, code, detail });
       });
@@ -306,6 +320,21 @@ async function runSignFlow(input: RunSignFlowInput): Promise<void> {
     // cached entry so the next attempt takes the fresh path.
     if (kind === "silent") await clearSession(rsh);
     throw err;
+  }
+
+  // PFL-136: the sender signed; the wire waits for a cosigner. The content
+  // script keeps Send blocked and polls COSIGN_STATUS until it is approved.
+  if (response.kind === "cosign_pending") {
+    if (input.tabId != null) {
+      await postToTab(input.tabId, {
+        type:          "PAYLOAD_NEEDS_COSIGN",
+        composeId:     input.composeId,
+        approvers:     [],
+        envelopeId:    response.envelopeId,
+        linkExpiresAt: response.linkExpiresAt,
+      });
+    }
+    return;
   }
 
   if (response.kind !== "sign_success") {

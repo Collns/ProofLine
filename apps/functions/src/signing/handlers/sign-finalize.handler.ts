@@ -380,6 +380,7 @@ export function makeSignFinalizeHandler(ctx: PolicyContext, deps: SignFinalizeDe
         banner:   "",
         cosign: {
           status:        "PENDING_COSIGN",
+          envelopeId,
           approverCount: approvers.length,
           emailed,
           linkExpiresAt: nowSec + cosignTtlSec,

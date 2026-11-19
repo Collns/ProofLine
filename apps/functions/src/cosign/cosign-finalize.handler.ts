@@ -357,12 +357,16 @@ export function makeCosignFinalizeHandler() {
     }
 
     const resp = (assertion as { response?: Record<string, unknown> }).response ?? {};
+    // Same shape as the sender's entry in `signatures` (signerId, ms
+    // timestamps), so banners and the verify bridge see both signers.
     const cosignerEntry = {
+      signerId:          credential.userId!,
       userId:            credential.userId!,
       credentialId,
       role:              "cosigner",
+      path:              "fresh",
       sig:               extractSig(assertion),
-      signedAt:          nowSec,
+      signedAt:          Date.now(),
       sessionId:         null,
       authenticatorData: String(resp["authenticatorData"] ?? ""),
       clientDataJSON:    String(resp["clientDataJSON"] ?? ""),
@@ -370,8 +374,12 @@ export function makeCosignFinalizeHandler() {
 
     await messageRef.set(
       {
-        signers:    FieldValue.arrayUnion(cosignerEntry),
-        signatures: FieldValue.arrayUnion(cosignerEntry),
+        // Append to the list the envelope already uses. Writing a separate
+        // `signers` array would hide the original signer from readers that
+        // prefer `signers` (verify bridge, adaptStoredEnvelope).
+        ...(Array.isArray(message.signers) && !Array.isArray(message.signatures)
+          ? { signers: FieldValue.arrayUnion(cosignerEntry) }
+          : { signatures: FieldValue.arrayUnion(cosignerEntry) }),
         status:     "COSIGNED",
       },
       { merge: true },

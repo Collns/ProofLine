@@ -106,6 +106,7 @@ export type SignFinalizeResponse =
        */
       cosign?: {
         status:        'PENDING_COSIGN';
+        envelopeId:    string;
         approverCount: number;
         emailed:       boolean;
         linkExpiresAt: number;

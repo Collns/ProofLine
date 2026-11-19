@@ -189,6 +189,7 @@ describe("cosign end to end (PFL-136)", () => {
     expect(fin.status).toBe(200);
     expect(fin.body.cosign).toMatchObject({ status: "PENDING_COSIGN", approverCount: 1, emailed: true });
     const envelopeId: string = fin.body.envelope.envelopeId;
+    expect(fin.body.cosign.envelopeId).toBe(envelopeId);
     const stored = col("signed_messages")[envelopeId]!;
     expect(stored).toMatchObject({ status: "PENDING_COSIGN", cosign: { approverUserIds: [APPROVER], approverEmails: ["mike@acme-title.com"] } });
     expect(Object.keys(col("anchor_queue"))).toHaveLength(0);
@@ -208,6 +209,8 @@ describe("cosign end to end (PFL-136)", () => {
     const ctxRes = await request(app).get(`/v1/cosign/${envelopeId}`).query({ token });
     expect(ctxRes.body).toMatchObject({ ok: true, payloadHash: hashOf(payload) });
     expect(ctxRes.body.payload).toEqual(payload);
+    // The cosign challenge binds to the payload (verification's challenge check).
+    expect(Buffer.from(ctxRes.body.cosignChallenge, "base64url").equals(Buffer.from(canonicalize(payload)))).toBe(true);
 
     // 4. Approver approves with their passkey.
     const cos = await request(app)
@@ -228,6 +231,9 @@ describe("cosign end to end (PFL-136)", () => {
 
     const status = await request(app).get(`/v1/sign/status/${envelopeId}`);
     expect(status.body).toMatchObject({ status: "COSIGNED", signatureCount: 2 });
+    // The two-signer banner the extension inserts before releasing the send.
+    expect(status.body.banner).toContain(envelopeId);
+    expect(pending.body.banner).toBeUndefined();
 
     // 5. The link can't be used again.
     const again = await request(app).get(`/v1/cosign/${envelopeId}`).query({ token });

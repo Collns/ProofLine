@@ -63,7 +63,7 @@ export type SignFinalizeResponse =
       banner: string;
       sessionToken?: string;
       /** PFL-136: the wire still needs a cosigner; it must not be sent yet. */
-      cosign?: { status: 'PENDING_COSIGN'; approverCount: number; emailed: boolean; linkExpiresAt: number };
+      cosign?: { status: 'PENDING_COSIGN'; envelopeId: string; approverCount: number; emailed: boolean; linkExpiresAt: number };
     }
   | { ok: false; error: PolicyErrorCode };
 

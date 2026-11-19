@@ -404,10 +404,13 @@ describe("POST /v1/cosign/:messageId/finalize", () => {
     // Cosigner appended to the envelope.
     const updated = store["signed_messages"]?.[messageId] as Record<string, unknown>;
     expect(updated["status"]).toBe("COSIGNED");
-    const signers = updated["signers"] as Array<Record<string, unknown>>;
-    expect(signers.length).toBe(1);
-    expect(signers[0]).toMatchObject({
-      role: "cosigner", userId: "user-mike", credentialId: "cosigner-cred-001",
+    // Appended to the envelope's own `signatures` list beside the sender;
+    // no separate `signers` array that would hide the sender.
+    expect(updated["signers"]).toBeUndefined();
+    const sigs = updated["signatures"] as Array<Record<string, unknown>>;
+    expect(sigs.map((s) => s["signerId"])).toEqual(["user-sarah", "user-mike"]);
+    expect(sigs[1]).toMatchObject({
+      role: "cosigner", signerId: "user-mike", userId: "user-mike", credentialId: "cosigner-cred-001",
       sig: "MEQ-cosigner-sig", authenticatorData: "auth-data", clientDataJSON: "client-data",
     });
     expect(vi.mocked(finishAssertion)).toHaveBeenLastCalledWith(expect.objectContaining({

@@ -57,6 +57,8 @@ export type CeremonyResponse =
   | { kind: "auth_success";    ceremonyId: string; authToken: string;   userId: string; companyId: string; email: string; credentialId: string }
   | { kind: "sign_success";    ceremonyId: string; envelope: SignedEnvelope; banner: string; sessionToken?: string }
   | { kind: "verify_success";  ceremonyId: string; result: VerificationResult }
+  // PFL-136: sender signed; the wire waits for a cosigner.
+  | { kind: "cosign_pending";  ceremonyId: string; envelopeId: string; approverCount: number; linkExpiresAt: number }
   | { kind: "user_cancelled";  ceremonyId: string }
   | { kind: "error";           ceremonyId: string; code: string; message: string };
 

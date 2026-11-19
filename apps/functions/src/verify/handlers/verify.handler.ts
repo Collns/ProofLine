@@ -61,7 +61,7 @@ function bridgeStoredEnvelope(raw: unknown): unknown {
   const signers = obj.signatures.map((s) => {
     const sig = s as Record<string, unknown>;
     return {
-      userId: String(sig.signerId ?? ""),
+      userId: String(sig.signerId ?? sig.userId ?? ""),
       credentialId: String(sig.credentialId ?? ""),
       role: typeof sig.role === "string" ? sig.role : "signer",
       sig: String(sig.sig ?? ""),

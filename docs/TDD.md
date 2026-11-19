@@ -161,7 +161,7 @@ Status values: **Built** (real, in the production path) · **Partial** (real but
 | Admin dashboard (Firebase Auth: users, devices, sessions, user management) | Built | PFL-120..130 |
 | Employee invitations | Built | PFL-068 |
 | Firestore security rules | Built | PFL-122 |
-| Cosign flow | Built (server + web-sign) | PFL-062/171/136: signed link tokens, verified cosigner assertion + eligibility, approval page on web-sign; extension auto-release after approval is a follow-up |
+| Cosign flow | Built (server + web-sign + extension) | PFL-062/171/136: signed link tokens, verified cosigner assertion + eligibility, approval page on web-sign, held send released with the two-signer banner after approval |
 | Bilateral API + state machine | Partial | PFL-024/025; route group on stub auth (PFL-166) |
 | Onboarding API | Partial | Stub auth (PFL-166); `demoMode` finalize bypass (PFL-167) |
 | Business KYB (Baselayer / Cobalt) | Adapter-ready (stub) | adapter-ready, running on stub pending vendor access; stub-verified companies require manual review |
@@ -758,7 +758,7 @@ extension)       popup                                                          
   │                │                 mint HS256 link JWS (exp = cosignTtlMs)           │
   │                │                 sendCosignRequest(approvers) ──────────▶│         │
   │                │◀─{cosign: PENDING_COSIGN}                               │─email──▶│
-  │◀─COSIGN_PENDING (send stays blocked, no "send unsigned")                           │
+  │◀─cosign_pending{envelopeId} (send stays blocked, no "send unsigned")               │
   │                                                                                    │
   │                                  GET /v1/cosign/:id?token  ◀───── /cosign/:id?t= ──│
   │                                  verify JWS signature, payloadHash, company        │
@@ -775,7 +775,8 @@ extension)       popup                                                          
   │                                  append second signature, status COSIGNED,         │
   │                                  queue anchor ────────────────▶│                   │
   │                                                                                    │
-  │─GET /v1/sign/status/:id ─▶ COSIGNED  (extension release: follow-up)                │
+  │─GET /v1/sign/status/:id (every 10 s, then 60 s) ─▶ COSIGNED + two-signer banner    │
+  │ extension inserts the banner, marks the compose signed → Sarah clicks Send         │
 ```
 
 Refresh (`POST /v1/cosign/:id/refresh`) re-mints the link for a correctly

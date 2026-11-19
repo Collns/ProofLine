@@ -44,7 +44,15 @@ export interface VerifyInboundMessage {
   envelopeId: string;
 }
 
+// PFL-136: content asks the background (which holds the auth token) for a
+// held wire's cosign status.
+export interface CosignStatusMessage {
+  type: 'COSIGN_STATUS';
+  envelopeId: string;
+}
+
 export type ContentToBackgroundMessage =
+  | CosignStatusMessage
   | SignButtonClickedMessage
   | PingMessage
   | PayloadExtractedMessage
@@ -63,6 +71,9 @@ export interface PayloadNeedsCosignMessage {
   type: 'PAYLOAD_NEEDS_COSIGN';
   composeId: string;
   approvers: string[];
+  /** PFL-136: envelope to watch until it is COSIGNED. */
+  envelopeId?: string;
+  linkExpiresAt?: number;
 }
 
 export interface SignFailedMessage {
@@ -124,6 +135,7 @@ export interface BackgroundError {
 export type BackgroundResponse = BackgroundAck | BackgroundError;
 
 const KNOWN_TYPES: ReadonlySet<ContentToBackgroundMessage['type']> = new Set([
+  'COSIGN_STATUS',
   'SIGN_BUTTON_CLICKED',
   'PING',
   'PAYLOAD_EXTRACTED',

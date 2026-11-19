@@ -149,6 +149,28 @@ export async function callSignFinalize(input: {
   );
 }
 
+/** PFL-136: progress of a wire waiting for a cosigner. */
+export interface SignStatus {
+  envelopeId:     string;
+  status:         "SIGNED" | "PENDING_COSIGN" | "COSIGNED";
+  signatureCount: number;
+  linkExpiresAt?: number;
+  /** Rendered two-signer banner, present once COSIGNED. */
+  banner?:        string;
+}
+
+export async function getSignStatus(envelopeId: string): Promise<SignStatus> {
+  const auth = await authHeader();
+  const response = await fetch(
+    `${CONFIG.apiOrigin}/v1/sign/status/${encodeURIComponent(envelopeId)}`,
+    { headers: { Accept: "application/json", ...auth } },
+  );
+  if (!response.ok) {
+    throw new ApiError(`HTTP_${response.status}`, response.status, `Status request failed (${response.status})`);
+  }
+  return (await response.json()) as SignStatus;
+}
+
 // ─── Internals ────────────────────────────────────────────────────────────────
 
 async function authHeader(): Promise<Record<string, string>> {

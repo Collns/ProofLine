@@ -38,6 +38,15 @@ export type CeremonyResponse =
       ceremonyId: string;
       result: unknown;
     }
+  | {
+      // PFL-136: the sender signed; the wire waits for a cosigner. The
+      // extension keeps Send blocked and polls /v1/sign/status/:envelopeId.
+      kind: 'cosign_pending';
+      ceremonyId: string;
+      envelopeId: string;
+      approverCount: number;
+      linkExpiresAt: number;
+    }
   | { kind: 'user_cancelled'; ceremonyId: string }
   | { kind: 'error'; ceremonyId: string; code: string; message: string };
 
