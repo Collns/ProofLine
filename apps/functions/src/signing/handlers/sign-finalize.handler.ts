@@ -3,6 +3,12 @@
  * @module apps/functions/src/signing
  *
  * POST /v1/sign/finalize — Final step for BOTH fresh and silent paths.
+ *
+ * PFL-136: when policy still requires a cosigner (wire over the sender's
+ * per-email limit), the envelope is recorded as PENDING_COSIGN with the
+ * approver list, a cosign link is emailed to the approvers, and no session
+ * or anchor is created yet. The approver's POST /v1/cosign/:id/finalize
+ * completes it (COSIGNED + anchor).
  */
 
 import * as express from "express";
@@ -32,10 +38,28 @@ import {
   hashPayload,
 } from "./signing.helpers.js";
 import { makeRFC7807Error } from "./http.helpers.js";
+import {
+  cosignEmailWire,
+  cosignLink,
+  DEFAULT_SIGN_APP_BASE_URL,
+  mintCosignLinkToken,
+  resolveCosignApprovers,
+} from "../../cosign/cosign-request.js";
+
+export interface SignFinalizeDeps {
+  /** Sends the cosign link to the approvers (PFL-136). Omitted → not emailed. */
+  sendCosignRequest?: (
+    to: string[],
+    wire: ReturnType<typeof cosignEmailWire>,
+    link: string,
+  ) => Promise<void>;
+  /** Where the approval page lives (web-sign). */
+  signAppBaseUrl?: string;
+}
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
-export function makeSignFinalizeHandler(ctx: PolicyContext) {
+export function makeSignFinalizeHandler(ctx: PolicyContext, deps: SignFinalizeDeps = {}) {
   return async function signFinalizeHandler(
     req: express.Request,
     res: express.Response
@@ -281,14 +305,43 @@ export function makeSignFinalizeHandler(ctx: PolicyContext) {
       signatureRecord.sessionId = parsedSessionToken.sessionId;
     }
 
+    // PFL-136: policy (re-run above) decides whether a cosigner is still needed.
+    const cosignPending = policyResult.value.decision === "COSIGN_REQUIRED";
+    const nowSec = Math.floor(now / 1000);
+    const approvers = cosignPending ? await resolveCosignApprovers(companyId, userId) : [];
+    if (cosignPending && approvers.length === 0) {
+      res.status(422).json(
+        makeRFC7807Error(
+          "https://proofline.app/errors/NO_ELIGIBLE_COSIGNER",
+          "NO_ELIGIBLE_COSIGNER",
+          422,
+          "This wire needs a cosigner, but no other active owner or manager can approve it.",
+        ),
+      );
+      return;
+    }
+    const cosignTtlSec = cosignPending
+      ? Math.max(60, Math.floor((await ctx.getCompanyPolicy(companyId)).cosignTtlMs / 1000))
+      : 0;
+
     const envelope: EmailSignedEnvelope = {
       envelopeId,
       payload:     storedPayload,
       payloadHash: body.payloadHash,
       signatures:  [signatureRecord],
-      status:      "SIGNED",
+      status:      cosignPending ? "PENDING_COSIGN" : "SIGNED",
       createdAt:   now,
       ...(pendingChallenge.screening ? { screening: pendingChallenge.screening } : {}),
+      ...(cosignPending
+        ? {
+            cosign: {
+              approverUserIds: approvers.map((a) => a.userId),
+              approverEmails:  approvers.map((a) => a.email),
+              requestedAt:     nowSec,
+              linkExpiresAt:   nowSec + cosignTtlSec,
+            },
+          }
+        : {}),
     };
 
     await recordSignedEnvelope(envelope);
@@ -296,6 +349,45 @@ export function makeSignFinalizeHandler(ctx: PolicyContext) {
     // PFL-085: bump devices[].lastUsedAt on the credential that just
     // signed. Best-effort — failure here doesn't roll back the signature.
     await bumpDeviceLastUsedAt(userId, pendingChallenge.credentialId, now);
+
+    // ── 7b. Cosign request (PFL-136) ──────────────────────────────────────────
+    // The link goes only to the approvers, never the wire's recipients, and is
+    // never logged. No session or anchor until the approver signs.
+
+    if (cosignPending) {
+      const { token } = mintCosignLinkToken({
+        companyId, messageId: envelopeId, payloadHash: body.payloadHash, ttlSec: cosignTtlSec, nowSec,
+      });
+      let emailed = false;
+      if (deps.sendCosignRequest) {
+        try {
+          await deps.sendCosignRequest(
+            approvers.map((a) => a.email),
+            cosignEmailWire(storedPayload),
+            cosignLink(deps.signAppBaseUrl ?? DEFAULT_SIGN_APP_BASE_URL, envelopeId, token),
+          );
+          emailed = true;
+        } catch (err) {
+          console.error(`[sign-finalize] cosign email failed for ${envelopeId}`, err instanceof Error ? err.message : err);
+        }
+      } else {
+        console.warn(`[sign-finalize] no cosign email sender configured; request for ${envelopeId} not emailed`);
+      }
+
+      res.status(200).json({
+        ok:       true,
+        envelope,
+        banner:   "",
+        cosign: {
+          status:        "PENDING_COSIGN",
+          envelopeId,
+          approverCount: approvers.length,
+          emailed,
+          linkExpiresAt: nowSec + cosignTtlSec,
+        },
+      });
+      return;
+    }
 
     // ── 8. Session management ─────────────────────────────────────────────────
 

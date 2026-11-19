@@ -9,7 +9,10 @@
  *   2. Run validatePolicy() FULL pipeline (F-SIG-11).
  *   3. Wire instructions only: advisory memo screening (PFL-028). The
  *      result rides along as a warning and never changes the decision.
- *      If COSIGN_REQUIRED → return that decision (no challenge).
+ *      If COSIGN_REQUIRED → the sender still signs first: the challenge is
+ *      issued as usual, flagged cosignRequired, and the response names the
+ *      approvers (PFL-136). Finalize then records PENDING_COSIGN and emails
+ *      the approvers. No eligible approver → 422 NO_ELIGIBLE_COSIGNER.
  *   4. Build a WebAuthn challenge (sha256 of canonical payload bytes).
  *   5. Store a pending-challenge record in Firestore (nonce, payloadHash,
  *      expiry = 90 s) for finalize to verify against.
@@ -40,9 +43,9 @@ import {
 import {
   buildCanonicalBytes,
   hashPayload,
-  resolveEligibleCosigners,
   storePendingChallenge,
 } from "./signing.helpers.js";
+import { resolveCosignApprovers } from "../../cosign/cosign-request.js";
 import { makeRFC7807Error } from "./http.helpers.js";
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
@@ -153,20 +156,25 @@ export function makeSignHandler(ctx: PolicyContext, deps: SignHandlerDeps = {}) 
 
     const screening = await screenWire(body.payload, deps.screener);
 
-    // ── 4. COSIGN_REQUIRED shortcircuit ───────────────────────────────────────
-    // Policy approved but requiring cosigners → no challenge issued yet.
-    // Client will gather cosign signatures, then re-call /v1/sign.
+    // ── 4. COSIGN_REQUIRED (PFL-136) ──────────────────────────────────────────
+    // The sender signs first; approvers are emailed after finalize. Refuse
+    // up front when nobody else could approve.
 
-    if (policyResult.value.decision === "COSIGN_REQUIRED") {
-      const approvers = await resolveEligibleCosigners(companyId, ctx);
-      const response: SignResponse = {
-        ok: true,
-        policyDecision: "COSIGN_REQUIRED",
-        approvers,
-        ...(screening ? { screening } : {}),
-      };
-      res.status(200).json(response);
-      return;
+    const cosignRequired = policyResult.value.decision === "COSIGN_REQUIRED";
+    let approverIds: string[] = [];
+    if (cosignRequired) {
+      approverIds = (await resolveCosignApprovers(companyId, userId)).map((a) => a.userId);
+      if (approverIds.length === 0) {
+        res.status(422).json(
+          makeRFC7807Error(
+            "https://proofline.app/errors/NO_ELIGIBLE_COSIGNER",
+            "NO_ELIGIBLE_COSIGNER",
+            422,
+            "This wire needs a cosigner, but no other active owner or manager can approve it."
+          )
+        );
+        return;
+      }
     }
 
     // ── 5. Build WebAuthn challenge ───────────────────────────────────────────
@@ -199,6 +207,7 @@ export function makeSignHandler(ctx: PolicyContext, deps: SignHandlerDeps = {}) 
       path: "fresh",
       expiresAt: ctx.now() + 90_000,
       ...(screening ? { screening } : {}),
+      ...(cosignRequired ? { cosignRequired: true } : {}),
     });
 
     // ── 7. Return challenge ───────────────────────────────────────────────────
@@ -209,12 +218,20 @@ export function makeSignHandler(ctx: PolicyContext, deps: SignHandlerDeps = {}) 
     // we duplicate into the body for the popup client. /v1/sign/finalize
     // still consumes it from the X-ProofLine-Challenge-Id REQUEST header.
 
-    const response: SignResponse = {
-      ok: true,
-      challenge: { ...challenge },
-      policyDecision: "APPROVED",
-      ...(screening ? { screening } : {}),
-    };
+    const response: SignResponse = cosignRequired
+      ? {
+          ok: true,
+          challenge: { ...challenge },
+          policyDecision: "COSIGN_REQUIRED",
+          approvers: approverIds,
+          ...(screening ? { screening } : {}),
+        }
+      : {
+          ok: true,
+          challenge: { ...challenge },
+          policyDecision: "APPROVED",
+          ...(screening ? { screening } : {}),
+        };
 
     res.setHeader("X-ProofLine-Challenge-Id", challengeId);
     res.status(200).json({ ...response, challengeId });

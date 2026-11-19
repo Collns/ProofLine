@@ -65,7 +65,7 @@ export function sendBlockReason(compose: Element): string | null {
   if (state === 'signed') return null;
   if (state === 'pending') return 'ProofLine is still signing this email.';
   if (state === 'failed') return 'ProofLine signing failed, so this email is not signed.';
-  if (state === 'cosign_pending') return 'This wire needs a cosigner before it can be sent.';
+  if (state === 'cosign_pending') return 'This wire is waiting for a cosigner. ProofLine unblocks Send as soon as an approver cosigns.';
   if (isWire(compose)) return 'This email is marked as a wire instruction and has not been signed.';
   return null;
 }
@@ -119,9 +119,11 @@ function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps): v
     alert.appendChild(retry);
   }
 
-  // Always offered (also while pending) so a lost sign result can never
-  // trap the user; it is an explicit, logged choice.
-  {
+  // Offered (also while pending) so a lost sign result can never trap the
+  // user; it is an explicit, logged choice. Not offered while a wire waits
+  // for its cosigner: that state is known, and sending would skip the
+  // approval (PFL-136).
+  if (getSignState(compose) !== 'cosign_pending') {
     const unsigned = document.createElement('button');
     unsigned.type = 'button';
     unsigned.textContent = 'Send unsigned';

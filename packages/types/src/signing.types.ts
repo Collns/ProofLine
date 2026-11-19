@@ -68,7 +68,9 @@ export interface SigningScreening {
 
 export type SignResponse =
   | { ok: true; challenge: WebAuthnChallenge; policyDecision: 'APPROVED'; screening?: SigningScreening }
-  | { ok: true; policyDecision: 'COSIGN_REQUIRED'; approvers: string[]; screening?: SigningScreening }
+  // PFL-136: the sender signs first, so COSIGN_REQUIRED also carries the
+  // sender's challenge; approvers are emailed after finalize.
+  | { ok: true; challenge: WebAuthnChallenge; policyDecision: 'COSIGN_REQUIRED'; approvers: string[]; screening?: SigningScreening }
   | { ok: false; error: PolicyErrorCode };
 
 export const SignSilentRequestSchema = z.object({
@@ -98,6 +100,17 @@ export type SignFinalizeResponse =
       envelope: SignedEnvelope;
       banner: string;
       sessionToken?: string;
+      /**
+       * PFL-136: present when the wire still needs a cosigner. The message
+       * must not be sent until the envelope reaches COSIGNED.
+       */
+      cosign?: {
+        status:        'PENDING_COSIGN';
+        envelopeId:    string;
+        approverCount: number;
+        emailed:       boolean;
+        linkExpiresAt: number;
+      };
     }
   | { ok: false; error: PolicyErrorCode };
 

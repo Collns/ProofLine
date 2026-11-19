@@ -6,6 +6,7 @@ import { injectBannerIntoCompose } from './inject-banner.js';
 import { isBackgroundToContentMessage } from '../shared/types.js';
 import { readComposeId } from './shared.js';
 import { installSendGuard, setSignState } from './send-guard.js';
+import { watchCosign, COSIGN_ENVELOPE_ATTR, type CosignStatusReply } from './cosign-release.js';
 
 // Content-script entry. Runs once per Gmail tab. We use a single
 // MutationObserver on document.body — cheaper than polling and catches
@@ -62,6 +63,27 @@ function findComposeByComposeId(composeId: string): Element | null {
   return composes.length === 1 ? composes[0]! : null;
 }
 
+const cosignWatchDeps = {
+  checkStatus: (envelopeId: string) =>
+    new Promise<CosignStatusReply | null>((resolve) => {
+      chrome.runtime.sendMessage({ type: 'COSIGN_STATUS', envelopeId }, (response) => {
+        if (chrome.runtime.lastError || !response?.ok) {
+          resolve(null);
+          return;
+        }
+        resolve({ status: response.status, bannerHtml: response.bannerHtml });
+      });
+    }),
+  injectBanner: (compose: Element, html: string) => injectBannerIntoCompose(compose, html),
+  markSigned: (compose: Element) => {
+    setSignState(compose, 'signed');
+    log('content', 'cosign approved; send released');
+  },
+  isAttached: (compose: Element) => compose.isConnected,
+  schedule: (fn: () => void, ms: number) => setTimeout(fn, ms),
+  now: () => Date.now(),
+};
+
 function listenForBackgroundMessages(): void {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!isBackgroundToContentMessage(message)) {
@@ -74,6 +96,7 @@ function listenForBackgroundMessages(): void {
         sendResponse({ ok: false, reason: 'COMPOSE_NOT_FOUND' });
         return false;
       }
+      compose.removeAttribute(COSIGN_ENVELOPE_ATTR);
       const result = injectBannerIntoCompose(compose, message.bannerHtml);
       log('content', 'banner injected', result);
       // PFL-096: only a message that carries the banner counts as signed.
@@ -82,6 +105,8 @@ function listenForBackgroundMessages(): void {
       return false;
     }
     if (message.type === 'SIGN_FAILED') {
+      // A new attempt on this compose failed; stop watching any earlier envelope.
+      findComposeByComposeId(message.composeId)?.removeAttribute(COSIGN_ENVELOPE_ATTR);
       warn('content', 'sign failed', message.code, message.message);
       const compose = findComposeByComposeId(message.composeId);
       if (compose) setSignState(compose, 'failed');
@@ -91,7 +116,11 @@ function listenForBackgroundMessages(): void {
     if (message.type === 'PAYLOAD_NEEDS_COSIGN') {
       log('content', 'cosign required', message.approvers);
       const compose = findComposeByComposeId(message.composeId);
-      if (compose) setSignState(compose, 'cosign_pending');
+      if (compose) {
+        setSignState(compose, 'cosign_pending');
+        // PFL-136: release the send automatically once a cosigner approves.
+        if (message.envelopeId) watchCosign(compose, message.envelopeId, cosignWatchDeps);
+      }
       sendResponse({ ok: true });
       return false;
     }

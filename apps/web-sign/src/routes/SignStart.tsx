@@ -41,8 +41,9 @@ type Phase =
   | { kind: 'loading' }
   | { kind: 'tamper'; message: string }
   | { kind: 'opener-error'; reason: string }
-  | { kind: 'ready'; payload: EmailPayload; payloadHash: string; serverChallenge: string; challengeId: string }
-  | { kind: 'signing'; payload: EmailPayload; payloadHash: string; serverChallenge: string; challengeId: string }
+  | { kind: 'ready'; payload: EmailPayload; payloadHash: string; serverChallenge: string; challengeId: string; cosignApprovers: number }
+  | { kind: 'signing'; payload: EmailPayload; payloadHash: string; serverChallenge: string; challengeId: string; cosignApprovers: number }
+  | { kind: 'cosign-pending'; approverCount: number; emailed: boolean }
   | { kind: 'finalize-error'; code: string; detail: string }
   | { kind: 'cancelled' }
   | { kind: 'success' };
@@ -153,22 +154,16 @@ export function SignStart() {
           setPhase({ kind: 'finalize-error', code: signResp.error, detail: 'Policy denied this signing request.' });
           return;
         }
-        if (signResp.policyDecision === 'COSIGN_REQUIRED') {
-          if (cancelled) return;
-          setPhase({
-            kind: 'finalize-error',
-            code: 'COSIGN_REQUIRED',
-            detail: `This wire requires cosignature. Send a cosign request to one of: ${signResp.approvers.join(', ')}.`,
-          });
-          return;
-        }
         if (cancelled) return;
+        // PFL-136: over the sender's limit, the sender still signs first and
+        // the approvers are emailed after finalize.
         setPhase({
           kind: 'ready',
           payload,
           payloadHash: localHash,
           serverChallenge: signResp.challenge.challenge,
           challengeId: signResp.challengeId,
+          cosignApprovers: signResp.policyDecision === 'COSIGN_REQUIRED' ? signResp.approvers.length : 0,
         });
       } catch (e) {
         if (cancelled) return;
@@ -186,8 +181,8 @@ export function SignStart() {
   // ── Sign + finalize
   async function runCeremony(): Promise<void> {
     if (phase.kind !== 'ready' || !params) return;
-    const { payload, payloadHash, serverChallenge, challengeId } = phase;
-    setPhase({ kind: 'signing', payload, payloadHash, serverChallenge, challengeId });
+    const { payload, payloadHash, serverChallenge, challengeId, cosignApprovers } = phase;
+    setPhase({ kind: 'signing', payload, payloadHash, serverChallenge, challengeId, cosignApprovers });
 
     try {
       // userVerification: 'required' — the actual biometric prompt.
@@ -233,6 +228,20 @@ export function SignStart() {
           message: 'Server rejected the assertion.',
         });
         setPhase({ kind: 'finalize-error', code, detail: 'Server rejected the signature.' });
+        return;
+      }
+
+      // PFL-136: signed by the sender, waiting for an approver. The
+      // extension keeps the send blocked and releases it once cosigned.
+      if (finalizeResp.cosign) {
+        await deliver({
+          kind: 'cosign_pending',
+          ceremonyId: params.ceremonyId,
+          envelopeId: finalizeResp.cosign.envelopeId,
+          approverCount: finalizeResp.cosign.approverCount,
+          linkExpiresAt: finalizeResp.cosign.linkExpiresAt,
+        });
+        setPhase({ kind: 'cosign-pending', approverCount: finalizeResp.cosign.approverCount, emailed: finalizeResp.cosign.emailed });
         return;
       }
 
@@ -319,6 +328,25 @@ export function SignStart() {
       />
     );
   }
+  if (phase.kind === 'cosign-pending') {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="mx-auto max-w-md px-4 py-12 text-center space-y-3" role="status" aria-live="polite">
+          <ProofLineLogo size="sm" />
+          <h1 className="text-lg font-semibold text-gray-900">Sent for approval</h1>
+          <p className="text-sm text-gray-600">
+            {phase.emailed
+              ? `We emailed ${phase.approverCount === 1 ? 'your approver' : `${phase.approverCount} approvers`} a link to cosign this wire.`
+              : 'Your signature is recorded, but the approval email could not be sent. Ask an approver to request a fresh link.'}
+          </p>
+          <p className="text-sm font-medium text-gray-900">
+            Keep the email open in Gmail. ProofLine adds the approval to it and unblocks Send once an approver has cosigned.
+          </p>
+          <button type="button" className="text-sm text-[#0D6EFD] underline" onClick={() => window.close()}>Close</button>
+        </div>
+      </div>
+    );
+  }
   if (phase.kind === 'success') {
     return (
       <div className="min-h-screen bg-gray-50">
@@ -348,6 +376,12 @@ export function SignStart() {
         )}
         {(phase.kind === 'ready' || phase.kind === 'signing') && (
           <>
+            {phase.cosignApprovers > 0 && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="note">
+                This wire is above your limit. After you sign, {phase.cosignApprovers === 1 ? 'an approver' : `${phase.cosignApprovers} approvers`} will
+                be asked to cosign it, and it can't be sent until one of them approves.
+              </div>
+            )}
             <PayloadPreview payload={phase.payload} payloadHash={phase.payloadHash} />
             <BiometricButton
               onClick={() => void runCeremony()}

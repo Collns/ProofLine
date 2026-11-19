@@ -303,7 +303,7 @@ function isCeremonyResponse(value: unknown): value is CeremonyResponse {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   if (typeof v.kind !== "string" || typeof v.ceremonyId !== "string") return false;
-  return ["auth_success", "sign_success", "verify_success", "user_cancelled", "error"].includes(v.kind);
+  return ["auth_success", "sign_success", "verify_success", "cosign_pending", "user_cancelled", "error"].includes(v.kind);
 }
 
 // ─── Test helpers (only for vitest — not used in production) ─────────────────

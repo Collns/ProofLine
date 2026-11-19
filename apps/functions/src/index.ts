@@ -91,6 +91,7 @@ import { makeBaselayerWebhookHandler } from "./webhooks/baselayer.js";
 // --- PFL-060: signing + onboarding HTTP wiring
 import type { PolicyContext } from "@proofline/types";
 import { makeSignHandler }         from "./signing/handlers/sign.handler.js";
+import { makeSignStatusHandler }   from "./signing/handlers/sign-status.handler.js";
 import { makeSignSilentHandler }   from "./signing/handlers/sign-silent.handler.js";
 import { makeSignFinalizeHandler } from "./signing/handlers/sign-finalize.handler.js";
 import { makeOnboardingRouter }    from "./api/onboarding/router.js";
@@ -255,9 +256,14 @@ function anchorDeps(): RunAnchorDeps {
   return cachedAnchorDeps;
 }
 
-/** Base URL of the counterparty / cosign portal (web-counterparty). */
+/** Base URL of the counterparty portal (web-counterparty): bilateral documents. */
 function counterpartyPortalBaseUrl(): string {
   return process.env["COUNTERPARTY_PORTAL_URL"]?.trim() || "https://proofline-counterparty.web.app";
+}
+
+/** Base URL of the sign app (web-sign): cosign approval page (PFL-136). */
+function signAppBaseUrl(): string {
+  return process.env["SIGN_APP_URL"]?.trim() || "https://proofline-sign.web.app";
 }
 
 let cachedEmailProvider: EmailProvider | null = null;
@@ -385,7 +391,15 @@ function withPerRequestPolicyCtx(factory: SignHandlerFactory): express.RequestHa
 const signRouter = express.Router();
 // PFL-028: wire instructions get advisory memo screening (AI_PROVIDER).
 signRouter.post("/",         withPerRequestPolicyCtx((ctx) => makeSignHandler(ctx, { screener: memoScreener() })));
-signRouter.post("/finalize", withPerRequestPolicyCtx(makeSignFinalizeHandler));
+// PFL-136: over-limit wires are recorded PENDING_COSIGN and the approvers
+// are emailed a link to the web-sign approval page.
+signRouter.post("/finalize", withPerRequestPolicyCtx((ctx) => makeSignFinalizeHandler(ctx, {
+  signAppBaseUrl: signAppBaseUrl(),
+  sendCosignRequest: (to, wire, link) => emailProvider().sendCosignRequest(to, wire, link),
+})));
+signRouter.get("/status/:envelopeId", (req, res, next) => {
+  makeSignStatusHandler()(req, res).catch(next);
+});
 
 publicApp.use("/v1/sign",        corsMiddleware, requireExtensionAuth, signRouter);
 publicApp.use("/v1/sign-silent", corsMiddleware, requireExtensionAuth,
@@ -708,9 +722,9 @@ publicApp.use(
 
 // ─── PFL-062: Cosign routes (/v1/cosign/*) ───────────────────────────────────
 //
-// Public endpoints — the JWS in the URL (or X-ProofLine-Cosign-Token header)
-// is the auth. CORS allows proofline-counterparty.web.app, which is in the
-// shared ALLOWED_ORIGINS set above.
+// Public endpoints — the signed JWS in the URL (or X-ProofLine-Cosign-Token
+// header) is the auth. The approval page is web-sign (PFL-136), which is in
+// the shared ALLOWED_ORIGINS set above.
 
 let cachedCosignRouter: express.Router | null = null;
 function cosignRouter(): express.Router {
@@ -720,7 +734,7 @@ function cosignRouter(): express.Router {
   const email = emailProvider();
   cachedCosignRouter = makeCosignRouter({
     refresh: {
-      portalBaseUrl: counterpartyPortalBaseUrl(),
+      portalBaseUrl: signAppBaseUrl(),
       sendFreshLinkEmail: async ({ to, link, wire }) => {
         await email.sendCosignRequest(
           to,

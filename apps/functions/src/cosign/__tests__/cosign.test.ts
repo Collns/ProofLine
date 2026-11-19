@@ -159,7 +159,7 @@ function seedEnvelope(messageId: string, overrides: Record<string, unknown> = {}
     envelopeId: messageId,
     payload:    WIRE_PAYLOAD,
     payloadHash: STORED_HASH,
-    status:     "SIGNED",
+    status:     "PENDING_COSIGN",
     createdAt:  Date.now(),
     signatures: [
       {
@@ -404,10 +404,13 @@ describe("POST /v1/cosign/:messageId/finalize", () => {
     // Cosigner appended to the envelope.
     const updated = store["signed_messages"]?.[messageId] as Record<string, unknown>;
     expect(updated["status"]).toBe("COSIGNED");
-    const signers = updated["signers"] as Array<Record<string, unknown>>;
-    expect(signers.length).toBe(1);
-    expect(signers[0]).toMatchObject({
-      role: "cosigner", userId: "user-mike", credentialId: "cosigner-cred-001",
+    // Appended to the envelope's own `signatures` list beside the sender;
+    // no separate `signers` array that would hide the sender.
+    expect(updated["signers"]).toBeUndefined();
+    const sigs = updated["signatures"] as Array<Record<string, unknown>>;
+    expect(sigs.map((s) => s["signerId"])).toEqual(["user-sarah", "user-mike"]);
+    expect(sigs[1]).toMatchObject({
+      role: "cosigner", signerId: "user-mike", userId: "user-mike", credentialId: "cosigner-cred-001",
       sig: "MEQ-cosigner-sig", authenticatorData: "auth-data", clientDataJSON: "client-data",
     });
     expect(vi.mocked(finishAssertion)).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -626,7 +629,7 @@ describe("PFL-171 cosign hardening", () => {
       .send({ challenge: "challenge-bytes-abc", assertion: COSIGNER_ASSERTION })
       .expect(401);
     expect(fin.body.code).toBe("COSIGN_LINK_INVALID");
-    expect((store["signed_messages"]!["msg-forged"] as Record<string, unknown>)["status"]).toBe("SIGNED");
+    expect((store["signed_messages"]!["msg-forged"] as Record<string, unknown>)["status"]).toBe("PENDING_COSIGN");
   });
 
   it("rejects a link whose payload hash doesn't match the message", async () => {
@@ -656,7 +659,7 @@ describe("PFL-171 cosign hardening", () => {
       .expect(401);
     warn.mockRestore();
     expect(unknown.body.code).toBe("ASSERTION_INVALID");
-    expect((store["signed_messages"]!["msg-bad-assert"] as Record<string, unknown>)["status"]).toBe("SIGNED");
+    expect((store["signed_messages"]!["msg-bad-assert"] as Record<string, unknown>)["status"]).toBe("PENDING_COSIGN");
   });
 
   it.each([

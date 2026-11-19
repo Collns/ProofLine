@@ -30,9 +30,9 @@ import {
   adaptStoredEnvelope,
   resolveCosignSignerInfo,
   hasCosigner,
-  newCosignChallenge,
 } from "./cosign.helpers.js";
 import type { CosignContextResponse } from "./cosign.types.js";
+import { canonicalize } from "@proofline/canonical";
 
 // Challenges are short-lived — the user has roughly one biometric prompt
 // to use them before the next refresh.
@@ -106,7 +106,8 @@ export function makeCosignContextHandler() {
       return;
     }
 
-    const envelope = adaptStoredEnvelope(snap.data() as Parameters<typeof adaptStoredEnvelope>[0]);
+    const rawDoc = snap.data() as Parameters<typeof adaptStoredEnvelope>[0] & { status?: string };
+    const envelope = adaptStoredEnvelope(rawDoc);
     // The link must be for this exact payload, issued for the signer's company.
     const payloadCompany = (envelope.payload as { companyId?: unknown } | null)?.companyId;
     if (
@@ -121,7 +122,7 @@ export function makeCosignContextHandler() {
       return;
     }
 
-    if (hasCosigner(envelope)) {
+    if (hasCosigner(envelope) || rawDoc.status === "COSIGNED") {
       respond(res, {
         ok:     false,
         code:   "ALREADY_COSIGNED",
@@ -130,11 +131,25 @@ export function makeCosignContextHandler() {
       return;
     }
 
+    // PFL-136: only envelopes recorded as PENDING_COSIGN can be cosigned.
+    if (rawDoc.status !== "PENDING_COSIGN") {
+      respond(res, {
+        ok:     false,
+        code:   "COSIGN_LINK_INVALID",
+        detail: "This message is not waiting for a cosigner.",
+      });
+      return;
+    }
+
     // 3. Resolve display info for the original signer.
     const signer = await resolveCosignSignerInfo(envelope, firestore);
 
     // 4. Mint + persist a cosign challenge.
-    const cosignChallenge = newCosignChallenge();
+    // The challenge is the canonical payload bytes, exactly like the sender's
+    // (/v1/sign), so the approver's assertion binds to this payload and the
+    // envelope still passes @proofline/verification's challenge check.
+    // Replay is moot: the message is single-use (COSIGNED after one approval).
+    const cosignChallenge = Buffer.from(canonicalize(envelope.payload)).toString("base64url");
     const nowSec = Math.floor(Date.now() / 1000);
     await firestore.collection("cosign_challenges").doc(messageId).set({
       messageId,

@@ -30,6 +30,7 @@ import {
   handleWindowClosed,
 } from "./popup-manager.js";
 import { openPopupCeremony } from "./popup-launcher.js";
+import { getSignStatus } from "./api-client.js";
 import {
   clearAuthToken,
   getAuthToken,
@@ -102,6 +103,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 interface ContentRouteResult {
   status?:        string;
+  bannerHtml?:    string;
+  linkExpiresAt?: number;
   signed?:        boolean;
   loggedOut?:     boolean;
   authenticated?: boolean;
@@ -189,6 +192,16 @@ async function routeContentMessage(
     case "CLEAR_SESSIONS": {
       await clearAllSessions();
       return { status: "cleared" };
+    }
+
+    case "COSIGN_STATUS": {
+      const envelopeId = stringOrThrow(msg["envelopeId"], "envelopeId");
+      const st = await getSignStatus(envelopeId);
+      return {
+        status: st.status,
+        ...(st.banner ? { bannerHtml: st.banner } : {}),
+        ...(st.linkExpiresAt ? { linkExpiresAt: st.linkExpiresAt } : {}),
+      };
     }
 
     case "SIGN_BUTTON_CLICKED":
@@ -307,6 +320,21 @@ async function runSignFlow(input: RunSignFlowInput): Promise<void> {
     // cached entry so the next attempt takes the fresh path.
     if (kind === "silent") await clearSession(rsh);
     throw err;
+  }
+
+  // PFL-136: the sender signed; the wire waits for a cosigner. The content
+  // script keeps Send blocked and polls COSIGN_STATUS until it is approved.
+  if (response.kind === "cosign_pending") {
+    if (input.tabId != null) {
+      await postToTab(input.tabId, {
+        type:          "PAYLOAD_NEEDS_COSIGN",
+        composeId:     input.composeId,
+        approvers:     [],
+        envelopeId:    response.envelopeId,
+        linkExpiresAt: response.linkExpiresAt,
+      });
+    }
+    return;
   }
 
   if (response.kind !== "sign_success") {

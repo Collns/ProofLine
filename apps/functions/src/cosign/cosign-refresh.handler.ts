@@ -27,6 +27,7 @@ import {
   type CosignClaims,
 } from "./cosign.helpers.js";
 import type { RefreshLinkResponse } from "./cosign.types.js";
+import { cosignLink } from "./cosign-request.js";
 
 // 30-minute refresh window matches what the counterparty UI tells users
 // they'll have after clicking "Send a fresh link".
@@ -86,7 +87,8 @@ export interface CosignRefreshHandlerDeps {
   portalBaseUrl?: string;
 }
 
-const DEFAULT_PORTAL_BASE_URL = "https://proofline-counterparty.web.app";
+// PFL-136: the approval page lives on the sign app, where approvers' passkeys are.
+const DEFAULT_PORTAL_BASE_URL = "https://proofline-sign.web.app";
 
 function wireSummaryFrom(payload: Record<string, unknown> | undefined): CosignRefreshEmail["wire"] {
   if (!payload) return null;
@@ -174,11 +176,20 @@ export function makeCosignRefreshHandler(deps: CosignRefreshHandlerDeps = {}) {
     const signers = (stored["signers"] as unknown[] | undefined)
                  ?? (stored["signatures"] as unknown[] | undefined)
                  ?? [];
-    if (signers.length > 1) {
+    if (signers.length > 1 || stored["status"] === "COSIGNED") {
       respond(res, 200, {
         ok:     false,
         code:   "ALREADY_COSIGNED",
         detail: "This wire has already been cosigned. No refresh needed.",
+      });
+      return;
+    }
+
+    if (stored["status"] !== "PENDING_COSIGN") {
+      respond(res, 400, {
+        ok:     false,
+        code:   "COSIGN_LINK_INVALID",
+        detail: "This message is not waiting for a cosigner.",
       });
       return;
     }
@@ -224,7 +235,7 @@ export function makeCosignRefreshHandler(deps: CosignRefreshHandlerDeps = {}) {
           messageId,
           freshToken,
           expiresAt:  freshClaims.exp,
-          link:       `${portalBaseUrl}/cosign/${encodeURIComponent(messageId)}?t=${encodeURIComponent(freshToken)}`,
+          link:       cosignLink(portalBaseUrl, messageId, freshToken),
           wire:       wireSummaryFrom(stored["payload"] as Record<string, unknown> | undefined),
         });
         freshLinkSent = true;
