@@ -6,34 +6,23 @@ const outdir = 'dist';
 if (existsSync(outdir)) await rm(outdir, { recursive: true });
 await mkdir(outdir, { recursive: true });
 
+// PFL-183/staging: let the build point the extension at another environment
+// without editing src/shared/config.ts. Each var falls back to production in
+// config.ts when unset, so a normal `pnpm build` is unchanged. No secrets —
+// these are public origins only.
+const define = Object.fromEntries(
+  ['EXT_API_ORIGIN', 'EXT_SIGN_ORIGIN', 'EXT_RP_ID', 'EXT_VERIFY_BASE_URL'].map((k) => [
+    `process.env.${k}`,
+    JSON.stringify(process.env[k] ?? ''),
+  ]),
+);
+
+const common = { bundle: true, target: 'chrome120', minify: false, sourcemap: 'inline', define };
+
 await Promise.all([
-  build({
-    entryPoints: ['src/content/index.ts'],
-    outfile: `${outdir}/content.js`,
-    bundle: true,
-    format: 'iife',
-    target: 'chrome120',
-    minify: false,
-    sourcemap: 'inline',
-  }),
-  build({
-    entryPoints: ['src/background/index.ts'],
-    outfile: `${outdir}/background.js`,
-    bundle: true,
-    format: 'esm',
-    target: 'chrome120',
-    minify: false,
-    sourcemap: 'inline',
-  }),
-  build({
-    entryPoints: ['src/popup/popup.ts'],
-    outfile: `${outdir}/popup.js`,
-    bundle: true,
-    format: 'iife',
-    target: 'chrome120',
-    minify: false,
-    sourcemap: 'inline',
-  }),
+  build({ ...common, entryPoints: ['src/content/index.ts'],    outfile: `${outdir}/content.js`,    format: 'iife' }),
+  build({ ...common, entryPoints: ['src/background/index.ts'], outfile: `${outdir}/background.js`, format: 'esm'  }),
+  build({ ...common, entryPoints: ['src/popup/popup.ts'],      outfile: `${outdir}/popup.js`,      format: 'iife' }),
 ]);
 
 await copyFile('manifest.json', `${outdir}/manifest.json`);
