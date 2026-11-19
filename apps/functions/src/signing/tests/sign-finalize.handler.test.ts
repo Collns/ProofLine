@@ -178,7 +178,8 @@ vi.mock("@proofline/sessions", async () => {
 
 // ─── Imports under test (after vi.mock hoisting) ─────────────────────────────
 
-import { makeSignHandler } from "../handlers/sign.handler.js";
+import { makeSignHandler, type SignHandlerDeps } from "../handlers/sign.handler.js";
+import { makeHeuristicScreener } from "@proofline/ai";
 import { makeSignFinalizeHandler } from "../handlers/sign-finalize.handler.js";
 import { makeStubPolicyContext } from "../../wiring/stubs.js";
 import type { EmailPayload } from "@proofline/types";
@@ -216,7 +217,7 @@ function attachUser(req: express.Request, _res: express.Response, next: express.
   next();
 }
 
-function buildApp() {
+function buildApp(signDeps: SignHandlerDeps = {}) {
   const app = express();
   app.use(express.json());
   app.use(attachUser);
@@ -226,7 +227,7 @@ function buildApp() {
   app.post("/v1/sign", async (req, res, next) => {
     const credentialId = typeof req.body?.credentialId === "string" ? req.body.credentialId : "stub";
     const ctx = makeStubPolicyContext({ credentialId, userId: "dev-user", companyId: "dev-company" });
-    try { await makeSignHandler(ctx)(req, res); } catch (e) { next(e); }
+    try { await makeSignHandler(ctx, signDeps)(req, res); } catch (e) { next(e); }
   });
   app.post("/v1/sign/finalize", async (req, res, next) => {
     const ctx = makeStubPolicyContext({ credentialId: CREDENTIAL_ID, userId: "dev-user", companyId: "dev-company" });
@@ -739,5 +740,79 @@ describe("POST /v1/sign → /v1/sign/finalize", () => {
     expect(typeof devices[0]?.["lastUsedAt"]).toBe("number");
     // Sanity bound: lastUsedAt should be a fresh (>= the assertion run) ms epoch.
     expect((devices[0]?.["lastUsedAt"] as number) > 1_700_000_000_000).toBe(true);
+  });
+});
+
+// ─── PFL-028: advisory wire screening ────────────────────────────────────────
+
+describe("wire memo screening (PFL-028)", () => {
+  beforeEach(() => {
+    for (const k of Object.keys(store)) delete store[k];
+  });
+
+  const wire = () => makePayload({
+    subject: "URGENT: updated wire instructions",
+    body:    "Our bank details have changed. This is confidential, do not call the office.",
+    isWireInstruction: true,
+    wirePayload: { v: 1, amount: 25_000, currency: "USD", recipientAccount: "XXXX1234", recipientRouting: "021000021", memo: "Closing 123 Elm" },
+  });
+
+  async function hashOf(payload: EmailPayload) {
+    const { canonicalize } = await import("@proofline/canonical");
+    const crypto = await import("node:crypto");
+    return crypto.createHash("sha256").update(canonicalize(payload)).digest("hex");
+  }
+
+  it("returns flags as a warning, still issues the challenge, and stores them beside the envelope", async () => {
+    const app = buildApp({ screener: makeHeuristicScreener() });
+    const payload = wire();
+    const signRes = await request(app).post("/v1/sign").send({
+      payload, recipientSetHash: RECIPIENT_SET_HASH, credentialId: CREDENTIAL_ID, freshBiometric: true,
+    });
+    expect(signRes.status).toBe(200);
+    expect(signRes.body.policyDecision).toBe("APPROVED");
+    expect(signRes.body.challenge).toBeDefined();
+    expect(signRes.body.screening).toMatchObject({ status: "ok", provider: "heuristic" });
+    expect(signRes.body.screening.flags.map((f: { type: string }) => f.type))
+      .toEqual(expect.arrayContaining(["urgency", "secrecy", "payment_change"]));
+
+    const finalizeRes = await request(app)
+      .post("/v1/sign/finalize")
+      .set("x-proofline-challenge-id", signRes.body.challengeId)
+      .send({
+        assertion: { credentialId: CREDENTIAL_ID, clientDataJSON: "c", authenticatorData: "a", signature: "s" },
+        payloadHash: await hashOf(payload), recipientSetHash: RECIPIENT_SET_HASH, path: "fresh",
+      });
+    expect(finalizeRes.status).toBe(200);
+    const stored = store["signed_messages"]?.[finalizeRes.body.envelope.envelopeId] as Record<string, unknown>;
+    expect(stored.screening).toEqual(signRes.body.screening);
+    // Screening sits beside the signed payload, never inside it.
+    expect(stored.payload).toEqual(payload);
+  });
+
+  it("reports 'unavailable' when the screener fails, without blocking", async () => {
+    const failing = { provider: "gemini", screen: async () => { throw new Error("TIMEOUT"); } };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const app = buildApp({ screener: failing });
+    const res = await request(app).post("/v1/sign").send({
+      payload: wire(), recipientSetHash: RECIPIENT_SET_HASH, credentialId: CREDENTIAL_ID, freshBiometric: true,
+    });
+    warn.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body.challenge).toBeDefined();
+    expect(res.body.screening).toEqual({ status: "unavailable", provider: "gemini", flags: [] });
+  });
+
+  it("does not screen ordinary email", async () => {
+    const screen = vi.fn();
+    const app = buildApp({ screener: { provider: "heuristic", screen } });
+    const res = await request(app).post("/v1/sign").send({
+      payload: makePayload(), recipientSetHash: RECIPIENT_SET_HASH, credentialId: CREDENTIAL_ID, freshBiometric: true,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.screening).toBeUndefined();
+    expect(screen).not.toHaveBeenCalled();
+    const pending = store["pending_challenges"]?.[res.body.challengeId] as Record<string, unknown>;
+    expect(pending).not.toHaveProperty("screening");
   });
 });

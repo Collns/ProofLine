@@ -51,9 +51,24 @@ export const SignRequestSchema = z.object({
 });
 export type SignRequest = z.infer<typeof SignRequestSchema>;
 
+/**
+ * Advisory screening of a wire instruction's text for social-engineering
+ * patterns (PFL-028). Shown to the signer as a warning; never blocks.
+ * status "unavailable" means the screener failed or timed out, which is
+ * not the same as a clean result.
+ */
+export interface SigningScreening {
+  status:   'ok' | 'unavailable';
+  provider: string;
+  score?:   number;
+  flags:    { type: string; evidence: string }[];
+  model?:   string;
+  summary?: string;
+}
+
 export type SignResponse =
-  | { ok: true; challenge: WebAuthnChallenge; policyDecision: 'APPROVED' }
-  | { ok: true; policyDecision: 'COSIGN_REQUIRED'; approvers: string[] }
+  | { ok: true; challenge: WebAuthnChallenge; policyDecision: 'APPROVED'; screening?: SigningScreening }
+  | { ok: true; policyDecision: 'COSIGN_REQUIRED'; approvers: string[]; screening?: SigningScreening }
   | { ok: false; error: PolicyErrorCode };
 
 export const SignSilentRequestSchema = z.object({

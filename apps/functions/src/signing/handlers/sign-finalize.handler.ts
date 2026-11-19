@@ -288,6 +288,7 @@ export function makeSignFinalizeHandler(ctx: PolicyContext) {
       signatures:  [signatureRecord],
       status:      "SIGNED",
       createdAt:   now,
+      ...(pendingChallenge.screening ? { screening: pendingChallenge.screening } : {}),
     };
 
     await recordSignedEnvelope(envelope);
