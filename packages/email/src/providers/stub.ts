@@ -70,7 +70,7 @@ export function makeStubEmailProvider(opts?: StubEmailOptions): StubEmailProvide
 
     async sendCosignRequest(to: string[], wire: WireSummary, signLink: string) {
       const id = genId();
-      const subject = `Co-sign request: $${(wire.amount / 100).toFixed(2)}`;
+      const subject = `Co-sign request: $${wire.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
       captured.push({
         id,
         type: 'cosign',

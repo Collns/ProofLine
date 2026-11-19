@@ -21,7 +21,7 @@ export const fixtureVerifiedWire: VerificationResponse = {
   ],
   payload: {
     v: 1,
-    amount: 25000000,
+    amount: 250000,
     currency: 'USD',
     recipientAccount: '••••7842',
     recipientRouting: '021000021',

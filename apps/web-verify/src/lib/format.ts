@@ -4,8 +4,13 @@ const USD_FORMATTER = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
 });
 
-export function formatUSD(cents: number): string {
-  return USD_FORMATTER.format(cents / 100);
+/**
+ * Formats a wire amount. WirePayload.amount is whole US dollars (the
+ * extension's "Amount (USD)" field; policy compares it against *Usd
+ * limits), so there is no cents conversion.
+ */
+export function formatWireAmount(dollars: number): string {
+  return USD_FORMATTER.format(dollars);
 }
 
 const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {

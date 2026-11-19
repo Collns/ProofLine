@@ -1,5 +1,5 @@
 import type { WirePayload, EmailPayload, BilateralPayload } from '@proofline/types';
-import { formatUSD, formatTimestamp, maskAccount } from '../lib/format';
+import { formatWireAmount, formatTimestamp, maskAccount } from '../lib/format';
 
 type Payload = WirePayload | EmailPayload | BilateralPayload;
 
@@ -33,7 +33,7 @@ function WireCard({ payload }: { payload: WirePayload }) {
         Wire Instruction
       </h2>
       <dl className="divide-y-0">
-        <Row label="Amount" value={<span className="text-lg font-bold text-[#0B1F3A]">{formatUSD(payload.amount)}</span>} />
+        <Row label="Amount" value={<span className="text-lg font-bold text-[#0B1F3A]">{formatWireAmount(payload.amount)}</span>} />
         <Row label="Currency" value={payload.currency} />
         <Row label="Recipient Account" value={maskAccount(payload.recipientAccount)} mono />
         <Row label="Routing Number" value={payload.recipientRouting} mono />

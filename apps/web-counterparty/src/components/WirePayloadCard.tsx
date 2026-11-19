@@ -1,5 +1,5 @@
 import type { WirePayload } from '@proofline/types';
-import { formatUSD, formatRouting, formatAccountMasked } from '../lib/format';
+import { formatWireAmount, formatRouting, formatAccountMasked } from '../lib/format';
 
 interface WirePayloadCardProps {
   payload: WirePayload;
@@ -19,7 +19,7 @@ export function WirePayloadCard({ payload }: WirePayloadCardProps) {
         <div>
           <p className="text-xs uppercase tracking-wider text-gray-500">Amount</p>
           <p className="mt-1 text-3xl font-semibold text-gray-900 sm:text-4xl">
-            {formatUSD(payload.amount)}
+            {formatWireAmount(payload.amount)}
           </p>
         </div>
 

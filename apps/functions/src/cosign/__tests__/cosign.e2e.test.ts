@@ -197,7 +197,7 @@ describe("cosign end to end (PFL-136)", () => {
 
     expect(emails).toHaveLength(1);
     expect(emails[0]!.to).toEqual(["mike@acme-title.com"]); // never the wire recipient
-    expect(emails[0]!.wire).toMatchObject({ amount: 2_500_000_000, recipientAccountLast4: "7842" }); // cents
+    expect(emails[0]!.wire).toMatchObject({ amount: 25_000_000, recipientAccountLast4: "7842" }); // whole US dollars
     const link = new URL(emails[0]!.link);
     expect(`${link.origin}${link.pathname}`).toBe(`https://sign.test/cosign/${envelopeId}`);
     const token = link.searchParams.get("t")!;

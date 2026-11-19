@@ -14,7 +14,7 @@ const SARAH = {
 
 const WIRE_PAYLOAD = {
   v: 1 as const,
-  amount: 40000000,                       // $400,000.00 in cents
+  amount: 400000,                         // $400,000.00 (whole dollars)
   currency: 'USD' as const,
   recipientAccount: '••••7842',
   recipientRouting: '026005092',          // valid 9-digit Scotia
