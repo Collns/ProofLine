@@ -2,9 +2,11 @@
  * @file stubs.ts
  * @module apps/functions/src/wiring
  *
- * Hackathon-grade dependency stubs for the signing + onboarding HTTP
- * routes. The HTTP routes themselves are the deliverable for PFL-060 —
- * real KMS, Middesk, Stripe Identity, Resend wiring is the next slice.
+ * Stub dependencies for local development and tests. They are selected
+ * explicitly through loadConfig() (e.g. KMS_PROVIDER=stub) by
+ * wiring/providers.ts and are never a silent fallback (PFL-169). KMS and
+ * anchor stubs are refused in production; KYB/IDV stubs are allowed but
+ * their results must go to manual review (PFL-162/177).
  *
  * Design rules for these stubs:
  *   - They MUST satisfy the interfaces declared by the handlers.
@@ -25,16 +27,7 @@ import type {
 
 import type { KYBProvider } from "../api/onboarding/kyb.handler.js";
 import type { StripeIdentityProvider } from "../api/onboarding/enroll-officer.handler.js";
-import type {
-  AnchorProvider as OnboardingAnchorProvider,
-  KmsProvider,
-  RegistryEvent,
-} from "../api/onboarding/finalize.handler.js";
-import type { OnboardingRouterDeps } from "../api/onboarding/router.js";
-import {
-  makeRealKmsProvider,
-  resolveKmsConfigFromEnv,
-} from "./gcp-kms-provider.js";
+import type { KmsProvider } from "../api/onboarding/finalize.handler.js";
 
 // ─── Stub PolicyContext ──────────────────────────────────────────────────────
 //
@@ -126,12 +119,10 @@ export function makeStubPolicyContext(input: StubPolicyContextInput): PolicyCont
 
 // ─── Stub onboarding dependencies ────────────────────────────────────────────
 //
-// Each provider returns a fixture-shaped response. None of these touch
-// external services (Middesk, Stripe, Cloud KMS, Resend) — they exist
-// purely so the /v1/onboard/* routes return JSON instead of NETWORK-
-// erroring while the real adapter wiring lands in a follow-up ticket.
+// Each provider returns a fixture-shaped response and touches no external
+// service. Selected only when the matching *_PROVIDER=stub.
 
-const stubKybProvider: KYBProvider = {
+export const stubKybProvider: KYBProvider = {
   async verifyBusiness(input) {
     return {
       ok:        true,
@@ -143,7 +134,7 @@ const stubKybProvider: KYBProvider = {
   },
 };
 
-const stubStripeIdentityProvider: StripeIdentityProvider = {
+export const stubStripeIdentityProvider: StripeIdentityProvider = {
   async verifyOfficer(input) {
     const sessionId = `stub-stripe-${Date.now().toString(36)}`;
     return {
@@ -160,7 +151,7 @@ const stubStripeIdentityProvider: StripeIdentityProvider = {
   },
 };
 
-const stubKmsProvider: KmsProvider = {
+export const stubKmsProvider: KmsProvider = {
   async createCompanyRootKey(companyId) {
     return { keyName: `projects/stub/locations/global/keyRings/stub/cryptoKeys/${companyId}/cryptoKeyVersions/1` };
   },
@@ -173,52 +164,3 @@ const stubKmsProvider: KmsProvider = {
     return "stub-spki-base64";
   },
 };
-
-const stubOnboardingAnchorProvider: OnboardingAnchorProvider = {
-  buildTree(events: RegistryEvent[]) {
-    // Trivial root derived from event count — visibly fake.
-    const root = `0x${events.length.toString(16).padStart(64, "0")}`;
-    return { root };
-  },
-  async postAnchor(root) {
-    return {
-      txHash:      root.replace(/^0x/, "0xstub-"),
-      blockNumber: 0,
-    };
-  },
-};
-
-async function stubSendVerificationCode(to: string, code: string): Promise<void> {
-  // Email isn't wired — log so the operator can still complete the OTP
-  // flow during local debugging. Do NOT log this in production once the
-  // Resend adapter ships.
-  console.log(`[stub:onboarding] verification code for ${to}: ${code}`);
-}
-
-export function makeStubOnboardingDeps(): OnboardingRouterDeps {
-  // PFL-126: prefer real Cloud KMS when the env declares it. The
-  // resolveKmsConfigFromEnv helper returns null when GOOGLE_CLOUD_PROJECT
-  // or KMS_KEYRING is absent (local dev, unit tests, anonymous emulator
-  // runs), and we fall back to the sentinel-signature stub. The other
-  // providers stay stubbed for now — they're scoped to their own tickets
-  // (KYB / Stripe / anchor wiring).
-  const kmsConfig = resolveKmsConfigFromEnv(process.env);
-  const kmsProvider = kmsConfig
-    ? (() => {
-        // eslint-disable-next-line no-console
-        console.log(
-          `[onboarding] using real Cloud KMS: project=${kmsConfig.projectId} ` +
-          `location=${kmsConfig.location} keyRing=${kmsConfig.keyRing}`,
-        );
-        return makeRealKmsProvider(kmsConfig);
-      })()
-    : stubKmsProvider;
-
-  return {
-    sendVerificationCode:    stubSendVerificationCode,
-    kybProvider:             stubKybProvider,
-    stripeIdentityProvider:  stubStripeIdentityProvider,
-    kmsProvider,
-    anchorProvider:          stubOnboardingAnchorProvider,
-  };
-}

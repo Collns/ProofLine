@@ -58,6 +58,7 @@ import { verifyRegistrationResponse } from "@simplewebauthn/server";
 
 import type { DeviceRecord } from "@proofline/types";
 import { ERR, makeRFC7807Error } from "../api/onboarding/http.helpers.js";
+import { readSecret } from "../config/secrets.js";
 import {
   REGISTRATION_CHALLENGE_PURPOSE,
   type PendingRegistrationChallenge,
@@ -74,7 +75,8 @@ interface DecodedAuthToken {
 }
 
 function getSecret(): string {
-  return (process.env["PROOFLINE_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod").trim();
+  // PFL-169: no fallback; throws when the secret is missing or too short.
+  return readSecret("PROOFLINE_AUTH_JWT_SECRET");
 }
 
 function verifyAuthBearer(bearer: string): DecodedAuthToken | null {
