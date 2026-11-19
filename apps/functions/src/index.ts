@@ -45,6 +45,9 @@ const PROOFLINE_AUTH_JWT_SECRET = defineSecret("PROOFLINE_AUTH_JWT_SECRET");
 // throws if either is missing or shorter than 32 characters.
 const BILATERAL_JWT_SECRET  = defineSecret("BILATERAL_JWT_SECRET");
 const COSIGN_REFRESH_SECRET = defineSecret("COSIGN_REFRESH_SECRET");
+// PFL-160: Resend API key for EMAIL_PROVIDER=resend. Bound as a secret so it
+// never sits in a plain env file; create a placeholder value while stub.
+const RESEND_API_KEY = defineSecret("RESEND_API_KEY");
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -229,6 +232,11 @@ function anchorDeps(): RunAnchorDeps {
   return cachedAnchorDeps;
 }
 
+/** Base URL of the counterparty / cosign portal (web-counterparty). */
+function counterpartyPortalBaseUrl(): string {
+  return process.env["COUNTERPARTY_PORTAL_URL"]?.trim() || "https://proofline-counterparty.web.app";
+}
+
 let cachedEmailProvider: EmailProvider | null = null;
 function emailProvider(): EmailProvider {
   if (cachedEmailProvider) return cachedEmailProvider;
@@ -386,9 +394,7 @@ function bilateralRouter(): express.Router {
       now:   () => Math.floor(Date.now() / 1000),
     }),
     email: emailProvider(),
-    counterpartyPortalBaseUrl:
-      process.env["COUNTERPARTY_PORTAL_URL"]
-      ?? "https://counterparty.proofline.web.app",
+    counterpartyPortalBaseUrl: counterpartyPortalBaseUrl(),
   });
   return cachedBilateralRouter;
 }
@@ -646,7 +652,26 @@ publicApp.use(
 let cachedCosignRouter: express.Router | null = null;
 function cosignRouter(): express.Router {
   if (cachedCosignRouter) return cachedCosignRouter;
-  cachedCosignRouter = makeCosignRouter();
+  // PFL-160: fresh cosign links go to the stored approvers via the
+  // configured email provider.
+  const email = emailProvider();
+  cachedCosignRouter = makeCosignRouter({
+    refresh: {
+      portalBaseUrl: counterpartyPortalBaseUrl(),
+      sendFreshLinkEmail: async ({ to, link, wire }) => {
+        await email.sendCosignRequest(
+          to,
+          {
+            amount:                Math.round((wire?.amountUsd ?? 0) * 100), // template expects cents
+            recipientAccountLast4: wire?.recipientAccountLast4 ?? "",
+            routingNumber:         wire?.routingNumber ?? "",
+            ...(wire?.memo ? { memo: wire.memo } : {}),
+          },
+          link,
+        );
+      },
+    },
+  });
   return cachedCosignRouter;
 }
 
@@ -661,7 +686,7 @@ export const api = onRequest(
     region:  "us-central1",
     cors:    false,
     memory:  "256MiB",
-    secrets: [PROOFLINE_AUTH_JWT_SECRET, BILATERAL_JWT_SECRET, COSIGN_REFRESH_SECRET],
+    secrets: [PROOFLINE_AUTH_JWT_SECRET, BILATERAL_JWT_SECRET, COSIGN_REFRESH_SECRET, RESEND_API_KEY],
   },
   publicApp,
 );
