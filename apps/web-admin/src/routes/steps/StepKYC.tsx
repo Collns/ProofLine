@@ -60,6 +60,18 @@ export function StepKYC({ state, onSetResult, onAdvance, onBack, onSkip }: Props
         officerEmail: enrollResult.officerEmail,
       });
 
+      // The server already recorded the officer as verified (synchronous
+      // identity provider): nothing to open in the browser.
+      if (enrollResult.verified) {
+        onSetResult({
+          vendorRef:    enrollResult.stripeSessionId,
+          status:       'verified',
+          officerEmail: enrollResult.officerEmail,
+        });
+        setPhase('done');
+        return;
+      }
+
       // Fixture path: skip the Stripe modal and just play a 2-second beat.
       if (FIXTURE_MODE) {
         setPhase('verifying');
@@ -91,6 +103,9 @@ export function StepKYC({ state, onSetResult, onAdvance, onBack, onSkip }: Props
       }
 
       setPhase('verifying');
+      if (!enrollResult.clientSecret) {
+        throw new Error('Identity provider returned no session to open.');
+      }
       const { error } = await stripe.verifyIdentity(enrollResult.clientSecret);
 
       if (error) {
