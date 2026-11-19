@@ -17,6 +17,7 @@ import {
   EmailPayload,
   PolicyContext,
   SessionTokenPayload,
+  SigningScreening,
   SigningSession,
   WebAuthnAssertion,
 } from "@proofline/types";
@@ -49,6 +50,12 @@ interface EmailSignedEnvelope {
   payload: EmailPayload;
   payloadHash: string;
   createdAt: number;
+  /**
+   * PFL-028: advisory wire screening captured at sign time. Stored beside
+   * the envelope, outside the signed payload, so it never affects
+   * verification.
+   */
+  screening?: SigningScreening;
 }
 
 export type { EmailSignedEnvelope };
@@ -135,6 +142,8 @@ export interface PendingChallenge {
   // Required: finalize re-runs validatePolicy and rebuilds canonical bytes,
   // both of which need the full payload. Omitting it caused PFL-sign-finalize-500.
   payload: EmailPayload;
+  /** PFL-028: screening from /v1/sign, copied onto the signed message. */
+  screening?: SigningScreening;
 }
 
 export async function storePendingChallenge(

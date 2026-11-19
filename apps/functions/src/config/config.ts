@@ -14,6 +14,8 @@
  *   KMS_PROVIDER    gcp | stub             (stub refused in production)
  *   KYB_PROVIDER    stub | baselayer | cobalt   (default stub)
  *   IDV_PROVIDER    stub | stripe               (default stub)
+ *   AI_PROVIDER     heuristic | gemini | none   (default heuristic; wire memo
+ *                   screening, advisory only — PFL-028)
  *
  * Rules:
  *   - In staging/production, EMAIL/ANCHOR/KMS must be set explicitly.
@@ -28,6 +30,7 @@
  *   - KYB_PROVIDER=baselayer needs BASELAYER_API_KEY + BASELAYER_WEBHOOK_SECRET
  *     (the webhook delivers late IRS results); KYB_PROVIDER=cobalt needs
  *     COBALT_API_KEY (PFL-162).
+ *   - AI_PROVIDER=gemini needs GEMINI_API_KEY; GEMINI_MODEL is optional.
  */
 
 export type ProoflineEnv = "production" | "staging" | "development";
@@ -37,6 +40,7 @@ export type AnchorProviderName = "base-sepolia" | "stub";
 export type KmsProviderName    = "gcp" | "stub";
 export type KybProviderName    = "stub" | "baselayer" | "cobalt";
 export type IdvProviderName    = "stub" | "stripe";
+export type AiProviderName     = "heuristic" | "gemini" | "none";
 
 export interface ProviderSelection {
   email:  EmailProviderName;
@@ -44,6 +48,7 @@ export interface ProviderSelection {
   kms:    KmsProviderName;
   kyb:    KybProviderName;
   idv:    IdvProviderName;
+  ai:     AiProviderName;
 }
 
 export interface AppConfig {
@@ -54,6 +59,7 @@ export interface AppConfig {
   kms?:    { projectId: string; location: string; keyRing: string };
   idv?:    { stripeSecretKey: string; stripeWebhookSecret: string };
   kyb?:    { baselayerApiKey?: string; baselayerWebhookSecret?: string; cobaltApiKey?: string };
+  ai?:     { geminiApiKey: string; model?: string };
 }
 
 export class ConfigError extends Error {
@@ -134,6 +140,7 @@ export function loadConfig(env: Env = process.env): AppConfig {
     kms:    pick(env, "KMS_PROVIDER",    ["gcp", "stub"] as const,           dev ? "stub" : undefined, problems),
     kyb:    pick(env, "KYB_PROVIDER",    ["stub", "baselayer", "cobalt"] as const, "stub", problems),
     idv:    pick(env, "IDV_PROVIDER",    ["stub", "stripe"] as const,        "stub", problems),
+    ai:     pick(env, "AI_PROVIDER",     ["heuristic", "gemini", "none"] as const, "heuristic", problems),
   };
 
   if (appEnv === "production") {
@@ -206,6 +213,12 @@ export function loadConfig(env: Env = process.env): AppConfig {
     config.kyb = { cobaltApiKey: val(env, "COBALT_API_KEY") ?? "" };
   }
 
+  if (providers.ai === "gemini") {
+    requireKeys(env, "AI_PROVIDER=gemini", ["GEMINI_API_KEY"], problems);
+    const model = val(env, "GEMINI_MODEL");
+    config.ai = { geminiApiKey: val(env, "GEMINI_API_KEY") ?? "", ...(model ? { model } : {}) };
+  }
+
   if (problems.length > 0) throw new ConfigError(problems);
   return config;
 }
@@ -219,5 +232,6 @@ export function describeConfig(config: AppConfig): Record<string, unknown> {
     ...(config.kms ? { kms: { projectId: config.kms.projectId, location: config.kms.location, keyRing: config.kms.keyRing } } : {}),
     ...(config.email ? { email: { fromDomain: config.email.fromDomain } } : {}),
     ...(config.anchor ? { anchor: { contractAddress: config.anchor.contractAddress } } : {}),
+    ...(config.ai?.model ? { ai: { model: config.ai.model } } : {}),
   };
 }

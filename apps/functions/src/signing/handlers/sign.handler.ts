@@ -7,7 +7,9 @@
  * Flow (TDD §5.5, PRD §7.2):
  *   1. Parse + validate request body.
  *   2. Run validatePolicy() FULL pipeline (F-SIG-11).
- *   3. If COSIGN_REQUIRED → return that decision (no challenge).
+ *   3. Wire instructions only: advisory memo screening (PFL-028). The
+ *      result rides along as a warning and never changes the decision.
+ *      If COSIGN_REQUIRED → return that decision (no challenge).
  *   4. Build a WebAuthn challenge (sha256 of canonical payload bytes).
  *   5. Store a pending-challenge record in Firestore (nonce, payloadHash,
  *      expiry = 90 s) for finalize to verify against.
@@ -25,8 +27,11 @@ import * as express from "express";
 import { v7 as uuidv7 } from "uuid";
 
 import { validatePolicy } from "@proofline/policy";
+import { screenSafely, type MemoScreener } from "@proofline/ai";
 import {
+  EmailPayload,
   PolicyContext,
+  SigningScreening,
   SignRequest,
   SignRequestSchema,
   SignResponse,
@@ -41,7 +46,42 @@ import {
 import { makeRFC7807Error } from "./http.helpers.js";
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
-export function makeSignHandler(ctx: PolicyContext) {
+export interface SignHandlerDeps {
+  /** Wire memo screener (AI_PROVIDER). Omitted → no screening. */
+  screener?: MemoScreener;
+}
+
+/** Screens a wire instruction; null for non-wire payloads or no screener. */
+export async function screenWire(
+  payload: EmailPayload,
+  screener: MemoScreener | undefined,
+): Promise<SigningScreening | null> {
+  if (!screener || !payload.isWireInstruction) return null;
+  const domainOf = (addr: string) => addr.split("@")[1]?.toLowerCase() ?? "";
+  const result = await screenSafely(
+    screener,
+    {
+      subject:          payload.subject,
+      body:             payload.body,
+      ...(payload.wirePayload?.memo ? { memo: payload.wirePayload.memo } : {}),
+      ...(payload.wirePayload ? { amountUsd: payload.wirePayload.amount } : {}),
+      senderDomain:     domainOf(payload.from),
+      recipientDomains: [...new Set(payload.to.map(domainOf).filter(Boolean))],
+    },
+    (err) => console.warn("[sign] memo screening unavailable:", err instanceof Error ? err.message : String(err)),
+  );
+  if (!result) return { status: "unavailable", provider: screener.provider, flags: [] };
+  return {
+    status:   "ok",
+    provider: result.provider,
+    score:    result.score,
+    flags:    result.flags,
+    ...(result.model ? { model: result.model } : {}),
+    ...(result.summary ? { summary: result.summary } : {}),
+  };
+}
+
+export function makeSignHandler(ctx: PolicyContext, deps: SignHandlerDeps = {}) {
   return async function signHandler(
     req: express.Request,
     res: express.Response
@@ -108,6 +148,11 @@ export function makeSignHandler(ctx: PolicyContext) {
       return;
     }
 
+    // ── 3b. Advisory wire screening (PFL-028) ─────────────────────────────────
+    // Runs only after policy passed and never changes the decision.
+
+    const screening = await screenWire(body.payload, deps.screener);
+
     // ── 4. COSIGN_REQUIRED shortcircuit ───────────────────────────────────────
     // Policy approved but requiring cosigners → no challenge issued yet.
     // Client will gather cosign signatures, then re-call /v1/sign.
@@ -118,6 +163,7 @@ export function makeSignHandler(ctx: PolicyContext) {
         ok: true,
         policyDecision: "COSIGN_REQUIRED",
         approvers,
+        ...(screening ? { screening } : {}),
       };
       res.status(200).json(response);
       return;
@@ -152,6 +198,7 @@ export function makeSignHandler(ctx: PolicyContext) {
       companyId,
       path: "fresh",
       expiresAt: ctx.now() + 90_000,
+      ...(screening ? { screening } : {}),
     });
 
     // ── 7. Return challenge ───────────────────────────────────────────────────
@@ -166,6 +213,7 @@ export function makeSignHandler(ctx: PolicyContext) {
       ok: true,
       challenge: { ...challenge },
       policyDecision: "APPROVED",
+      ...(screening ? { screening } : {}),
     };
 
     res.setHeader("X-ProofLine-Challenge-Id", challengeId);

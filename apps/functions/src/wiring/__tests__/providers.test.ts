@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 import type { AnchorProvider, Hex32 } from "@proofline/anchoring";
 
 import { loadConfig } from "../../config/config.js";
-import { makeEmailProvider, makeIdvProvider, makeKybProvider, makeKmsProvider, makeOnboardingAnchorProvider, makeOnboardingDeps } from "../providers.js";
+import { makeEmailProvider, makeIdvProvider, makeKybProvider, makeScreener, makeKmsProvider, makeOnboardingAnchorProvider, makeOnboardingDeps } from "../providers.js";
 import { makeAnchorProviderFromConfig } from "../../anchoring/service-factory.js";
 import { stubKmsProvider, stubKybProvider, stubStripeIdentityProvider } from "../stubs.js";
 
@@ -113,5 +113,14 @@ describe("makeKybProvider (PFL-162)", () => {
   it("throws rather than falling back when the key is missing", () => {
     expect(() => makeKybProvider({ providers: { kyb: "baselayer" } as never })).toThrow(/BASELAYER_API_KEY/);
     expect(() => makeKybProvider({ providers: { kyb: "cobalt" } as never })).toThrow(/COBALT_API_KEY/);
+  });
+});
+
+describe("makeScreener (PFL-028)", () => {
+  it("builds the selected screener and refuses gemini without a key", () => {
+    expect(makeScreener(loadConfig({})).provider).toBe("heuristic");
+    expect(makeScreener(loadConfig({ AI_PROVIDER: "none" })).provider).toBe("none");
+    expect(makeScreener(loadConfig({ AI_PROVIDER: "gemini", GEMINI_API_KEY: "g" })).provider).toBe("gemini");
+    expect(() => makeScreener({ providers: { ai: "gemini" } as never })).toThrow(/GEMINI_API_KEY/);
   });
 });

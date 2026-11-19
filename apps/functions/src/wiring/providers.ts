@@ -26,6 +26,7 @@ import { makeBaselayerProvider } from "@proofline/kyb/providers/baselayer.js";
 import { makeCobaltProvider } from "@proofline/kyb/providers/cobalt.js";
 
 import type { KYBProvider } from "../api/onboarding/kyb.handler.js";
+import { makeGeminiScreener, makeHeuristicScreener, makeNoopScreener, type MemoScreener } from "@proofline/ai";
 
 import type { StripeIdentityProvider } from "../api/onboarding/enroll-officer.handler.js";
 import { makeRealKmsProvider } from "./gcp-kms-provider.js";
@@ -63,6 +64,27 @@ export function makeKybProvider(config: Pick<AppConfig, "providers" | "kyb">): K
     case "cobalt":
       if (!config.kyb?.cobaltApiKey) throw new Error("KYB_PROVIDER=cobalt requires COBALT_API_KEY");
       return makeCobaltProvider({ apiKey: config.kyb.cobaltApiKey });
+  }
+}
+
+// ─── Wire memo screening (advisory) ───────────────────────────────────────────
+
+/** Signing waits at most this long for the model; screening is then "unavailable". */
+export const SCREENING_TIMEOUT_MS = 4_000;
+
+export function makeScreener(config: Pick<AppConfig, "providers" | "ai">): MemoScreener {
+  switch (config.providers.ai) {
+    case "none":
+      return makeNoopScreener();
+    case "heuristic":
+      return makeHeuristicScreener();
+    case "gemini":
+      if (!config.ai?.geminiApiKey) throw new Error("AI_PROVIDER=gemini requires GEMINI_API_KEY");
+      return makeGeminiScreener({
+        apiKey:    config.ai.geminiApiKey,
+        timeoutMs: SCREENING_TIMEOUT_MS,
+        ...(config.ai.model ? { model: config.ai.model } : {}),
+      });
   }
 }
 

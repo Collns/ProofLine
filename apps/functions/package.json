@@ -28,6 +28,7 @@
     },
     "dependencies": {
         "@google-cloud/kms": "5.5.0",
+        "@proofline/ai": "workspace:*",
         "@proofline/anchoring": "workspace:*",
         "@proofline/bilateral": "workspace:*",
         "@proofline/canonical": "workspace:*",
