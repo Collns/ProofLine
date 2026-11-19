@@ -37,14 +37,13 @@ const SELF_DOMAIN_FIXTURE = 'acme-title.com';
 
 // ── Mode detection ───────────────────────────────────────────────────────────
 
+// PFL-026: fixtures are a dev-server convenience only. Production builds
+// always call /v1/invitations, so a ?fixture= link can't show fake data.
 function isFixtureMode(): boolean {
-  if (typeof window === 'undefined') return false;
+  if (!import.meta.env.DEV || typeof window === 'undefined') return false;
   const params = new URLSearchParams(window.location.search);
   if (params.get('fixture') === 'happy-path') return true;
-  if (import.meta.env.DEV && !window.localStorage.getItem('firebase-id-token')) {
-    return true;
-  }
-  return false;
+  return !window.localStorage.getItem('firebase-id-token');
 }
 
 // ── Auth header (mirrors client.ts) ──────────────────────────────────────────

@@ -136,6 +136,10 @@ import { requireExtensionAuth } from "./auth/require-extension-auth.middleware.j
 
 // --- PFL-166: Firebase ID-token auth for onboarding + bilateral
 import { makeFirebaseAuth } from "./auth/firebase-auth.middleware.js";
+// --- PFL-026: counterparty invitations
+import { makeInvitationService } from "@proofline/invitations";
+import { makeInvitationsRouter } from "./api/invitations/router.js";
+import { makeFirestoreInvitationStore } from "./api/invitations/firestore-store.js";
 
 // --- PFL-062: cosign HTTP wiring
 import { makeCosignRouter } from "./cosign/router.js";
@@ -170,7 +174,8 @@ function corsMiddleware(
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  // DELETE: web-admin cancels a counterparty invitation (PFL-026).
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
     "Authorization, Content-Type, X-ProofLine-Challenge-Id, X-ProofLine-Bilateral-Token, X-ProofLine-Cosign-Token",
@@ -430,6 +435,38 @@ publicApp.use(
   corsMiddleware,
   bilateralAuth,
   (req, res, next) => bilateralRouter()(req, res, next),
+);
+
+// ─── PFL-026: Counterparty invitations (/v1/invitations/*) ───────────────────
+//
+// Firebase ID token with a company (makeFirebaseAuth); the router itself
+// requires owner/manager on a verified company and scopes every lookup to
+// the caller's companyId. Invite-link email delivery is PFL-132, so no
+// `deliver` is wired yet: invitations are recorded but not emailed.
+
+const invitationsAuth = makeFirebaseAuth({ requireCompany: true });
+
+let cachedInvitationsRouter: express.Router | null = null;
+function invitationsRouter(): express.Router {
+  if (cachedInvitationsRouter) return cachedInvitationsRouter;
+  const firestore = getFirestore();
+  cachedInvitationsRouter = makeInvitationsRouter({
+    service: makeInvitationService({ store: makeFirestoreInvitationStore(firestore) }),
+    async loadCompany(companyId) {
+      const snap = await firestore.collection("companies").doc(companyId).get();
+      if (!snap.exists) return null;
+      const c = snap.data() as { legalName?: string; domain?: string; status?: string };
+      return { legalName: c.legalName ?? "", domain: c.domain ?? "", ...(c.status ? { status: c.status } : {}) };
+    },
+  });
+  return cachedInvitationsRouter;
+}
+
+publicApp.use(
+  "/v1/invitations",
+  corsMiddleware,
+  invitationsAuth,
+  (req, res, next) => invitationsRouter()(req, res, next),
 );
 
 // ─── PFL-061: Extension auth (POST /v1/extension/auth) ───────────────────────
