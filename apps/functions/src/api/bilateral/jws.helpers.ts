@@ -12,12 +12,17 @@
  * The token is the auth on /sign-as-counterparty. The counterparty's
  * company identity comes from the signed `cp` claim (PFL-166), never from
  * the request body. Tokens without `cp` or `exp` are rejected.
- * Secret comes from BILATERAL_JWT_SECRET env var.
+ * Secret comes from BILATERAL_JWT_SECRET (a Functions secret, no fallback;
+ * read per call so a missing secret fails the request, PFL-169).
  */
 
 import * as crypto from "node:crypto";
 
-const SECRET = process.env["BILATERAL_JWT_SECRET"] ?? "dev-secret-change-in-prod";
+import { readSecret } from "../../config/secrets.js";
+
+function secret(): string {
+  return readSecret("BILATERAL_JWT_SECRET");
+}
 
 // ─── Build ────────────────────────────────────────────────────────────────────
 
@@ -39,7 +44,7 @@ export async function buildCounterpartyJwsLink(opts: {
 
   const sigInput = `${header}.${payload}`;
   const sig = crypto
-    .createHmac("sha256", SECRET)
+    .createHmac("sha256", secret())
     .update(sigInput)
     .digest("base64url");
 
@@ -72,7 +77,7 @@ export async function verifyCounterpartyJwsToken(
 
   const [header, payload, sig] = parts as [string, string, string];
   const expectedSig = crypto
-    .createHmac("sha256", SECRET)
+    .createHmac("sha256", secret())
     .update(`${header}.${payload}`)
     .digest("base64url");
 
