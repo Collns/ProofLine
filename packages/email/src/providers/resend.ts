@@ -22,8 +22,8 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function formatUSD(amountCents: number): string {
-  return `$${(amountCents / 100).toFixed(2)}`;
+function formatUSD(dollars: number): string {
+  return `$${dollars.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function tagsToArray(

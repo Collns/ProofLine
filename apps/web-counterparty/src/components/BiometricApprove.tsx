@@ -1,7 +1,7 @@
-import { formatUSD, formatAccountMasked } from '../lib/format';
+import { formatWireAmount, formatAccountMasked } from '../lib/format';
 
 interface BiometricApproveProps {
-  amount: number;            // cents
+  amount: number;            // whole US dollars
   recipientAccount: string;
   disabled: boolean;
   busy?: boolean;
@@ -18,7 +18,7 @@ export function BiometricApprove({
   const accountLabel = formatAccountMasked(recipientAccount);
   const label = busy
     ? 'Waiting for biometric…'
-    : `Approve ${formatUSD(amount)} to ${accountLabel} with Touch ID`;
+    : `Approve ${formatWireAmount(amount)} to ${accountLabel} with Touch ID`;
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-10 border-t border-gray-200 bg-white/95 backdrop-blur-sm sm:static sm:border-t-0 sm:bg-transparent sm:backdrop-blur-none">

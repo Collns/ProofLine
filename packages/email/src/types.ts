@@ -11,6 +11,7 @@ export const SendInput = z.object({
 export type SendInput = z.infer<typeof SendInput>;
 
 export interface WireSummary {
+  /** Whole US dollars (matches WirePayload.amount). */
   amount: number;
   recipientAccountLast4: string;
   routingNumber: string;

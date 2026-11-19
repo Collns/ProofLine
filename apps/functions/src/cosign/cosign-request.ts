@@ -68,11 +68,11 @@ export function mintCosignLinkToken(input: {
   };
 }
 
-/** Wire summary for the cosign email. Wire amounts are whole USD; the template expects cents. */
+/** Wire summary for the cosign email. Amounts are whole USD throughout. */
 export function cosignEmailWire(payload: { wirePayload?: { amount: number; recipientAccount: string; recipientRouting: string; memo?: string } }) {
   const w = payload.wirePayload;
   return {
-    amount:                Math.round((w?.amount ?? 0) * 100),
+    amount:                w?.amount ?? 0,
     recipientAccountLast4: (w?.recipientAccount ?? "").slice(-4),
     routingNumber:         w?.recipientRouting ?? "",
     ...(w?.memo ? { memo: w.memo } : {}),

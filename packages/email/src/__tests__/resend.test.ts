@@ -36,11 +36,11 @@ describe('makeResendProvider templates', () => {
   it('escapes the wire memo and fields in cosign requests', async () => {
     await provider.sendCosignRequest(
       ['approver@acme.test'],
-      { amount: 40_000_000, recipientAccountLast4: '7842', routingNumber: '026005092', memo: EVIL },
+      { amount: 400_000, recipientAccountLast4: '7842', routingNumber: '026005092', memo: EVIL },
       'https://proofline-counterparty.web.app/cosign/msg-1?t=a"b',
     );
     const { html, subject } = sent[0]!;
-    expect(subject).toBe('Co-sign request: $400000.00');
+    expect(subject).toBe('Co-sign request: $400,000.00');
     expect(html).not.toContain('<img');
     expect(html).not.toContain('href="https://evil.example"');
     expect(html).toContain('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;');

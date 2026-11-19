@@ -739,7 +739,7 @@ function cosignRouter(): express.Router {
         await email.sendCosignRequest(
           to,
           {
-            amount:                Math.round((wire?.amountUsd ?? 0) * 100), // template expects cents
+            amount:                wire?.amountUsd ?? 0, // whole US dollars
             recipientAccountLast4: wire?.recipientAccountLast4 ?? "",
             routingNumber:         wire?.routingNumber ?? "",
             ...(wire?.memo ? { memo: wire.memo } : {}),

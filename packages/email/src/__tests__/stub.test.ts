@@ -69,7 +69,7 @@ describe('makeStubEmailProvider — sendCosignRequest', () => {
       { amount: 125000, recipientAccountLast4: '4242', routingNumber: '021000021' },
       'https://app.proofline.web.app/sign/abc',
     );
-    expect(p.getLast()?.subject).toBe('Co-sign request: $1250.00');
+    expect(p.getLast()?.subject).toBe('Co-sign request: $125,000.00');
   });
 
   it('captures wire and signLink in meta', async () => {

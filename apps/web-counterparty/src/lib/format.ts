@@ -3,8 +3,11 @@
  * deliberately so the visual surface stays consistent.
  */
 
-export function formatUSD(amountCents: number): string {
-  const dollars = amountCents / 100;
+/**
+ * Formats a wire amount. WirePayload.amount is whole US dollars (see
+ * web-verify), so there is no cents conversion.
+ */
+export function formatWireAmount(dollars: number): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
