@@ -28,6 +28,7 @@ export type CosignFailureCode =
   | "ALREADY_COSIGNED"
   | "POLICY_REJECTED"
   | "NOT_FOUND"
+  | "RATE_LIMITED"
   | "NETWORK_ERROR";
 
 export type CosignContextResponse =
@@ -56,7 +57,7 @@ export type FinalizeCosignResponse =
     }
   | {
       ok:     false;
-      code:   CosignFailureCode | "ASSERTION_INVALID";
+      code:   CosignFailureCode | "ASSERTION_INVALID" | "COSIGNER_NOT_ALLOWED";
       detail: string;
     };
 

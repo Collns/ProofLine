@@ -9,7 +9,9 @@ const API_BASE = (import.meta as any).env?.VITE_FUNCTIONS_BASE_URL
   ?? 'https://us-central1-proofline-cdabb.cloudfunctions.net/api';
 const BILATERAL_BASE = `${API_BASE}/v1/bilateral`;
 
+// Dev server only: a ?fixture= link has no effect in production builds.
 const FIXTURE_MODE =
+  import.meta.env.DEV === true &&
   typeof window !== 'undefined' &&
   new URLSearchParams(window.location.search).get('fixture') === 'happy-path';
 
@@ -90,7 +92,9 @@ export function BilateralLanding() {
         await new Promise((r) => setTimeout(r, 1200));
         assertion = { id: 'fixture', type: 'public-key', response: {} };
       } else {
-        const result = await runCosignAssertion({ challenge: doc.docId });
+        // Bilateral keeps its existing RP (this portal's own hostname);
+        // only the cosign ceremony uses the sign app's RP (PFL-171).
+        const result = await runCosignAssertion({ challenge: doc.docId, rpId: window.location.hostname });
         if (!result.ok) {
           setTerminalError({
             title:  'Could not capture biometric',

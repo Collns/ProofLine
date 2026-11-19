@@ -22,13 +22,19 @@ import {
 
 export type AssertionResponse = Awaited<ReturnType<typeof startAssertionCeremony>>;
 
+/** Must match COSIGN_RP_ID in apps/functions/src/cosign/cosign-finalize.handler.ts. */
+export const COSIGN_RP_ID = 'proofline-sign.web.app';
+
 export interface CosignAssertionInput {
   /** base64url challenge from the server's getCosignContext response. */
   challenge: string;
   /** Restricting to a known credentialId is optional; if omitted, the
    *  authenticator will discover any resident credential for this RP. */
   allowedCredentialId?: string;
-  /** Default: location.hostname; overrideable for tests. */
+  /**
+   * Default: COSIGN_RP_ID. Approvers' passkeys are registered on the sign
+   * app, so the cosign ceremony names that RP (PFL-171).
+   */
   rpId?: string;
   /** Default: 60s. */
   timeoutMs?: number;
@@ -39,7 +45,7 @@ export type CosignAssertionResult =
   | { ok: false; code: 'USER_CANCELLED' | 'DEVICE_UNSUPPORTED' | 'ABORTED' | 'UNKNOWN'; detail: string };
 
 export async function runCosignAssertion(input: CosignAssertionInput): Promise<CosignAssertionResult> {
-  const rpId = input.rpId ?? (typeof window !== 'undefined' ? window.location.hostname : 'localhost');
+  const rpId = input.rpId ?? COSIGN_RP_ID;
 
   try {
     const assertion = await startAssertionCeremony({
