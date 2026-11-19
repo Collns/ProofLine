@@ -31,6 +31,8 @@ import { getCompany, updateCompany } from "./onboarding.helpers.js";
 // ─── Stripe Identity provider interface ─────────────────────────────────────
 
 export interface StripeIdentityProvider {
+  /** Provider label stored on officerEnrollment ("stripe", "stub"). PFL-176. */
+  readonly provider?: string;
   verifyOfficer(input: {
     email:         string;
     expectedName?: string;
@@ -139,6 +141,7 @@ export function makeEnrollOfficerHandler(deps: {
           stripeClientSecret: "",
           officerEmail,
           verifiedAt,
+          provider:           deps.stripeIdentityProvider.provider ?? "unknown",
         },
         onboardingStatus: "pending_finalize",
       });
@@ -166,6 +169,8 @@ export function makeEnrollOfficerHandler(deps: {
         stripeSessionId:     stripeResult.vendorRef,
         stripeClientSecret:  stripeResult.raw.clientSecret,
         officerEmail,
+        provider:            deps.stripeIdentityProvider.provider ?? "unknown",
+        status:              "pending",
       },
       onboardingStatus: "pending_kyc",
     });

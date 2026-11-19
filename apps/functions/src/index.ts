@@ -48,6 +48,11 @@ const COSIGN_REFRESH_SECRET = defineSecret("COSIGN_REFRESH_SECRET");
 // PFL-160: Resend API key for EMAIL_PROVIDER=resend. Bound as a secret so it
 // never sits in a plain env file; create a placeholder value while stub.
 const RESEND_API_KEY = defineSecret("RESEND_API_KEY");
+// PFL-176: Stripe Identity keys. Read by the api (IDV_PROVIDER=stripe) and
+// the webhooks function. Bound as secrets so they never sit in a plain env
+// file; create placeholder values while IDV_PROVIDER=stub.
+const STRIPE_SECRET_KEY              = defineSecret("STRIPE_SECRET_KEY");
+const STRIPE_IDENTITY_WEBHOOK_SECRET = defineSecret("STRIPE_IDENTITY_WEBHOOK_SECRET");
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -686,7 +691,10 @@ export const api = onRequest(
     region:  "us-central1",
     cors:    false,
     memory:  "256MiB",
-    secrets: [PROOFLINE_AUTH_JWT_SECRET, BILATERAL_JWT_SECRET, COSIGN_REFRESH_SECRET, RESEND_API_KEY],
+    secrets: [
+      PROOFLINE_AUTH_JWT_SECRET, BILATERAL_JWT_SECRET, COSIGN_REFRESH_SECRET,
+      STRIPE_SECRET_KEY, STRIPE_IDENTITY_WEBHOOK_SECRET, RESEND_API_KEY,
+    ],
   },
   publicApp,
 );
@@ -710,7 +718,12 @@ webhooksApp.post(
 );
 
 export const webhooks = onRequest(
-  { region: "us-central1", cors: false, memory: "256MiB" },
+  {
+    region:  "us-central1",
+    cors:    false,
+    memory:  "256MiB",
+    secrets: [STRIPE_SECRET_KEY, STRIPE_IDENTITY_WEBHOOK_SECRET],
+  },
   webhooksApp,
 );
 

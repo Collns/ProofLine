@@ -135,6 +135,7 @@ export const stubKybProvider: KYBProvider = {
 };
 
 export const stubStripeIdentityProvider: StripeIdentityProvider = {
+  provider: "stub",
   async verifyOfficer(input) {
     const sessionId = `stub-stripe-${Date.now().toString(36)}`;
     return {

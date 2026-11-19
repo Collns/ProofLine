@@ -4,7 +4,11 @@
  *
  * Stripe Identity webhook handler.
  *
- * Handles: identity.verification_session.verified
+ * Handles (PFL-176):
+ *   identity.verification_session.verified        → officer verified, status pending_finalize
+ *   identity.verification_session.requires_input  → officerEnrollment.status = requires_input
+ *                                                   (+ last_error code) so the owner can retry
+ *   identity.verification_session.canceled        → officerEnrollment.status = canceled
  *
  * Per TDD §7.2 and PFL-013:
  *   When Stripe fires identity.verification_session.verified, this handler:
@@ -68,9 +72,14 @@ export function makeStripeIdentityWebhookHandler(deps: StripeWebhookDeps) {
       return;
     }
 
-    // ── 2. Only handle the event type we care about ───────────────────────────
+    // ── 2. Only handle the session events we act on ──────────────────────────
 
-    if (event.type !== "identity.verification_session.verified") {
+    const handled = new Set([
+      "identity.verification_session.verified",
+      "identity.verification_session.requires_input",
+      "identity.verification_session.canceled",
+    ]);
+    if (!handled.has(event.type)) {
       // Acknowledge other events without processing (Stripe expects 2xx)
       res.status(200).json({ received: true, ignored: true });
       return;
@@ -79,7 +88,7 @@ export function makeStripeIdentityWebhookHandler(deps: StripeWebhookDeps) {
     const session = event.data.object as Stripe.Identity.VerificationSession;
     const sessionId = session.id;
 
-    console.info(`[stripe-webhook] Processing verified session: ${sessionId}`);
+    console.info(`[stripe-webhook] Processing ${event.type} for session ${sessionId}`);
 
     // ── 3. Find the company that owns this session ────────────────────────────
 
@@ -102,16 +111,16 @@ export function makeStripeIdentityWebhookHandler(deps: StripeWebhookDeps) {
     const companyId  = companyDoc.id;
     const company    = companyDoc.data();
 
-    // Guard: idempotency — don't double-process
+    // Guard: idempotency — once verified, later events for the session are ignored
     if (company.officerEnrollment?.verifiedAt) {
       console.info(
-        `[stripe-webhook] Session ${sessionId} already processed for company ${companyId}. Skipping.`
+        `[stripe-webhook] Session ${sessionId} already verified for company ${companyId}. Skipping.`
       );
       res.status(200).json({ received: true, alreadyProcessed: true });
       return;
     }
 
-    // Guard: only advance if in the correct state
+    // Guard: only act while the company is at the identity step
     if (!["pending_kyc", "pending_finalize"].includes(company.onboardingStatus)) {
       console.warn(
         `[stripe-webhook] Company ${companyId} in unexpected status=${company.onboardingStatus} for session ${sessionId}`
@@ -122,19 +131,36 @@ export function makeStripeIdentityWebhookHandler(deps: StripeWebhookDeps) {
 
     // ── 4. Update Firestore ───────────────────────────────────────────────────
 
+    if (event.type === "identity.verification_session.verified") {
+      await companyDoc.ref.update({
+        "officerEnrollment.verifiedAt":      admin.firestore.FieldValue.serverTimestamp(),
+        "officerEnrollment.stripeSessionId": sessionId,
+        "officerEnrollment.status":          "verified",
+        "officerEnrollment.provider":        "stripe",
+        "officerEnrollment.lastErrorCode":   null,
+        onboardingStatus:                    "pending_finalize",
+        updatedAt:                           admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.info(
+        `[stripe-webhook] Officer verified for company ${companyId}. Status → pending_finalize.`
+      );
+      res.status(200).json({ received: true, companyId, status: "verified" });
+      return;
+    }
+
+    const status = event.type === "identity.verification_session.canceled" ? "canceled" : "requires_input";
+    const lastErrorCode = session.last_error?.code ?? null;
     await companyDoc.ref.update({
-      "officerEnrollment.verifiedAt":      admin.firestore.FieldValue.serverTimestamp(),
-      "officerEnrollment.stripeSessionId": sessionId,
-      "officerEnrollment.status":          "verified",
-      onboardingStatus:                    "pending_finalize",
-      updatedAt:                           admin.firestore.FieldValue.serverTimestamp(),
+      "officerEnrollment.status":        status,
+      "officerEnrollment.provider":      "stripe",
+      "officerEnrollment.lastErrorCode": lastErrorCode,
+      updatedAt:                         admin.firestore.FieldValue.serverTimestamp(),
     });
-
     console.info(
-      `[stripe-webhook] Officer verified for company ${companyId}. Status → pending_finalize.`
+      `[stripe-webhook] Officer identity ${status} for company ${companyId}` +
+        (lastErrorCode ? ` (${lastErrorCode})` : ""),
     );
-
-    res.status(200).json({ received: true, companyId });
+    res.status(200).json({ received: true, companyId, status });
   };
 }
 
