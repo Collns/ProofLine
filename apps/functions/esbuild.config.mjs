@@ -142,6 +142,15 @@ await writeFile(
 // (e.g. third-party API keys for the local dev stack) don't leak into the
 // deploy bundle.
 const RUNTIME_ENV_KEYS = [
+  // PFL-169: environment + explicit provider selection (non-secret).
+  "PROOFLINE_ENV",
+  "EMAIL_PROVIDER",
+  "ANCHOR_PROVIDER",
+  "KMS_PROVIDER",
+  "KYB_PROVIDER",
+  "IDV_PROVIDER",
+  "RESEND_FROM_DOMAIN",
+  "KMS_PROJECT",
   "BASE_SEPOLIA_RPC",
   "DEPLOYER_PRIVATE_KEY",
   "ANCHOR_CONTRACT_ADDRESS",
@@ -187,7 +196,8 @@ if (promoted.length > 0) {
   console.log(`Promoted ${promoted.length} env keys to ${outdir}/.env`);
 } else {
   console.warn(
-    "[esbuild] no runtime env keys found in .env.local — deploy will use stubs",
+    "[esbuild] no runtime env keys found in .env.local — the deployed function will refuse " +
+      "requests until PROOFLINE_ENV and the *_PROVIDER settings are configured",
   );
 }
 

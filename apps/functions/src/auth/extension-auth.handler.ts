@@ -36,6 +36,7 @@ import * as crypto from "node:crypto";
 
 import type { DeviceRecord } from "@proofline/types";
 import { ERR } from "../api/onboarding/http.helpers.js";
+import { readSecret } from "../config/secrets.js";
 import {
   EMPLOYEE_INVITATIONS_COLLECTION,
   type EmployeeInvitation,
@@ -49,7 +50,8 @@ const EXT_AUTH_TTL_SEC = 30 * 24 * 60 * 60;
 const ISSUER = "proofline-extension-auth";
 
 function getSecret(): string {
-  return (process.env["PROOFLINE_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod").trim();
+  // PFL-169: no fallback; throws when the secret is missing or too short.
+  return readSecret("PROOFLINE_AUTH_JWT_SECRET");
 }
 
 // ─── Request schema ───────────────────────────────────────────────────────────
