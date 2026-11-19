@@ -139,6 +139,9 @@ importers:
       '@google-cloud/kms':
         specifier: 5.5.0
         version: 5.5.0
+      '@proofline/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@proofline/anchoring':
         specifier: workspace:*
         version: link:../../packages/anchoring

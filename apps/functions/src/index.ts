@@ -60,6 +60,9 @@ const STRIPE_IDENTITY_WEBHOOK_SECRET = defineSecret("STRIPE_IDENTITY_WEBHOOK_SEC
 const BASELAYER_API_KEY        = defineSecret("BASELAYER_API_KEY");
 const BASELAYER_WEBHOOK_SECRET = defineSecret("BASELAYER_WEBHOOK_SECRET");
 const COBALT_API_KEY           = defineSecret("COBALT_API_KEY");
+// PFL-028: Gemini key for AI_PROVIDER=gemini (advisory wire memo screening).
+// Create a placeholder value while AI_PROVIDER is heuristic or none.
+const GEMINI_API_KEY           = defineSecret("GEMINI_API_KEY");
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -73,8 +76,9 @@ import {
 // --- PFL-169: explicit, fail-closed configuration
 import { loadConfig, describeConfig, ConfigError, type AppConfig } from "./config/config.js";
 import { assertSecrets, API_SECRETS } from "./config/secrets.js";
-import { makeEmailProvider, makeOnboardingDeps } from "./wiring/providers.js";
+import { makeEmailProvider, makeOnboardingDeps, makeScreener } from "./wiring/providers.js";
 import type { EmailProvider } from "@proofline/email";
+import type { MemoScreener } from "@proofline/ai";
 import type { RunAnchorDeps } from "./anchoring/index.js";
 
 import { makeVerifyRouter, makeVerifyService } from "./verify/index.js";
@@ -258,6 +262,13 @@ function emailProvider(): EmailProvider {
   return cachedEmailProvider;
 }
 
+let cachedScreener: MemoScreener | null = null;
+function memoScreener(): MemoScreener {
+  if (cachedScreener) return cachedScreener;
+  cachedScreener = makeScreener(getConfig());
+  return cachedScreener;
+}
+
 // ─── Anchor scheduler (every 5 minutes) ──────────────────────────────────────
 
 export const anchorBatchScheduler = onSchedule(
@@ -367,7 +378,8 @@ function withPerRequestPolicyCtx(factory: SignHandlerFactory): express.RequestHa
 }
 
 const signRouter = express.Router();
-signRouter.post("/",         withPerRequestPolicyCtx(makeSignHandler));
+// PFL-028: wire instructions get advisory memo screening (AI_PROVIDER).
+signRouter.post("/",         withPerRequestPolicyCtx((ctx) => makeSignHandler(ctx, { screener: memoScreener() })));
 signRouter.post("/finalize", withPerRequestPolicyCtx(makeSignFinalizeHandler));
 
 publicApp.use("/v1/sign",        corsMiddleware, requireExtensionAuth, signRouter);
@@ -703,7 +715,7 @@ export const api = onRequest(
     secrets: [
       PROOFLINE_AUTH_JWT_SECRET, BILATERAL_JWT_SECRET, COSIGN_REFRESH_SECRET,
       STRIPE_SECRET_KEY, STRIPE_IDENTITY_WEBHOOK_SECRET, RESEND_API_KEY,
-      BASELAYER_API_KEY, COBALT_API_KEY,
+      BASELAYER_API_KEY, COBALT_API_KEY, GEMINI_API_KEY,
     ],
   },
   publicApp,

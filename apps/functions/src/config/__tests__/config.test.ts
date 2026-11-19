@@ -35,7 +35,7 @@ describe("loadConfig — environment", () => {
   it("defaults to development with stubs off-platform", () => {
     const cfg = loadConfig({});
     expect(cfg.env).toBe("development");
-    expect(cfg.providers).toEqual({ email: "stub", anchor: "stub", kms: "stub", kyb: "stub", idv: "stub" });
+    expect(cfg.providers).toEqual({ email: "stub", anchor: "stub", kms: "stub", kyb: "stub", idv: "stub", ai: "heuristic" });
   });
 
   it("requires PROOFLINE_ENV when deployed (Cloud Functions doesn't set NODE_ENV)", () => {
@@ -118,6 +118,18 @@ describe("loadConfig — provider rules", () => {
     expect(cfg.providers.idv).toBe("stripe");
     expect(cfg.idv).toEqual({ stripeSecretKey: "sk_test_1", stripeWebhookSecret: "whsec_1" });
     expect(JSON.stringify(describeConfig(cfg))).not.toContain("sk_test_1");
+  });
+
+  it("selects memo screening; gemini needs GEMINI_API_KEY (PFL-028)", () => {
+    expect(loadConfig({}).providers.ai).toBe("heuristic");
+    expect(problemsOf({ AI_PROVIDER: "gemini" })).toEqual([
+      "AI_PROVIDER=gemini is selected but GEMINI_API_KEY is not set",
+    ]);
+    expect(problemsOf({ AI_PROVIDER: "openai" })[0]).toMatch(/AI_PROVIDER="openai" is not valid/);
+    const cfg = loadConfig({ AI_PROVIDER: "gemini", GEMINI_API_KEY: "g_key_1", GEMINI_MODEL: "gemini-3.5-flash" });
+    expect(cfg.ai).toEqual({ geminiApiKey: "g_key_1", model: "gemini-3.5-flash" });
+    expect(JSON.stringify(describeConfig(cfg))).not.toContain("g_key_1");
+    expect(loadConfig({ AI_PROVIDER: "none" }).providers.ai).toBe("none");
   });
 
   it("describeConfig never includes keys or secrets", () => {
