@@ -39,11 +39,19 @@ export interface CompanyDoc {
   emailCode?: string;
   emailCodeExpiresAt?: number;
   emailVerifiedAt?: number;
+  /** Optional business address and website, used for the KYB address match (PFL-162). */
+  address?: { street?: string; city?: string; zip?: string };
+  website?: string;
   kybResult?: {
     ok: boolean;
     vendorRef: string;
-    flags: string[];
+    /** {type, severity, detail?}. Docs written before PFL-162 hold plain strings. */
+    flags: { type: string; severity: "low" | "medium" | "high"; detail?: string }[] | string[];
     officers: { name: string; role: string }[];
+    /** Provider that produced the result ("stub" | "baselayer" | "cobalt"). PFL-162. */
+    provider?: string;
+    /** True while the vendor has not finished; a webhook replaces the result. */
+    pending?: boolean;
     verifiedAt: number;
   };
   officerEnrollment?: {

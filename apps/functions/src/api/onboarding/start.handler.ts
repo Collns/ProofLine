@@ -23,6 +23,11 @@ const StartRequestSchema = z.object({
   ein:        z.string().regex(/^\d{2}-\d{7}$/, "EIN must be formatted as XX-XXXXXXX"),
   state:      z.string().length(2).toUpperCase(),
   ownerEmail: z.string().email(),
+  // Optional, but Baselayer needs at least a city for its address match.
+  street:     z.string().trim().max(200).optional(),
+  city:       z.string().trim().max(100).optional(),
+  zip:        z.string().trim().regex(/^\d{5}(-\d{4})?$/, "zip must be a US ZIP code").optional(),
+  website:    z.string().trim().max(253).optional(),
   // The owner is always the authenticated caller (Firebase ID token,
   // PFL-166). Any ownerUserId in the body is stripped by zod and ignored.
 });
@@ -87,6 +92,14 @@ export function makeStartHandler() {
       state:            body.state,
       ownerUserId:      userId,
       ownerEmail:       body.ownerEmail,
+      ...(body.street || body.city || body.zip
+        ? { address: {
+            ...(body.street ? { street: body.street } : {}),
+            ...(body.city   ? { city:   body.city }   : {}),
+            ...(body.zip    ? { zip:    body.zip }    : {}),
+          } }
+        : {}),
+      ...(body.website ? { website: body.website } : {}),
       onboardingStatus: "pending_dns",
       dnsToken,
       createdAt:        existing?.createdAt ?? now,

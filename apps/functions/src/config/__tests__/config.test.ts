@@ -96,10 +96,18 @@ describe("loadConfig — provider rules", () => {
       .toEqual(["ANCHOR_CONTRACT_ADDRESS must be a 0x-prefixed 20-byte address"]);
   });
 
-  it("keeps KYB on stub until PFL-162 wires the adapters", () => {
+  it("accepts KYB_PROVIDER=baselayer|cobalt only with their keys (PFL-162)", () => {
     expect(problemsOf({ KYB_PROVIDER: "baselayer" })).toEqual([
-      "KYB_PROVIDER=baselayer is not wired into the functions app yet (PFL-162); use stub",
+      "KYB_PROVIDER=baselayer is selected but BASELAYER_API_KEY, BASELAYER_WEBHOOK_SECRET are not set",
     ]);
+    expect(problemsOf({ KYB_PROVIDER: "cobalt" })).toEqual([
+      "KYB_PROVIDER=cobalt is selected but COBALT_API_KEY is not set",
+    ]);
+    const bl = loadConfig({ KYB_PROVIDER: "baselayer", BASELAYER_API_KEY: "bl_key_1", BASELAYER_WEBHOOK_SECRET: "whsec_bl" });
+    expect(bl.providers.kyb).toBe("baselayer");
+    expect(bl.kyb).toEqual({ baselayerApiKey: "bl_key_1", baselayerWebhookSecret: "whsec_bl" });
+    expect(JSON.stringify(describeConfig(bl))).not.toContain("bl_key_1");
+    expect(loadConfig({ KYB_PROVIDER: "cobalt", COBALT_API_KEY: "co_key" }).kyb).toEqual({ cobaltApiKey: "co_key" });
   });
 
   it("accepts IDV_PROVIDER=stripe only with both Stripe keys (PFL-176)", () => {

@@ -4,21 +4,21 @@
  *
  * POST /v1/onboard/kyb
  *
- * Runs KYB (Know Your Business) via the Middesk adapter (TDD §7.1).
+ * Runs KYB (Know Your Business) through the provider chosen by
+ * KYB_PROVIDER (stub | baselayer | cobalt; PFL-162).
  *
  * Flow:
  *   1. Validate body (companyId).
  *   2. Load company doc — must be pending_kyb.
  *   3. Call kybProvider.verifyBusiness() with legalName + EIN + state.
- *   4. Store the result (ok, vendorRef, flags, officers).
- *   5. If KYB passes → advance status to pending_kyc.
- *      If KYB fails  → set status to rejected, return 422.
+ *   4. Store the result (ok, vendorRef, flags, officers, provider, pending).
+ *   5. If KYB passes     → advance status to pending_kyc.
+ *      If KYB is pending → stay in pending_kyb, return 202. The Baselayer
+ *                          webhook (webhooks/baselayer.ts) applies the late
+ *                          result (e.g. the IRS TIN match after an outage).
+ *      If KYB fails      → set status to rejected, return 422.
  *
  * Auth: Firebase ID token — ownerUserId check.
- *
- * Note: Middesk is async in production (poll-until-complete).  The
- * makeMiddeskProvider already handles polling internally, so this handler
- * simply awaits the resolved promise.
  */
 
 import * as express from "express";
@@ -27,21 +27,17 @@ import { z } from "zod";
 import { ERR } from "./http.helpers.js";
 import { getCompany, updateCompany } from "./onboarding.helpers.js";
 
-// ─── KYB provider interface (mirrors packages/kyb) ───────────────────────────
+// ─── KYB provider interface ─────────────────────────────────────────────────
+
+import type { BusinessLookupInput, BusinessVerification, KYBFlag } from "@proofline/kyb";
 
 export interface KYBProvider {
-  verifyBusiness(input: {
-    legalName: string;
-    ein:       string;
-    state:     string;
-    country:   "US";
-  }): Promise<{
-    ok:        boolean;
-    vendorRef: string;
-    flags:     string[];
-    officers:  { name: string; role: string }[];
-    raw:       unknown;
-  }>;
+  verifyBusiness(input: BusinessLookupInput): Promise<BusinessVerification>;
+}
+
+/** One-line description of a flag for error messages. */
+export function flagLabel(flag: KYBFlag): string {
+  return flag.detail ? `${flag.type} (${flag.detail})` : flag.type;
 }
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
@@ -98,9 +94,13 @@ export function makeKybHandler(deps: { kybProvider: KYBProvider }) {
         ein:       company.ein,
         state:     company.state,
         country:   "US",
+        ...(company.address?.street ? { street: company.address.street } : {}),
+        ...(company.address?.city   ? { city:   company.address.city }   : {}),
+        ...(company.address?.zip    ? { zip:    company.address.zip }    : {}),
+        ...(company.website         ? { website: company.website }       : {}),
       });
     } catch (err) {
-      console.error("[kyb] Middesk call failed", err);
+      console.error("[kyb] provider call failed", err instanceof Error ? err.message : err);
       res.status(502).json(
         ERR.internal("KYB provider unavailable. Please retry.")
       );
@@ -111,24 +111,38 @@ export function makeKybHandler(deps: { kybProvider: KYBProvider }) {
 
     // ── 4. Store result ───────────────────────────────────────────────────────
 
+    const pending = !result.ok && result.pending === true;
+
     await updateCompany(companyId, {
       kybResult: {
         ok:         result.ok,
         vendorRef:  result.vendorRef,
         flags:      result.flags,
         officers:   result.officers,
+        provider:   result.provider ?? "unknown",
+        pending,
         verifiedAt: now,
       },
     });
 
-    // ── 5. Advance or reject ──────────────────────────────────────────────────
+    // ── 5. Advance, wait or reject ────────────────────────────────────────────
+
+    if (pending) {
+      res.status(202).json({
+        ok:        false,
+        pending:   true,
+        status:    "pending_kyb",
+        vendorRef: result.vendorRef,
+      });
+      return;
+    }
 
     if (!result.ok) {
       await updateCompany(companyId, { onboardingStatus: "rejected" });
       res.status(422).json(
         ERR.unprocessable(
           "KYB_FAILED",
-          `Business verification failed. Flags: ${result.flags.join(", ") || "none"}`
+          `Business verification failed. Flags: ${result.flags.map(flagLabel).join(", ") || "none"}`
         )
       );
       return;

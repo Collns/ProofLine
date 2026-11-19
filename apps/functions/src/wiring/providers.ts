@@ -22,6 +22,10 @@ import type {
 } from "../api/onboarding/finalize.handler.js";
 import type { OnboardingRouterDeps } from "../api/onboarding/router.js";
 import { makeStripeIdentityProvider } from "@proofline/kyb/providers/stripe-identity.js";
+import { makeBaselayerProvider } from "@proofline/kyb/providers/baselayer.js";
+import { makeCobaltProvider } from "@proofline/kyb/providers/cobalt.js";
+
+import type { KYBProvider } from "../api/onboarding/kyb.handler.js";
 
 import type { StripeIdentityProvider } from "../api/onboarding/enroll-officer.handler.js";
 import { makeRealKmsProvider } from "./gcp-kms-provider.js";
@@ -45,6 +49,21 @@ export function makeKmsProvider(config: Pick<AppConfig, "providers" | "kms">): K
     throw new Error("KMS_PROVIDER=gcp requires a project and KMS_KEYRING");
   }
   return makeRealKmsProvider(config.kms);
+}
+
+// ─── Business verification (KYB) ─────────────────────────────────────────────
+
+export function makeKybProvider(config: Pick<AppConfig, "providers" | "kyb">): KYBProvider {
+  switch (config.providers.kyb) {
+    case "stub":
+      return stubKybProvider;
+    case "baselayer":
+      if (!config.kyb?.baselayerApiKey) throw new Error("KYB_PROVIDER=baselayer requires BASELAYER_API_KEY");
+      return makeBaselayerProvider({ apiKey: config.kyb.baselayerApiKey });
+    case "cobalt":
+      if (!config.kyb?.cobaltApiKey) throw new Error("KYB_PROVIDER=cobalt requires COBALT_API_KEY");
+      return makeCobaltProvider({ apiKey: config.kyb.cobaltApiKey });
+  }
 }
 
 // ─── Officer identity (IDV) ──────────────────────────────────────────────────
@@ -103,9 +122,8 @@ export function makeOnboardingDeps(
 ): OnboardingRouterDeps {
   return {
     sendVerificationCode:   (to, code) => deps.email.sendVerificationCode(to, code),
-    // KYB: loadConfig only accepts "stub" until PFL-162 wires Baselayer /
-    // Cobalt. IDV: stub or Stripe Identity (PFL-176).
-    kybProvider:            stubKybProvider,
+    // KYB: stub | Baselayer | Cobalt (PFL-162). IDV: stub | Stripe Identity (PFL-176).
+    kybProvider:            makeKybProvider(config),
     stripeIdentityProvider: makeIdvProvider(config),
     kmsProvider:            makeKmsProvider(config),
     anchorProvider:         makeOnboardingAnchorProvider(deps.anchor),
