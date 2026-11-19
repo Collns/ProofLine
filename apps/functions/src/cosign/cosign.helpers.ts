@@ -12,11 +12,13 @@ import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import type { CosignSignerInfo } from "./cosign.types.js";
 import { readSecret } from "../config/secrets.js";
 
-// ─── JWS decode (structural — no signature check) ────────────────────────────
+// ─── JWS verify (HS256, COSIGN_REFRESH_SECRET) ────────────────────────────────
 //
-// TODO(PFL-COSIGN-KMS): once company root keys live in Cloud KMS, switch
-// to verifying the JWS signature with the public key referenced by `kid`.
-// For the hackathon slice, we decode header + claims and check `exp`.
+// PFL-171: cosign links are HS256 JWS signed with COSIGN_REFRESH_SECRET
+// (see mintCosignJws). The signature is checked in constant time before
+// any claim is trusted; unsigned or differently-signed tokens are
+// rejected. (Company-KMS-signed links, if they come, would add a second
+// verifier keyed by `kid`.)
 
 export interface CosignClaims {
   iss:         string;         // companyId of the original signer's company
@@ -28,23 +30,37 @@ export interface CosignClaims {
 }
 
 export interface DecodeOk   { ok: true;  claims: CosignClaims; }
-export interface DecodeFail { ok: false; reason: "MALFORMED" | "EXPIRED" | "CLAIM_MISSING"; }
+export interface DecodeFail { ok: false; reason: "MALFORMED" | "BAD_SIGNATURE" | "EXPIRED" | "CLAIM_MISSING"; }
 
-export function decodeCosignJws(token: string): DecodeOk | DecodeFail {
+/** How long after expiry a link may still be refreshed. */
+export const COSIGN_REFRESH_GRACE_SEC = 7 * 24 * 60 * 60;
+
+export function verifyCosignJws(
+  token: string,
+  opts: { allowExpiredForSec?: number; nowSec?: number } = {},
+): DecodeOk | DecodeFail {
   const parts = token.split(".");
-  if (parts.length !== 3) return { ok: false, reason: "MALFORMED" };
+  if (parts.length !== 3 || parts.some((p) => p.length === 0)) return { ok: false, reason: "MALFORMED" };
+  const [headerB64, payloadB64, sigB64] = parts as [string, string, string];
 
+  let header: unknown;
   let claimsRaw: unknown;
   try {
-    const payloadB64 = parts[1] as string;
+    header    = JSON.parse(Buffer.from(headerB64, "base64url").toString("utf8"));
     claimsRaw = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
   } catch {
     return { ok: false, reason: "MALFORMED" };
   }
-
-  if (!claimsRaw || typeof claimsRaw !== "object") {
-    return { ok: false, reason: "MALFORMED" };
+  if (!header || typeof header !== "object" || (header as Record<string, unknown>)["alg"] !== "HS256") {
+    return { ok: false, reason: "BAD_SIGNATURE" };
   }
+  const expected = crypto.createHmac("sha256", getRefreshSecret()).update(`${headerB64}.${payloadB64}`).digest();
+  const given = Buffer.from(sigB64, "base64url");
+  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+    return { ok: false, reason: "BAD_SIGNATURE" };
+  }
+
+  if (!claimsRaw || typeof claimsRaw !== "object") return { ok: false, reason: "MALFORMED" };
   const c = claimsRaw as Record<string, unknown>;
   if (
     typeof c["iss"]         !== "string" ||
@@ -55,21 +71,26 @@ export function decodeCosignJws(token: string): DecodeOk | DecodeFail {
   ) {
     return { ok: false, reason: "CLAIM_MISSING" };
   }
-
-  const now = Math.floor(Date.now() / 1000);
-  if ((c["exp"] as number) < now) {
+  const now = opts.nowSec ?? Math.floor(Date.now() / 1000);
+  if ((c["exp"] as number) + (opts.allowExpiredForSec ?? 0) < now) {
     return { ok: false, reason: "EXPIRED" };
   }
-
-  const claims: CosignClaims = {
-    iss:         c["iss"]         as string,
-    sub:         c["sub"]         as string,
-    payloadHash: c["payloadHash"] as string,
-    iat:         c["iat"]         as number,
-    exp:         c["exp"]         as number,
-    ...(typeof c["kid"] === "string" ? { kid: c["kid"] as string } : {}),
+  return {
+    ok: true,
+    claims: {
+      iss:         c["iss"]         as string,
+      sub:         c["sub"]         as string,
+      payloadHash: c["payloadHash"] as string,
+      iat:         c["iat"]         as number,
+      exp:         c["exp"]         as number,
+      ...(typeof c["kid"] === "string" ? { kid: c["kid"] as string } : {}),
+    },
   };
-  return { ok: true, claims };
+}
+
+/** Verified decode for context/finalize: signature + unexpired. */
+export function decodeCosignJws(token: string): DecodeOk | DecodeFail {
+  return verifyCosignJws(token);
 }
 
 // ─── JWS mint (HS256 against a refresh secret) ───────────────────────────────

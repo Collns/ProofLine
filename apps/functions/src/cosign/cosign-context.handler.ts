@@ -63,8 +63,7 @@ export function makeCosignContextHandler() {
       return;
     }
 
-    // 1. Decode JWS structurally (signature check is deferred — see
-    //    TODO in cosign.helpers.ts).
+    // 1. Verify the JWS signature and expiry (PFL-171).
     const decoded = decodeCosignJws(token);
     if (!decoded.ok) {
       const failure: CosignContextResponse =
@@ -108,6 +107,19 @@ export function makeCosignContextHandler() {
     }
 
     const envelope = adaptStoredEnvelope(snap.data() as Parameters<typeof adaptStoredEnvelope>[0]);
+    // The link must be for this exact payload, issued for the signer's company.
+    const payloadCompany = (envelope.payload as { companyId?: unknown } | null)?.companyId;
+    if (
+      decoded.claims.payloadHash !== envelope.payloadHash ||
+      (typeof payloadCompany === "string" && payloadCompany !== decoded.claims.iss)
+    ) {
+      respond(res, {
+        ok:     false,
+        code:   "COSIGN_LINK_INVALID",
+        detail: "Cosign token does not match this message",
+      });
+      return;
+    }
 
     if (hasCosigner(envelope)) {
       respond(res, {

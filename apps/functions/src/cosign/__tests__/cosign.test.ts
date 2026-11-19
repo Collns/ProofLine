@@ -109,6 +109,8 @@ vi.mock("@proofline/webauthn", async () => {
 });
 
 import { makeCosignRouter } from "../router.js";
+import { mintCosignJws, type CosignClaims } from "../cosign.helpers.js";
+import { finishAssertion } from "@proofline/webauthn";
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
 
@@ -116,7 +118,13 @@ function b64url(s: string): string {
   return Buffer.from(s).toString("base64url");
 }
 
+/** A correctly signed link token (HS256, COSIGN_REFRESH_SECRET from vitest.setup). */
 function makeJws(claims: Record<string, unknown>): string {
+  return mintCosignJws(claims as unknown as CosignClaims);
+}
+
+/** The pre-PFL-171 shape: structurally valid, but not signed by the server. */
+function makeForgedJws(claims: Record<string, unknown>): string {
   const header  = b64url(JSON.stringify({ alg: "ES256", typ: "JWT" }));
   const payload = b64url(JSON.stringify(claims));
   return `${header}.${payload}.SIGNATURE_PLACEHOLDER`;
@@ -180,8 +188,38 @@ function seedSignerProfile(): void {
   };
 }
 
+const COSIGNER_ASSERTION = {
+  id:       "cosigner-cred-001",
+  response: { clientDataJSON: "client-data", authenticatorData: "auth-data", signature: "MEQ-cosigner-sig" },
+};
+
+function seedCosigner(user: Record<string, unknown> = {}, cred: Record<string, unknown> = {}): void {
+  store["webauthn_credentials"] = store["webauthn_credentials"] ?? {};
+  store["webauthn_credentials"]["cosigner-cred-001"] = {
+    credentialId: "cosigner-cred-001", userId: "user-mike", companyId: "acme-title", publicKey: "cose-pk", ...cred,
+  };
+  store["users"] = store["users"] ?? {};
+  store["users"]["user-mike"] = {
+    companyId: "acme-title", status: "active", role: "manager", email: "mike@acme-title.com",
+    devices: [{ credentialId: "cosigner-cred-001", revokedAt: null }], ...user,
+  };
+}
+
+function seedChallenge(messageId: string): void {
+  store["cosign_challenges"] = store["cosign_challenges"] ?? {};
+  store["cosign_challenges"][messageId] = {
+    messageId, challenge: "challenge-bytes-abc", payloadHash: STORED_HASH,
+    iss: "acme-title", issuedAt: NOW_SEC - 30, expiresAt: NOW_SEC + 300,
+  };
+}
+
+const goodToken = (messageId: string) => makeJws({
+  iss: "acme-title", sub: messageId, payloadHash: STORED_HASH, iat: NOW_SEC - 10, exp: FUTURE_EXP,
+});
+
 beforeEach(() => {
   for (const k of Object.keys(store)) delete store[k];
+  vi.mocked(finishAssertion).mockResolvedValue({ ok: true, signCount: 1, credentialId: "cred" } as never);
 });
 
 // ─── GET /v1/cosign/:messageId ──────────────────────────────────────────────
@@ -329,6 +367,7 @@ describe("POST /v1/cosign/:messageId/finalize", () => {
     const messageId = "msg-finalize-happy";
     seedEnvelope(messageId);
     seedSignerProfile();
+    seedCosigner();
 
     // Pre-seed a context challenge (handler consumes it).
     store["cosign_challenges"] = {
@@ -352,10 +391,7 @@ describe("POST /v1/cosign/:messageId/finalize", () => {
       .set("X-ProofLine-Cosign-Token", token)
       .send({
         challenge: "challenge-bytes-abc",
-        assertion: {
-          id:        "cosigner-cred-001",
-          response:  { signature: "MEQ-cosigner-sig" },
-        },
+        assertion: COSIGNER_ASSERTION,
       })
       .expect(200);
 
@@ -370,7 +406,13 @@ describe("POST /v1/cosign/:messageId/finalize", () => {
     expect(updated["status"]).toBe("COSIGNED");
     const signers = updated["signers"] as Array<Record<string, unknown>>;
     expect(signers.length).toBe(1);
-    expect(signers[0]?.role).toBe("cosigner");
+    expect(signers[0]).toMatchObject({
+      role: "cosigner", userId: "user-mike", credentialId: "cosigner-cred-001",
+      sig: "MEQ-cosigner-sig", authenticatorData: "auth-data", clientDataJSON: "client-data",
+    });
+    expect(vi.mocked(finishAssertion)).toHaveBeenLastCalledWith(expect.objectContaining({
+      expectedRPID: "proofline-sign.web.app", storedPublicKey: "cose-pk",
+    }));
 
     // Challenge consumed.
     expect(store["cosign_challenges"]?.[messageId]).toBeUndefined();
@@ -560,6 +602,119 @@ describe("POST /v1/cosign/:messageId/refresh", () => {
       .send({})
       .expect(400);
 
+    expect(res.body.code).toBe("COSIGN_LINK_INVALID");
+  });
+});
+
+// ─── PFL-171: hardening ─────────────────────────────────────────────────────
+
+describe("PFL-171 cosign hardening", () => {
+  it("rejects a forged (unsigned) link on context and finalize", async () => {
+    seedEnvelope("msg-forged");
+    seedChallenge("msg-forged");
+    seedCosigner();
+    const forged = makeForgedJws({
+      iss: "acme-title", sub: "msg-forged", payloadHash: STORED_HASH, iat: NOW_SEC - 10, exp: FUTURE_EXP,
+    });
+    const ctx = await request(buildApp()).get("/v1/cosign/msg-forged").query({ token: forged }).expect(200);
+    expect(ctx.body).toMatchObject({ ok: false, code: "COSIGN_LINK_INVALID" });
+    expect(ctx.body).not.toHaveProperty("payload");
+
+    const fin = await request(buildApp())
+      .post("/v1/cosign/msg-forged/finalize")
+      .set("X-ProofLine-Cosign-Token", forged)
+      .send({ challenge: "challenge-bytes-abc", assertion: COSIGNER_ASSERTION })
+      .expect(401);
+    expect(fin.body.code).toBe("COSIGN_LINK_INVALID");
+    expect((store["signed_messages"]!["msg-forged"] as Record<string, unknown>)["status"]).toBe("SIGNED");
+  });
+
+  it("rejects a link whose payload hash doesn't match the message", async () => {
+    seedEnvelope("msg-hash");
+    const token = makeJws({ iss: "acme-title", sub: "msg-hash", payloadHash: "f".repeat(64), iat: NOW_SEC, exp: FUTURE_EXP });
+    const res = await request(buildApp()).get("/v1/cosign/msg-hash").query({ token }).expect(200);
+    expect(res.body.code).toBe("COSIGN_LINK_INVALID");
+  });
+
+  it("returns 401 when the assertion does not verify or the credential is unknown", async () => {
+    seedEnvelope("msg-bad-assert");
+    seedChallenge("msg-bad-assert");
+    seedCosigner();
+    vi.mocked(finishAssertion).mockResolvedValueOnce({ ok: false, reason: "SIGNATURE_INVALID" } as never);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bad = await request(buildApp())
+      .post("/v1/cosign/msg-bad-assert/finalize")
+      .set("X-ProofLine-Cosign-Token", goodToken("msg-bad-assert"))
+      .send({ challenge: "challenge-bytes-abc", assertion: COSIGNER_ASSERTION })
+      .expect(401);
+    expect(bad.body.code).toBe("ASSERTION_INVALID");
+
+    const unknown = await request(buildApp())
+      .post("/v1/cosign/msg-bad-assert/finalize")
+      .set("X-ProofLine-Cosign-Token", goodToken("msg-bad-assert"))
+      .send({ challenge: "challenge-bytes-abc", assertion: { ...COSIGNER_ASSERTION, id: "nobody" } })
+      .expect(401);
+    warn.mockRestore();
+    expect(unknown.body.code).toBe("ASSERTION_INVALID");
+    expect((store["signed_messages"]!["msg-bad-assert"] as Record<string, unknown>)["status"]).toBe("SIGNED");
+  });
+
+  it.each([
+    ["the original signer", { userId: "user-sarah" }, {}, "original signer"],
+    ["a member role", {}, { role: "member" }, "role"],
+    ["an inactive user", {}, { status: "disabled" }, "not active"],
+    ["another company's credential", { companyId: "evil-co" }, {}, "another company"],
+    ["a revoked device", {}, { devices: [{ credentialId: "cosigner-cred-001", revokedAt: 123 }] }, "revoked"],
+  ])("returns 403 for %s", async (_label, cred, user, detail) => {
+    const id = `msg-403-${Math.random().toString(36).slice(2, 8)}`;
+    seedEnvelope(id);
+    seedChallenge(id);
+    seedCosigner(user, cred);
+    if ((cred as { userId?: string }).userId === "user-sarah") {
+      store["users"]!["user-sarah"] = { companyId: "acme-title", status: "active", role: "owner", email: "sarah@acme-title.com" };
+    }
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await request(buildApp())
+      .post(`/v1/cosign/${id}/finalize`)
+      .set("X-ProofLine-Cosign-Token", goodToken(id))
+      .send({ challenge: "challenge-bytes-abc", assertion: COSIGNER_ASSERTION });
+    warn.mockRestore();
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("COSIGNER_NOT_ALLOWED");
+    expect(res.body.detail).toContain(detail);
+  });
+
+  it("enforces the stored approver list when present", async () => {
+    seedEnvelope("msg-approvers", { cosign: { approverEmails: ["ceo@acme-title.com"] } });
+    seedChallenge("msg-approvers");
+    seedCosigner();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await request(buildApp())
+      .post("/v1/cosign/msg-approvers/finalize")
+      .set("X-ProofLine-Cosign-Token", goodToken("msg-approvers"))
+      .send({ challenge: "challenge-bytes-abc", assertion: COSIGNER_ASSERTION });
+    warn.mockRestore();
+    expect(res.status).toBe(403);
+    expect(res.body.detail).toContain("approver list");
+  });
+
+  it("caps refreshes per message", async () => {
+    seedEnvelope("msg-rl", { cosign: { approverEmails: ["mike@acme-title.com"] } });
+    const app = buildApp({ refresh: { sendFreshLinkEmail: vi.fn(async () => {}) } });
+    for (let i = 0; i < 5; i++) {
+      const ok = await request(app).post("/v1/cosign/msg-rl/refresh").send({ token: goodToken("msg-rl") });
+      expect(ok.status).toBe(200);
+    }
+    const limited = await request(app).post("/v1/cosign/msg-rl/refresh").send({ token: goodToken("msg-rl") });
+    expect(limited.status).toBe(429);
+    expect(limited.body.code).toBe("RATE_LIMITED");
+  });
+
+  it("refuses to refresh a forged token", async () => {
+    seedEnvelope("msg-rf");
+    const forged = makeForgedJws({ iss: "acme-title", sub: "msg-rf", payloadHash: STORED_HASH, iat: 0, exp: PAST_EXP });
+    const res = await request(buildApp()).post("/v1/cosign/msg-rf/refresh").send({ token: forged });
+    expect(res.status).toBe(400);
     expect(res.body.code).toBe("COSIGN_LINK_INVALID");
   });
 });

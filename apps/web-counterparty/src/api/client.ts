@@ -8,10 +8,7 @@ import { FIXTURES, fixtureFinalizeOk, fixtureRefreshOk } from './fixtures';
 
 // Absolute origin of the deployed Firebase Functions `api` HTTP function.
 // The counterparty page is hosted on its own subdomain with no /v1/*
-// rewrites, so we point straight at the function URL. Note: the cosign
-// endpoints (/v1/cosign/*) are not yet implemented server-side — until
-// then, every non-fixture call here will 404, which is the intended
-// "wired but not yet shipped" state.
+// rewrites, so we point straight at the function URL (/v1/cosign/*).
 const DEFAULT_API_BASE = 'https://us-central1-proofline-cdabb.cloudfunctions.net/api';
 const API_ORIGIN = (
   (import.meta.env?.VITE_API_BASE as string | undefined) ?? DEFAULT_API_BASE
@@ -25,14 +22,19 @@ interface ClientOpts {
   window?: Pick<Window, 'location'>;
 }
 
+// PFL-171: fixtures are a dev-server convenience only. Production builds
+// always call the API, and a ?fixture= link has no effect there.
+function isDev(): boolean {
+  return import.meta.env.DEV === true;
+}
+
 function resolveMode(opts?: ClientOpts): 'live' | 'fixtures' {
   if (opts?.mode) return opts.mode;
-  // import.meta.env is provided by vitest/vite; default safely if absent.
-  const envDev = (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV;
-  return 'fixtures';
+  return isDev() ? 'fixtures' : 'live';
 }
 
 function readFixtureKey(opts?: ClientOpts): string | null {
+  if (!isDev()) return null;
   const w = opts?.window ?? (typeof window !== 'undefined' ? window : undefined);
   if (!w) return null;
   const params = new URLSearchParams(w.location.search);

@@ -8,12 +8,12 @@
  *
  * Re-mints a JWS for the same messageId + payloadHash with a fresh
  * expiry and emails the link to the internal approvers stored on the
- * message (PFL-160). The original token may already be expired — we only need
- * its claims to seed the new one, so the decode reason of "EXPIRED" is
- * acceptable. Malformed tokens are rejected.
+ * message (PFL-160). The original token must carry a valid signature
+ * (PFL-171); it may be expired for up to COSIGN_REFRESH_GRACE_SEC.
  *
- * TODO(PFL-COSIGN-RATELIMIT): cap refresh attempts per messageId per
- * hour to prevent abuse. Today we log and accept.
+ * Rate limit (PFL-171): at most REFRESH_LIMIT refreshes per messageId per
+ * REFRESH_WINDOW_SEC, tracked in cosign_refresh_limits/{messageId}.
+ * Over the limit → 429 RATE_LIMITED.
  */
 
 import type * as express from "express";
@@ -21,8 +21,9 @@ import { getFirestore } from "firebase-admin/firestore";
 import { z } from "zod";
 
 import {
-  decodeCosignJws,
+  COSIGN_REFRESH_GRACE_SEC,
   mintCosignJws,
+  verifyCosignJws,
   type CosignClaims,
 } from "./cosign.helpers.js";
 import type { RefreshLinkResponse } from "./cosign.types.js";
@@ -35,39 +36,27 @@ const RefreshBodySchema = z.object({
   token: z.string().min(1, "token is required"),
 });
 
-// Lightweight decode that tolerates expired tokens so we can refresh
-// them. Mirrors decodeCosignJws but skips the exp check.
-function decodeForRefresh(
-  token: string,
-): { ok: true; claims: CosignClaims } | { ok: false; detail: string } {
-  const parts = token.split(".");
-  if (parts.length !== 3) {
-    return { ok: false, detail: "Token is not a valid JWS" };
-  }
-  try {
-    const payloadB64 = parts[1] as string;
-    const raw = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8")) as Record<string, unknown>;
-    if (
-      typeof raw["iss"]         !== "string" ||
-      typeof raw["sub"]         !== "string" ||
-      typeof raw["payloadHash"] !== "string"
-    ) {
-      return { ok: false, detail: "Token is missing required claims" };
-    }
-    return {
-      ok: true,
-      claims: {
-        iss:         raw["iss"]         as string,
-        sub:         raw["sub"]         as string,
-        payloadHash: raw["payloadHash"] as string,
-        iat:         typeof raw["iat"] === "number" ? (raw["iat"] as number) : 0,
-        exp:         typeof raw["exp"] === "number" ? (raw["exp"] as number) : 0,
-        ...(typeof raw["kid"] === "string" ? { kid: raw["kid"] as string } : {}),
-      },
-    };
-  } catch {
-    return { ok: false, detail: "Token payload could not be decoded" };
-  }
+export const REFRESH_LIMIT      = 5;
+export const REFRESH_WINDOW_SEC = 60 * 60;
+
+/**
+ * Counts this refresh against the per-message window. Returns false when
+ * the limit is already reached. Not transactional: concurrent requests can
+ * overshoot by a request or two, which is acceptable for an abuse cap.
+ */
+async function takeRefreshSlot(
+  firestore: ReturnType<typeof getFirestore>,
+  messageId: string,
+  nowSec: number,
+): Promise<boolean> {
+  const ref = firestore.collection("cosign_refresh_limits").doc(messageId);
+  const snap = await ref.get();
+  const cur = snap.exists ? (snap.data() as { windowStart?: number; count?: number }) : {};
+  const inWindow = typeof cur.windowStart === "number" && nowSec - cur.windowStart < REFRESH_WINDOW_SEC;
+  const count = inWindow ? (cur.count ?? 0) : 0;
+  if (count >= REFRESH_LIMIT) return false;
+  await ref.set({ messageId, windowStart: inWindow ? cur.windowStart : nowSec, count: count + 1 });
+  return true;
 }
 
 export interface CosignRefreshEmail {
@@ -142,12 +131,12 @@ export function makeCosignRefreshHandler(deps: CosignRefreshHandlerDeps = {}) {
       return;
     }
 
-    const decoded = decodeForRefresh(parsedBody.data.token);
+    const decoded = verifyCosignJws(parsedBody.data.token, { allowExpiredForSec: COSIGN_REFRESH_GRACE_SEC });
     if (!decoded.ok) {
       respond(res, 400, {
         ok:     false,
-        code:   "COSIGN_LINK_INVALID",
-        detail: decoded.detail,
+        code:   decoded.reason === "EXPIRED" ? "COSIGN_LINK_EXPIRED" : "COSIGN_LINK_INVALID",
+        detail: `Cosign token rejected (${decoded.reason})`,
       });
       return;
     }
@@ -174,6 +163,14 @@ export function makeCosignRefreshHandler(deps: CosignRefreshHandlerDeps = {}) {
       return;
     }
     const stored = messageSnap.data() as Record<string, unknown>;
+    if (typeof stored["payloadHash"] === "string" && stored["payloadHash"] !== decoded.claims.payloadHash) {
+      respond(res, 400, {
+        ok:     false,
+        code:   "COSIGN_LINK_INVALID",
+        detail: "Token does not match this message",
+      });
+      return;
+    }
     const signers = (stored["signers"] as unknown[] | undefined)
                  ?? (stored["signatures"] as unknown[] | undefined)
                  ?? [];
@@ -186,8 +183,17 @@ export function makeCosignRefreshHandler(deps: CosignRefreshHandlerDeps = {}) {
       return;
     }
 
-    // Mint a fresh JWS with extended exp.
     const nowSec = Math.floor(Date.now() / 1000);
+    if (!(await takeRefreshSlot(firestore, messageId, nowSec))) {
+      respond(res, 429, {
+        ok:     false,
+        code:   "RATE_LIMITED",
+        detail: "Too many fresh-link requests for this wire. Try again later.",
+      });
+      return;
+    }
+
+    // Mint a fresh JWS with extended exp.
     const freshClaims: CosignClaims = {
       iss:         decoded.claims.iss,
       sub:         decoded.claims.sub,

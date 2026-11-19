@@ -124,3 +124,21 @@ describe('cosign API client (fixtures mode)', () => {
     expect(res.code).toBe('COSIGN_LINK_EXPIRED');
   });
 });
+
+describe('cosign API client (production build)', () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    globalThis.fetch = originalFetch;
+  });
+
+  it('calls the live API by default and ignores ?fixture= outside the dev server (PFL-171)', async () => {
+    vi.stubEnv('DEV', false);
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true, messageId: 'm' }) }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const winWithFixture = { location: { search: '?fixture=expired' } } as Pick<Window, 'location'>;
+    const res = await getCosignContext({ messageId: 'm', token: 't' }, { window: winWithFixture });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(res).toEqual({ ok: true, messageId: 'm' });
+  });
+});
