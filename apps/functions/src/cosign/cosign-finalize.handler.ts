@@ -300,6 +300,7 @@ export function makeCosignFinalizeHandler() {
       return;
     }
     const message = messageSnap.data() as {
+      status?:      string;
       payloadHash?: string;
       signers?:     { userId?: string; signerId?: string }[];
       signatures?:  { userId?: string; signerId?: string }[];
@@ -314,11 +315,20 @@ export function makeCosignFinalizeHandler() {
       return;
     }
     const existing = message.signers ?? message.signatures ?? [];
-    if (existing.length > 1) {
+    if (existing.length > 1 || message.status === "COSIGNED") {
       respond(res, 409, {
         ok:     false,
         code:   "ALREADY_COSIGNED",
         detail: "This wire has already been cosigned.",
+      });
+      return;
+    }
+
+    if (message.status !== "PENDING_COSIGN") {
+      respond(res, 409, {
+        ok:     false,
+        code:   "COSIGN_LINK_INVALID",
+        detail: "This message is not waiting for a cosigner.",
       });
       return;
     }

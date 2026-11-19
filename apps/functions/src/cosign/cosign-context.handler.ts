@@ -106,7 +106,8 @@ export function makeCosignContextHandler() {
       return;
     }
 
-    const envelope = adaptStoredEnvelope(snap.data() as Parameters<typeof adaptStoredEnvelope>[0]);
+    const rawDoc = snap.data() as Parameters<typeof adaptStoredEnvelope>[0] & { status?: string };
+    const envelope = adaptStoredEnvelope(rawDoc);
     // The link must be for this exact payload, issued for the signer's company.
     const payloadCompany = (envelope.payload as { companyId?: unknown } | null)?.companyId;
     if (
@@ -121,11 +122,21 @@ export function makeCosignContextHandler() {
       return;
     }
 
-    if (hasCosigner(envelope)) {
+    if (hasCosigner(envelope) || rawDoc.status === "COSIGNED") {
       respond(res, {
         ok:     false,
         code:   "ALREADY_COSIGNED",
         detail: "This wire has already been cosigned. No further action is required.",
+      });
+      return;
+    }
+
+    // PFL-136: only envelopes recorded as PENDING_COSIGN can be cosigned.
+    if (rawDoc.status !== "PENDING_COSIGN") {
+      respond(res, {
+        ok:     false,
+        code:   "COSIGN_LINK_INVALID",
+        detail: "This message is not waiting for a cosigner.",
       });
       return;
     }

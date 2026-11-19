@@ -329,13 +329,13 @@ AI voice cloning broke phone callbacks. Deepfake video calls have already extrac
 | F-SIG-01 | Outbound emails composed in Gmail Web are signed at send time by the ProofLine Chrome extension over the canonical email payload (subject, body, To, Cc, Bcc, threadId, timestamp, nonce) | P0 | Built — signed via the Sign button; Send is not gated (PFL-096) |
 | F-SIG-02 | Each signed email carries a 24h validity window via signed `expiresAt` and a unique nonce | P0 | Partial — nonce dedupe is per instance (PFL-172) |
 | F-SIG-03 | Single-sig path when email is not marked as wire instruction OR amount is within signer's authority | P0 | Built |
-| F-SIG-04 | Co-sign required when email is explicitly marked as wire instruction above signer's per-email authority OR daily aggregate is exceeded; cosign request via Resend with deep link (F-SIG-08) | P0 | Partial — evaluation built; wire marking not mounted (PFL-135); cosign email not sent (PFL-160) |
-| F-SIG-05 | Approver biometric-confirms over the exact same canonical payload (always fresh biometric for cosign — no session shortcut) | P0 | Partial — cosigner assertion not enforced (PFL-171) |
+| F-SIG-04 | Co-sign required when email is explicitly marked as wire instruction above signer's per-email authority OR daily aggregate is exceeded; cosign request via Resend with deep link (F-SIG-08) | P0 | Partial — per-email limit path built end to end (PFL-135/136); the daily-aggregate case is rejected by policy instead of routed to cosign |
+| F-SIG-05 | Approver biometric-confirms over the exact same canonical payload (always fresh biometric for cosign — no session shortcut) | P0 | Built — assertion verified against the approver's passkey, eligibility enforced (PFL-171/136) |
 | F-SIG-06 | Memo / body screened by Gemini for social-engineering patterns when wire-instruction mark is set | P1 | Not built (PFL-028) |
 | F-SIG-07 | Signed envelopes stored immutably; audit log append-only | P0 | Built |
-| F-SIG-08 | Cosign email links are JWS tokens scoped to one messageId, signed by company root, with `exp` claim per company policy. Default 30 min; configurable per company via F-ADM-06 (5 min – 24 h hard cap). | P0 | Partial — server endpoints built (PFL-062); secret binding pending (PFL-169) |
-| F-SIG-09 | Signing surface MUST re-fetch envelope from registry and re-verify `payloadHash` against displayed canonical bytes BEFORE prompting biometric. URL params never trusted as source of truth. | P0 | Partial — check built; counterparty portal on fixtures (PFL-171) |
-| F-SIG-10 | If a cosign link is expired or replayed, signing surface refuses and offers one-tap "request fresh link" that re-emails the eligible approver. | P0 | Partial — refresh link logged, not emailed (PFL-160) |
+| F-SIG-08 | Cosign email links are JWS tokens scoped to one messageId, signed by company root, with `exp` claim per company policy. Default 30 min; configurable per company via F-ADM-06 (5 min – 24 h hard cap). | P0 | Partial — links are HS256 JWS with the `COSIGN_REFRESH_SECRET` server secret (not the company root key), exp from company `cosignTtlMs` (PFL-136) |
+| F-SIG-09 | Signing surface MUST re-fetch envelope from registry and re-verify `payloadHash` against displayed canonical bytes BEFORE prompting biometric. URL params never trusted as source of truth. The internal cosign approval surface is the sign app (web-sign, `/cosign/:messageId`), where approvers' passkeys are registered. | P0 | Built for cosign (PFL-136); bilateral counterparty ceremony moves to web-sign in PFL-182 |
+| F-SIG-10 | If a cosign link is expired or replayed, signing surface refuses and offers one-tap "request fresh link" that re-emails the eligible approver. | P0 | Built — fresh link emailed to stored approvers only, capped at 5/hour (PFL-160/171) |
 | F-SIG-11 | **ALWAYS-ON POLICY VALIDATION.** Every signing request — silent or fresh — runs the FULL policy pipeline server-side: session validation, user-active check, role check, per-email and per-day authority limits, device validation, counterparty status, anomaly heuristics, cosign requirement evaluation. Sessions never shortcut these checks. The session ONLY saves the biometric prompt; it never saves a policy check. | P0 | Partial — pipeline runs on every request; PolicyContext partly in-memory (PFL-172) |
 
 ### 6.4 Per-Recipient Signing Sessions
@@ -544,7 +544,7 @@ Sarah signs first signature (fresh biometric — F-SES-07 bypasses
 Server queues message PENDING_COSIGN
 Resend emails Bob a cosign request with JWS link (F-SIG-08)
    ▼
-Bob taps link on phone · cosign deep-link landing surface runs
+Bob taps link on phone · cosign approval page on the sign app runs
 6-step pre-biometric verification (F-SIG-09)
    ▼
 Bob taps "Approve with Face ID" · fresh biometric · second sig
@@ -1073,7 +1073,7 @@ The product is past its initial build and is being hardened for production. Work
 | Cloud KMS company roots (PFL-126), Base Sepolia anchoring (PFL-114) | Built |
 | Admin dashboard with Firebase Auth: users, devices, sessions, user management, employee invitations (PFL-120–130, PFL-068) | Built |
 | Firestore security rules (PFL-122) | Built |
-| Cosign server endpoints (PFL-062), bilateral API + state machine (PFL-024/025) | Built; cosign assertion not enforced and counterparty portal on fixtures (PFL-171) |
+| Cosign flow (PFL-062/171/136), bilateral API + state machine (PFL-024/025) | Cosign built with approval on web-sign; bilateral counterparty ceremony still on the portal (PFL-182) |
 | Onboarding + bilateral authentication | Stub auth (PFL-166); finalize has a bypass flag (PFL-167) |
 | Business KYB (Baselayer / Cobalt) and officer IDV (Stripe Identity) | Adapter-ready (stub): adapter-ready, running on stub pending vendor access; stub-verified companies require manual review. |
 | Outbound email (Resend) | Adapter exists, not wired; no email is sent (PFL-160) |
@@ -1119,7 +1119,7 @@ These requirements gate any production deployment. They are stated at the requir
 |---|---|---|---|
 | F-PRD-01 | Admin, onboarding and bilateral-drafter routes require a verified Firebase ID token. The acting user and company are derived from the token, never from the request body, query string or local storage. | P0 | Partial — admin built; onboarding + bilateral on stub auth (PFL-166) |
 | F-PRD-02 | Signing routes require the extension-bound token (`/v1/extension/auth`). | P0 | Built |
-| F-PRD-03 | Cosign and counterparty routes are authorized by scoped JWS link tokens. Signer identity is derived server-side from the token and the verified WebAuthn assertion, never from the client body or URL. | P0 | Partial (PFL-171) |
+| F-PRD-03 | Cosign and counterparty routes are authorized by scoped JWS link tokens. Signer identity is derived server-side from the token and the verified WebAuthn assertion, never from the client body or URL. | P0 | Built for cosign (PFL-171/136); bilateral counterparty pending (PFL-182) |
 | F-PRD-04 | No placeholder identities (`dev-user`, `dev-company`) or placeholder bearer tokens exist in any production code path. | P0 | Not met (PFL-166) |
 
 ### 16.2 Fail-Closed Configuration

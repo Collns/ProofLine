@@ -100,10 +100,12 @@ describe('blocking', () => {
     expect(ev.defaultPrevented).toBe(true);
   });
 
-  it('blocks Send while a cosigner is required', () => {
+  it('blocks Send while a cosigner is required, with no "Send unsigned" escape (PFL-136)', () => {
     setSignState(compose, 'cosign_pending');
     send.click();
     expect(gmailSend).not.toHaveBeenCalled();
+    expect(sendBlockReason(compose)).toMatch(/waiting for a cosigner/);
+    expect(compose.querySelector('[data-proofline-send-unsigned-btn]')).toBeNull();
   });
 
   it('blocks an unsigned wire instruction even without a sign attempt', () => {

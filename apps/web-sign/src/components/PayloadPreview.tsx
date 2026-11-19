@@ -1,5 +1,5 @@
 import type { EmailPayload } from '@proofline/types';
-import { formatUSD, truncateHash } from '../lib/format';
+import { formatWireAmount, truncateHash } from '../lib/format';
 
 interface Props {
   payload: EmailPayload;
@@ -30,7 +30,7 @@ export function PayloadPreview({ payload, payloadHash }: Props) {
           <p className="text-xs font-semibold uppercase tracking-wide text-[#B45309]">
             Wire instruction
           </p>
-          <Row label="Amount" value={formatUSD(payload.wirePayload.amount)} mono />
+          <Row label="Amount" value={formatWireAmount(payload.wirePayload.amount)} mono />
           <Row label="Account" value={payload.wirePayload.recipientAccount} mono />
           <Row label="Routing" value={payload.wirePayload.recipientRouting} mono />
           {payload.wirePayload.memo && <Row label="Memo" value={payload.wirePayload.memo} />}

@@ -220,12 +220,11 @@ async function routeContentMessage(
         const code    = err instanceof Error ? extractErrCode(err.message) : "INTERNAL";
         const detail  = err instanceof Error ? err.message : String(err);
         if (sender.tab?.id != null) {
-          void postToTab(sender.tab.id, {
-            type: "SIGN_FAILED",
-            composeId,
-            code,
-            message: detail,
-          });
+          // PFL-136: the sender signed but the wire still needs a cosigner.
+          // Keep Gmail send blocked with the cosign message, not a failure.
+          void postToTab(sender.tab.id, code === "COSIGN_PENDING"
+            ? { type: "PAYLOAD_NEEDS_COSIGN", composeId, approvers: [] }
+            : { type: "SIGN_FAILED", composeId, code, message: detail });
         }
         console.error("[background] sign flow failed", { composeId, code, detail });
       });

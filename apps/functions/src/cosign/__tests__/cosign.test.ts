@@ -159,7 +159,7 @@ function seedEnvelope(messageId: string, overrides: Record<string, unknown> = {}
     envelopeId: messageId,
     payload:    WIRE_PAYLOAD,
     payloadHash: STORED_HASH,
-    status:     "SIGNED",
+    status:     "PENDING_COSIGN",
     createdAt:  Date.now(),
     signatures: [
       {
@@ -626,7 +626,7 @@ describe("PFL-171 cosign hardening", () => {
       .send({ challenge: "challenge-bytes-abc", assertion: COSIGNER_ASSERTION })
       .expect(401);
     expect(fin.body.code).toBe("COSIGN_LINK_INVALID");
-    expect((store["signed_messages"]!["msg-forged"] as Record<string, unknown>)["status"]).toBe("SIGNED");
+    expect((store["signed_messages"]!["msg-forged"] as Record<string, unknown>)["status"]).toBe("PENDING_COSIGN");
   });
 
   it("rejects a link whose payload hash doesn't match the message", async () => {
@@ -656,7 +656,7 @@ describe("PFL-171 cosign hardening", () => {
       .expect(401);
     warn.mockRestore();
     expect(unknown.body.code).toBe("ASSERTION_INVALID");
-    expect((store["signed_messages"]!["msg-bad-assert"] as Record<string, unknown>)["status"]).toBe("SIGNED");
+    expect((store["signed_messages"]!["msg-bad-assert"] as Record<string, unknown>)["status"]).toBe("PENDING_COSIGN");
   });
 
   it.each([

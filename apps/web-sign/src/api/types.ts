@@ -29,7 +29,8 @@ export interface SignRequest {
 // without CORS exposure — so we rely on the body field.)
 export type SignResponse =
   | { ok: true; challenge: WebAuthnChallenge; policyDecision: 'APPROVED'; challengeId: string }
-  | { ok: true; policyDecision: 'COSIGN_REQUIRED'; approvers: string[] }
+  // PFL-136: the sender still signs first; approvers are emailed after finalize.
+  | { ok: true; challenge: WebAuthnChallenge; policyDecision: 'COSIGN_REQUIRED'; challengeId: string; approvers: string[] }
   | { ok: false; error: PolicyErrorCode };
 
 // ── /v1/sign-silent ──────────────────────────────────────────────────────────
@@ -56,7 +57,14 @@ export interface SignFinalizeRequest {
 }
 
 export type SignFinalizeResponse =
-  | { ok: true; envelope: SignedEnvelope; banner: string; sessionToken?: string }
+  | {
+      ok: true;
+      envelope: SignedEnvelope;
+      banner: string;
+      sessionToken?: string;
+      /** PFL-136: the wire still needs a cosigner; it must not be sent yet. */
+      cosign?: { status: 'PENDING_COSIGN'; approverCount: number; emailed: boolean; linkExpiresAt: number };
+    }
   | { ok: false; error: PolicyErrorCode };
 
 // ── /v1/extension/auth ───────────────────────────────────────────────────────

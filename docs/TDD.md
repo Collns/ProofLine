@@ -161,7 +161,7 @@ Status values: **Built** (real, in the production path) · **Partial** (real but
 | Admin dashboard (Firebase Auth: users, devices, sessions, user management) | Built | PFL-120..130 |
 | Employee invitations | Built | PFL-068 |
 | Firestore security rules | Built | PFL-122 |
-| Cosign server endpoints | Partial | PFL-062; cosigner assertion not enforced, counterparty portal in fixture mode (PFL-171) |
+| Cosign flow | Built (server + web-sign) | PFL-062/171/136: signed link tokens, verified cosigner assertion + eligibility, approval page on web-sign; extension auto-release after approval is a follow-up |
 | Bilateral API + state machine | Partial | PFL-024/025; route group on stub auth (PFL-166) |
 | Onboarding API | Partial | Stub auth (PFL-166); `demoMode` finalize bypass (PFL-167) |
 | Business KYB (Baselayer / Cobalt) | Adapter-ready (stub) | adapter-ready, running on stub pending vendor access; stub-verified companies require manual review |
@@ -245,6 +245,16 @@ Status values: **Built** (real, in the production path) · **Partial** (real but
   Storage:  chrome.storage.local (isolated from Gmail
             page JS)
   WebAuthn: Delegated to popup on proofline.app/sign/*
+
+  SIGN APP (apps/web-sign)
+  ──────────────────────────────────────────────────
+  Where:    proofline-sign.web.app
+  Role:     WebAuthn ceremonies: passkey registration,
+            sender signing popup (/sign/start, /sign/silent),
+            internal cosign approval (/cosign/:messageId)
+  Auth:     Passkeys are registered for RP ID
+            proofline-sign.web.app, so every ceremony that
+            uses them runs on this origin
 
   WEB ADMIN APP (apps/web-admin)
   ──────────────────────────────────────────────────
@@ -728,33 +738,49 @@ Notes on the current implementation:
 
 ### 5.2 Sign + Co-Sign
 
+Wire over the sender's per-email limit (policy decision `COSIGN_REQUIRED`).
+The sender always signs first; the approval surface is the sign app
+(web-sign), because approvers' passkeys are registered for
+`proofline-sign.web.app` and browsers will not use them on another site.
+
 ```
-Sarah    Web Sender    Functions    Firestore    Resend    Bob's email/phone
-  │          │             │           │           │              │
-  │─compose─▶│             │           │           │              │
-  │          │─/draft─────▶│           │           │              │
-  │          │             │─create wire▶          │              │
-  │          │◀─wire+id────│                                      │
-  │          │ amount > Sarah's limit → cosign required           │
-  │          │─/request-cosign▶                                   │
-  │          │             │─sendCosignRequest────▶│              │
-  │          │             │                       │─email────────▶
-  │          │                                                    │
-  │ (Sarah waits)                                                 │
-  │                                                               │
-  │                                              │ Bob clicks link│
-  │                                              │ shows EXACT    │
-  │                                              │ payload        │
-  │                                              │                │
-  │                                              │ biometric      │
-  │                                              │                │
-  │          │             │◀─/sign(assertion)───────────────────│
-  │          │             │ verify Bob's role + sig             │
-  │          │             │ append both sigs to envelope        │
-  │          │             │ trigger anchor batch                │
-  │          │◀─signed─────│                                     │
-  │◀─link────│                                                   │
+Sarah (Gmail +   web-sign       Functions             Firestore        Resend     Bob (approver)
+extension)       popup                                                             on web-sign
+  │─Sign──────────▶│                                                                   │
+  │                │─POST /v1/sign─▶ policy: COSIGN_REQUIRED                           │
+  │                │                 approvers = active owners/managers                │
+  │                │                 of the company, excluding Sarah                   │
+  │                │◀─challenge + approvers (none → 422 NO_ELIGIBLE_COSIGNER)          │
+  │                │ Sarah: fresh biometric                                            │
+  │                │─POST /v1/sign/finalize▶ verify Sarah's assertion                  │
+  │                │                 envelope status PENDING_COSIGN ─▶│                │
+  │                │                 cosign.approverEmails            │                │
+  │                │                 mint HS256 link JWS (exp = cosignTtlMs)           │
+  │                │                 sendCosignRequest(approvers) ──────────▶│         │
+  │                │◀─{cosign: PENDING_COSIGN}                               │─email──▶│
+  │◀─COSIGN_PENDING (send stays blocked, no "send unsigned")                           │
+  │                                                                                    │
+  │                                  GET /v1/cosign/:id?token  ◀───── /cosign/:id?t= ──│
+  │                                  verify JWS signature, payloadHash, company        │
+  │                                  status must be PENDING_COSIGN                     │
+  │                                  ───── envelope + payload + challenge ───────────▶│
+  │                                                     F-SIG-09 checks: recompute    │
+  │                                                     hash, link ↔ message, expiry, │
+  │                                                     company; show exact wire      │
+  │                                                     Bob: fresh biometric          │
+  │                                  POST /v1/cosign/:id/finalize ◀───────────────────│
+  │                                  verify Bob's assertion (RP proofline-sign.web.app)│
+  │                                  Bob: active owner/manager, same company, not the  │
+  │                                  sender, device not revoked, on approver list      │
+  │                                  append second signature, status COSIGNED,         │
+  │                                  queue anchor ────────────────▶│                   │
+  │                                                                                    │
+  │─GET /v1/sign/status/:id ─▶ COSIGNED  (extension release: follow-up)                │
 ```
+
+Refresh (`POST /v1/cosign/:id/refresh`) re-mints the link for a correctly
+signed token up to 7 days past expiry, emails only the stored approvers and
+is capped at 5 per hour per message.
 
 ### 5.3 Async Bilateral
 
@@ -1388,6 +1414,20 @@ Memo: "${text}"`;
 - Sensitive admin actions (revoke device, revoke session, change policy) require additional fresh WebAuthn assertion
 
 ### 11.2 Counterparty Portal Auth
+
+Internal cosign approval does **not** run on the counterparty portal. It runs
+on the sign app at `https://proofline-sign.web.app/cosign/{messageId}?t={token}`
+(§5.2), because approvers' passkeys are registered for RP ID
+`proofline-sign.web.app` and `web.app` is a public suffix, so the portal is a
+different site. The cosign token is an HS256 JWS (`COSIGN_REFRESH_SECRET`)
+scoped to one messageId and payloadHash; the server verifies its signature
+before reading any claim. The approver's identity comes from the verified
+assertion's credential, never from the request.
+
+The same RP-ID constraint applies to bilateral counterparty signing; moving
+that ceremony to web-sign is tracked in PFL-182.
+
+The rest of this section covers bilateral documents.
 
 Counterparty receives a signed link:
 ```

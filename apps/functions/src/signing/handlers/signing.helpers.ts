@@ -33,6 +33,13 @@ import type { SessionTokenPayload as SessionsTokenPayload } from "@proofline/ses
 interface EmailSignedEnvelope {
   envelopeId: string;
   status: "SIGNED" | "PENDING_COSIGN" | "COSIGNED";
+  /** PFL-136: who may cosign and until when (unix seconds). */
+  cosign?: {
+    approverUserIds: string[];
+    approverEmails:  string[];
+    requestedAt:     number;
+    linkExpiresAt:   number;
+  };
   signatures: Array<{
     signerId: string;
     credentialId: string;
@@ -144,6 +151,8 @@ export interface PendingChallenge {
   payload: EmailPayload;
   /** PFL-028: screening from /v1/sign, copied onto the signed message. */
   screening?: SigningScreening;
+  /** PFL-136: policy required a cosigner when the challenge was issued. */
+  cosignRequired?: boolean;
 }
 
 export async function storePendingChallenge(
