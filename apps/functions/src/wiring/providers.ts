@@ -21,6 +21,9 @@ import type {
   RegistryEvent,
 } from "../api/onboarding/finalize.handler.js";
 import type { OnboardingRouterDeps } from "../api/onboarding/router.js";
+import { makeStripeIdentityProvider } from "@proofline/kyb/providers/stripe-identity.js";
+
+import type { StripeIdentityProvider } from "../api/onboarding/enroll-officer.handler.js";
 import { makeRealKmsProvider } from "./gcp-kms-provider.js";
 import { stubKmsProvider, stubKybProvider, stubStripeIdentityProvider } from "./stubs.js";
 
@@ -42,6 +45,31 @@ export function makeKmsProvider(config: Pick<AppConfig, "providers" | "kms">): K
     throw new Error("KMS_PROVIDER=gcp requires a project and KMS_KEYRING");
   }
   return makeRealKmsProvider(config.kms);
+}
+
+// ─── Officer identity (IDV) ──────────────────────────────────────────────────
+
+export function makeIdvProvider(config: Pick<AppConfig, "providers" | "idv">): StripeIdentityProvider {
+  if (config.providers.idv === "stub") return stubStripeIdentityProvider;
+  if (!config.idv?.stripeSecretKey) {
+    throw new Error("IDV_PROVIDER=stripe requires STRIPE_SECRET_KEY");
+  }
+  const stripe = makeStripeIdentityProvider({ secretKey: config.idv.stripeSecretKey });
+  return {
+    provider: "stripe",
+    async verifyOfficer(input) {
+      const r = await stripe.verifyOfficer(input);
+      const raw = r.raw as { clientSecret?: string | null; sessionId?: string };
+      return {
+        ok:                r.ok,
+        vendorRef:         r.vendorRef,
+        documentVerified:  r.documentVerified,
+        livenessConfirmed: r.livenessConfirmed,
+        matchedExpected:   r.matchedExpected,
+        raw:               { clientSecret: raw.clientSecret ?? null, sessionId: raw.sessionId ?? r.vendorRef },
+      };
+    },
+  };
 }
 
 // ─── Onboarding anchor ───────────────────────────────────────────────────────
@@ -75,10 +103,10 @@ export function makeOnboardingDeps(
 ): OnboardingRouterDeps {
   return {
     sendVerificationCode:   (to, code) => deps.email.sendVerificationCode(to, code),
-    // KYB / IDV: loadConfig only accepts "stub" until PFL-162 wires the
-    // Baselayer / Cobalt / Stripe Identity adapters.
+    // KYB: loadConfig only accepts "stub" until PFL-162 wires Baselayer /
+    // Cobalt. IDV: stub or Stripe Identity (PFL-176).
     kybProvider:            stubKybProvider,
-    stripeIdentityProvider: stubStripeIdentityProvider,
+    stripeIdentityProvider: makeIdvProvider(config),
     kmsProvider:            makeKmsProvider(config),
     anchorProvider:         makeOnboardingAnchorProvider(deps.anchor),
   };

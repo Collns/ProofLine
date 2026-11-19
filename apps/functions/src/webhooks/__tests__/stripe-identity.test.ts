@@ -102,15 +102,25 @@ function makeFakeReqRes(body: object, headers: Record<string, string> = {}) {
 // ─── Event factory ────────────────────────────────────────────────────────────
 
 function makeVerifiedEvent(sessionId: string): Stripe.Event {
+  return makeSessionEvent(sessionId, "identity.verification_session.verified", "verified");
+}
+
+function makeSessionEvent(
+  sessionId: string,
+  type: string,
+  status: string,
+  lastErrorCode?: string,
+): Stripe.Event {
   return {
     id: "evt_test_001",
-    type: "identity.verification_session.verified",
+    type,
     object: "event",
     data: {
       object: {
         id: sessionId,
         object: "identity.verification_session",
-        status: "verified",
+        status,
+        last_error: lastErrorCode ? { code: lastErrorCode, reason: "x" } : null,
       } as unknown as Stripe.Event.Data["object"],
     },
     created: Math.floor(Date.now() / 1000),
@@ -206,7 +216,42 @@ describe("makeStripeIdentityWebhookHandler", () => {
     const enrollment = updated?.["officerEnrollment"] as Record<string, unknown>;
     expect(enrollment?.["status"]).toBe("verified");
     expect(enrollment?.["verifiedAt"]).toBeTruthy();
+    expect(enrollment?.["provider"]).toBe("stripe");
   });
+
+  // PFL-176: a session that needs input again or was canceled is recorded
+  // (without verifying the officer) so the owner can retry.
+  for (const [type, expected, code] of [
+    ["identity.verification_session.requires_input", "requires_input", "document_expired"],
+    ["identity.verification_session.canceled", "canceled", undefined],
+  ] as const) {
+    it(`records ${expected} without verifying the officer`, async () => {
+      const db = makeFakeFirestore({
+        id:   "company-acme",
+        data: {
+          onboardingStatus:  "pending_kyc",
+          officerEnrollment: { stripeSessionId: FAKE_SESSION_ID, officerEmail: "sarah@acme.com" },
+        },
+      });
+      const handler = makeStripeIdentityWebhookHandler({
+        stripe:        makeFakeStripeWebhooks() as never,
+        firestore:     db as never,
+        webhookSecret: FAKE_WEBHOOK_SECRET,
+      });
+      const { req, res } = makeFakeReqRes(makeSessionEvent(FAKE_SESSION_ID, type, expected, code), {
+        "stripe-signature": "valid-sig",
+      });
+      await handler(req as never, res as never);
+
+      expect(res._status()).toBe(200);
+      const updated = db._store.get("company-acme");
+      expect(updated?.["onboardingStatus"]).toBe("pending_kyc");
+      const enrollment = updated?.["officerEnrollment"] as Record<string, unknown>;
+      expect(enrollment?.["status"]).toBe(expected);
+      expect(enrollment?.["lastErrorCode"]).toBe(code ?? null);
+      expect(enrollment?.["verifiedAt"]).toBeUndefined();
+    });
+  }
 
   it("is idempotent — skips already-verified sessions", async () => {
     const db = makeFakeFirestore({
