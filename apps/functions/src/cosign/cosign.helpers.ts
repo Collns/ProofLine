@@ -10,6 +10,7 @@ import * as crypto from "node:crypto";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 
 import type { CosignSignerInfo } from "./cosign.types.js";
+import { readSecret } from "../config/secrets.js";
 
 // ─── JWS decode (structural — no signature check) ────────────────────────────
 //
@@ -74,11 +75,11 @@ export function decodeCosignJws(token: string): DecodeOk | DecodeFail {
 // ─── JWS mint (HS256 against a refresh secret) ───────────────────────────────
 //
 // Used by the refresh endpoint. The original sign flow issues JWS via
-// company KMS; refresh re-issues with the same structural shape but a
-// hackathon HMAC. Once KMS lands, both paths converge.
+// company KMS; refresh re-issues with the same structural shape signed
+// with an HMAC secret (COSIGN_REFRESH_SECRET, no fallback; PFL-169).
 
 function getRefreshSecret(): string {
-  return process.env["COSIGN_REFRESH_SECRET"] ?? "dev-cosign-refresh-secret-change-in-prod";
+  return readSecret("COSIGN_REFRESH_SECRET");
 }
 
 export function mintCosignJws(claims: CosignClaims): string {
