@@ -96,11 +96,20 @@ describe("loadConfig — provider rules", () => {
       .toEqual(["ANCHOR_CONTRACT_ADDRESS must be a 0x-prefixed 20-byte address"]);
   });
 
-  it("keeps KYB / IDV on stub until PFL-162 wires the adapters", () => {
-    expect(problemsOf({ KYB_PROVIDER: "baselayer", IDV_PROVIDER: "stripe" })).toEqual([
+  it("keeps KYB on stub until PFL-162 wires the adapters", () => {
+    expect(problemsOf({ KYB_PROVIDER: "baselayer" })).toEqual([
       "KYB_PROVIDER=baselayer is not wired into the functions app yet (PFL-162); use stub",
-      "IDV_PROVIDER=stripe is not wired into the functions app yet (PFL-162); use stub",
     ]);
+  });
+
+  it("accepts IDV_PROVIDER=stripe only with both Stripe keys (PFL-176)", () => {
+    expect(problemsOf({ IDV_PROVIDER: "stripe", STRIPE_SECRET_KEY: "sk_test_1" })).toEqual([
+      "IDV_PROVIDER=stripe is selected but STRIPE_IDENTITY_WEBHOOK_SECRET is not set",
+    ]);
+    const cfg = loadConfig({ IDV_PROVIDER: "stripe", STRIPE_SECRET_KEY: "sk_test_1", STRIPE_IDENTITY_WEBHOOK_SECRET: "whsec_1" });
+    expect(cfg.providers.idv).toBe("stripe");
+    expect(cfg.idv).toEqual({ stripeSecretKey: "sk_test_1", stripeWebhookSecret: "whsec_1" });
+    expect(JSON.stringify(describeConfig(cfg))).not.toContain("sk_test_1");
   });
 
   it("describeConfig never includes keys or secrets", () => {

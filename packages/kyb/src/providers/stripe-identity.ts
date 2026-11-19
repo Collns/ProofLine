@@ -44,9 +44,9 @@ export function makeStripeIdentityProvider(config: StripeIdentityConfig): KYBPro
     new Stripe(config.secretKey, { apiVersion: "2026-04-22.dahlia" });
 
   return {
-    // verifyBusiness is Middesk's domain — this provider throws if called.
+    // Business verification is the KYB provider's job (Baselayer / Cobalt).
     verifyBusiness: async () => {
-      throw new Error("WRONG_PROVIDER: Use makeMiddeskProvider for verifyBusiness");
+      throw new Error("WRONG_PROVIDER: Stripe Identity handles verifyOfficer only; use the KYB provider for verifyBusiness");
     },
 
     async verifyOfficer(input: OfficerKYCInput): Promise<OfficerVerification> {

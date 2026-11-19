@@ -50,7 +50,7 @@ const kmsProvider = {
   signWithKms:          vi.fn(async () => "c2ln"),
   exportPublicKey:      vi.fn(async () => "MFkw"),
 };
-const stripeIdentityProvider = { verifyOfficer: vi.fn() };
+const stripeIdentityProvider = { provider: "stub", verifyOfficer: vi.fn() };
 
 function buildApp(userId: string) {
   const app = express();
@@ -154,6 +154,7 @@ describe("POST /v1/onboard/enroll-officer — synchronous verification", () => {
     const company = store["companies"]!["co-1"]!;
     expect(company["onboardingStatus"]).toBe("pending_finalize");
     expect((company["officerEnrollment"] as { verifiedAt?: number }).verifiedAt).toBeGreaterThan(0);
+    expect((company["officerEnrollment"] as { provider?: string }).provider).toBe("stub");
   });
 
   it("keeps a pending session pending (webhook completes it)", async () => {

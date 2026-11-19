@@ -45,6 +45,11 @@ const PROOFLINE_AUTH_JWT_SECRET = defineSecret("PROOFLINE_AUTH_JWT_SECRET");
 // throws if either is missing or shorter than 32 characters.
 const BILATERAL_JWT_SECRET  = defineSecret("BILATERAL_JWT_SECRET");
 const COSIGN_REFRESH_SECRET = defineSecret("COSIGN_REFRESH_SECRET");
+// PFL-176: Stripe Identity keys. Read by the api (IDV_PROVIDER=stripe) and
+// the webhooks function. Bound as secrets so they never sit in a plain env
+// file; create placeholder values while IDV_PROVIDER=stub.
+const STRIPE_SECRET_KEY              = defineSecret("STRIPE_SECRET_KEY");
+const STRIPE_IDENTITY_WEBHOOK_SECRET = defineSecret("STRIPE_IDENTITY_WEBHOOK_SECRET");
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -661,7 +666,10 @@ export const api = onRequest(
     region:  "us-central1",
     cors:    false,
     memory:  "256MiB",
-    secrets: [PROOFLINE_AUTH_JWT_SECRET, BILATERAL_JWT_SECRET, COSIGN_REFRESH_SECRET],
+    secrets: [
+      PROOFLINE_AUTH_JWT_SECRET, BILATERAL_JWT_SECRET, COSIGN_REFRESH_SECRET,
+      STRIPE_SECRET_KEY, STRIPE_IDENTITY_WEBHOOK_SECRET,
+    ],
   },
   publicApp,
 );
@@ -685,7 +693,12 @@ webhooksApp.post(
 );
 
 export const webhooks = onRequest(
-  { region: "us-central1", cors: false, memory: "256MiB" },
+  {
+    region:  "us-central1",
+    cors:    false,
+    memory:  "256MiB",
+    secrets: [STRIPE_SECRET_KEY, STRIPE_IDENTITY_WEBHOOK_SECRET],
+  },
   webhooksApp,
 );
 

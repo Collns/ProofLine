@@ -23,8 +23,9 @@
  *   - Every problem is collected and reported together in one ConfigError.
  *   - KYB/IDV may run on stub in any environment (no vendor keys yet);
  *     stub-verified companies are routed to manual review (PFL-162/177).
- *     The real KYB/IDV adapters are selected here but wired in PFL-162,
- *     so non-stub values are rejected until then rather than ignored.
+ *   - IDV_PROVIDER=stripe needs STRIPE_SECRET_KEY + STRIPE_IDENTITY_WEBHOOK_SECRET
+ *     (PFL-176). The real KYB adapters are wired in PFL-162, so non-stub
+ *     KYB values are rejected until then rather than ignored.
  */
 
 export type ProoflineEnv = "production" | "staging" | "development";
@@ -49,6 +50,7 @@ export interface AppConfig {
   email?:  { apiKey: string; fromDomain: string };
   anchor?: { rpcUrl: string; deployerKey: string; contractAddress: string };
   kms?:    { projectId: string; location: string; keyRing: string };
+  idv?:    { stripeSecretKey: string; stripeWebhookSecret: string };
 }
 
 export class ConfigError extends Error {
@@ -147,9 +149,6 @@ export function loadConfig(env: Env = process.env): AppConfig {
   if (providers.kyb !== "stub") {
     problems.push(`KYB_PROVIDER=${providers.kyb} is not wired into the functions app yet (PFL-162); use stub`);
   }
-  if (providers.idv !== "stub") {
-    problems.push(`IDV_PROVIDER=${providers.idv} is not wired into the functions app yet (PFL-162); use stub`);
-  }
 
   // ── Provider settings ────────────────────────────────────────────────────
   const config: AppConfig = { env: appEnv, providers };
@@ -185,6 +184,14 @@ export function loadConfig(env: Env = process.env): AppConfig {
       projectId: projectId ?? "",
       location:  val(env, "KMS_LOCATION") ?? "global",
       keyRing:   val(env, "KMS_KEYRING") ?? "",
+    };
+  }
+
+  if (providers.idv === "stripe") {
+    requireKeys(env, "IDV_PROVIDER=stripe", ["STRIPE_SECRET_KEY", "STRIPE_IDENTITY_WEBHOOK_SECRET"], problems);
+    config.idv = {
+      stripeSecretKey:     val(env, "STRIPE_SECRET_KEY") ?? "",
+      stripeWebhookSecret: val(env, "STRIPE_IDENTITY_WEBHOOK_SECRET") ?? "",
     };
   }
 

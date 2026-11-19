@@ -7,9 +7,17 @@ import { describe, it, expect, vi } from "vitest";
 import type { AnchorProvider, Hex32 } from "@proofline/anchoring";
 
 import { loadConfig } from "../../config/config.js";
-import { makeEmailProvider, makeKmsProvider, makeOnboardingAnchorProvider, makeOnboardingDeps } from "../providers.js";
+import { makeEmailProvider, makeIdvProvider, makeKmsProvider, makeOnboardingAnchorProvider, makeOnboardingDeps } from "../providers.js";
 import { makeAnchorProviderFromConfig } from "../../anchoring/service-factory.js";
-import { stubKmsProvider } from "../stubs.js";
+import { stubKmsProvider, stubStripeIdentityProvider } from "../stubs.js";
+
+const stripeVerifyOfficer = vi.fn(async () => ({
+  ok: false, vendorRef: "vs_123", documentVerified: false, livenessConfirmed: false, matchedExpected: false,
+  raw: { clientSecret: "vs_123_secret", sessionId: "vs_123" },
+}));
+vi.mock("@proofline/kyb/providers/stripe-identity.js", () => ({
+  makeStripeIdentityProvider: vi.fn(() => ({ verifyOfficer: stripeVerifyOfficer })),
+}));
 
 describe("provider factories", () => {
   it("uses stubs only when selected", () => {
@@ -58,5 +66,26 @@ describe("makeOnboardingDeps", () => {
     expect(sendVerificationCode).toHaveBeenCalledWith("owner@acme.test", "123456");
     expect(log.mock.calls.flat().join(" ")).not.toContain("123456");
     log.mockRestore();
+  });
+});
+
+describe("makeIdvProvider (PFL-176)", () => {
+  it("returns the labelled stub when IDV_PROVIDER=stub", () => {
+    const p = makeIdvProvider(loadConfig({}));
+    expect(p).toBe(stubStripeIdentityProvider);
+    expect(p.provider).toBe("stub");
+  });
+
+  it("builds the Stripe provider, labelled, with the session client secret", async () => {
+    const p = makeIdvProvider(loadConfig({
+      IDV_PROVIDER: "stripe", STRIPE_SECRET_KEY: "sk_test_1", STRIPE_IDENTITY_WEBHOOK_SECRET: "whsec_1",
+    }));
+    expect(p.provider).toBe("stripe");
+    const r = await p.verifyOfficer({ email: "sarah@acme.test" });
+    expect(r).toMatchObject({ ok: false, vendorRef: "vs_123", raw: { clientSecret: "vs_123_secret", sessionId: "vs_123" } });
+  });
+
+  it("throws instead of falling back when the key is missing", () => {
+    expect(() => makeIdvProvider({ providers: { idv: "stripe" } as never })).toThrow(/STRIPE_SECRET_KEY/);
   });
 });

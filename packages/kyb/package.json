@@ -20,5 +20,9 @@
         "@proofline/types": "workspace:*",
         "stripe": "22.1.1",
         "zod": "catalog:"
+    },
+    "exports": {
+        ".": "./dist/index.js",
+        "./providers/*": "./dist/providers/*"
     }
 }

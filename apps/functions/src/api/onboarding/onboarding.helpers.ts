@@ -51,6 +51,12 @@ export interface CompanyDoc {
     stripeClientSecret: string;
     officerEmail: string;
     verifiedAt?: number;
+    /** Identity provider that produced this result ("stripe" | "stub"). PFL-176. */
+    provider?: string;
+    /** pending | verified | requires_input | canceled (Stripe session status). */
+    status?: string;
+    /** Stripe last_error.code when the session needs input again. */
+    lastErrorCode?: string | null;
   };
   kmsKeyName?: string;
   rootPublicKey?: string;
