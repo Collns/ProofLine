@@ -8,7 +8,8 @@
   "exports": {
     ".":        "./dist/index.js",
     "./banner": "./dist/banner.js",
-    "./stub":   "./dist/providers/stub.js"
+    "./stub":   "./dist/providers/stub.js",
+    "./resend": "./dist/providers/resend.js"
   },
   "scripts": {
     "build":     "tsc",

@@ -6,8 +6,8 @@
  *
  *   - `anchorBatchScheduler` (scheduled): runs every 5 minutes, drains
  *     anchor_queue, posts a Merkle root to Base Sepolia (PFL-027).
- *   - `anchorAdmin` (HTTP): POST /v1/admin/anchor/run for demo prep
- *     and live-demo triggers (TDD §6.3).
+ *   - `anchorAdmin` (HTTP): POST /v1/admin/anchor/run (manual anchor
+ *     trigger; auth lock-down tracked in PFL-170).
  *   - `api` (HTTP): public verify endpoint GET /v1/verify/:id (PFL-023).
  *
  *    - `webhooks` (HTTP): POST /webhooks/stripe-identity (PFL-013).
@@ -20,8 +20,12 @@
  *   Anything that touches env-dependent config (anchor provider, chain
  *   reader, Firestore) is built LAZILY on the first request that needs
  *   it. This lets `firebase deploy` analyse the bundle even when secrets
- *   (BASE_SEPOLIA_RPC etc.) aren't present at build time. A misconfigured
- *   prod env surfaces as a request-time 500 instead of a deploy failure.
+ *   aren't present at build time.
+ *
+ * Configuration (PFL-169): loadConfig() validates PROOFLINE_ENV and the
+ *   explicit *_PROVIDER selection once per instance. A misconfigured
+ *   instance logs every problem and answers 503 CONFIG_INVALID on every
+ *   request instead of falling back to stubs.
  */
 
 import express from "express";
@@ -36,6 +40,11 @@ import { defineSecret } from "firebase-functions/params";
 // secret is set via `firebase functions:secrets:set PROOFLINE_AUTH_JWT_SECRET`.
 // Only the `api` export needs this — anchorAdmin/webhooks don't touch it.
 const PROOFLINE_AUTH_JWT_SECRET = defineSecret("PROOFLINE_AUTH_JWT_SECRET");
+// PFL-169: the bilateral link and cosign refresh secrets used to fall back
+// to hardcoded strings because they were never bound. Bound here; readSecret
+// throws if either is missing or shorter than 32 characters.
+const BILATERAL_JWT_SECRET  = defineSecret("BILATERAL_JWT_SECRET");
+const COSIGN_REFRESH_SECRET = defineSecret("COSIGN_REFRESH_SECRET");
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -43,9 +52,14 @@ import { getFirestore } from "firebase-admin/firestore";
 import {
   makeAnchorAdminRouter,
   makeAnchorRunDeps,
-  makeStubAnchorProvider,
   runAnchorBatchOnce,
 } from "./anchoring/index.js";
+
+// --- PFL-169: explicit, fail-closed configuration
+import { loadConfig, describeConfig, ConfigError, type AppConfig } from "./config/config.js";
+import { assertSecrets, API_SECRETS } from "./config/secrets.js";
+import { makeEmailProvider, makeOnboardingDeps } from "./wiring/providers.js";
+import type { EmailProvider } from "@proofline/email";
 import type { RunAnchorDeps } from "./anchoring/index.js";
 
 import { makeVerifyRouter, makeVerifyService } from "./verify/index.js";
@@ -59,14 +73,12 @@ import { makeSignHandler }         from "./signing/handlers/sign.handler.js";
 import { makeSignSilentHandler }   from "./signing/handlers/sign-silent.handler.js";
 import { makeSignFinalizeHandler } from "./signing/handlers/sign-finalize.handler.js";
 import { makeOnboardingRouter }    from "./api/onboarding/router.js";
-import { makeStubOnboardingDeps } from "./wiring/stubs.js";
 import { makeFirestorePolicyContext } from "./wiring/firestore-policy-context.js";
 
 // --- PFL-025: bilateral HTTP wiring
 import { makeBilateralRouter }         from "./api/bilateral/router.js";
 import { makeBilateralService }        from "@proofline/bilateral";
 import { makeFirestoreBilateralStore } from "./api/bilateral/firestore-store.js";
-import { makeStubEmailProvider } from "@proofline/email/stub";
 
 // --- PFL-061: extension auth HTTP wiring
 import { makeExtensionAuthHandler } from "./auth/extension-auth.handler.js";
@@ -151,13 +163,77 @@ function corsMiddleware(
   next();
 }
 
+// ─── Configuration (PFL-169) ──────────────────────────────────────────────────
+
+let cachedConfig: AppConfig | null = null;
+let configFailureLogged = false;
+
+/** Validated config; throws ConfigError (logged once per instance). */
+function getConfig(): AppConfig {
+  if (cachedConfig) return cachedConfig;
+  try {
+    cachedConfig = loadConfig(process.env);
+  } catch (err) {
+    if (!configFailureLogged) {
+      configFailureLogged = true;
+      console.error(JSON.stringify({
+        level: "error",
+        event: "config.invalid",
+        problems: err instanceof ConfigError ? err.problems : [String(err)],
+      }));
+    }
+    throw err;
+  }
+  console.info(JSON.stringify({ level: "info", event: "config.loaded", ...describeConfig(cachedConfig) }));
+  return cachedConfig;
+}
+
+/**
+ * Express guard: refuses every request while the instance is
+ * misconfigured. `secrets` lists the Functions secrets this app needs.
+ */
+function configGuard(secrets: readonly (typeof API_SECRETS)[number][] = []): express.RequestHandler {
+  let secretsFailureLogged = false;
+  return (_req, res, next) => {
+    try {
+      getConfig();
+      try {
+        assertSecrets(secrets);
+      } catch (err) {
+        if (!secretsFailureLogged) {
+          secretsFailureLogged = true;
+          console.error(JSON.stringify({
+            level: "error",
+            event: "config.invalid",
+            problems: err instanceof ConfigError ? err.problems : [String(err)],
+          }));
+        }
+        throw err;
+      }
+    } catch {
+      res.status(503).json({
+        error: { code: "CONFIG_INVALID", message: "Service is not configured correctly." },
+      });
+      return;
+    }
+    next();
+  };
+}
+
 // ─── Lazy dependency factory ──────────────────────────────────────────────────
 
 let cachedAnchorDeps: RunAnchorDeps | null = null;
 function anchorDeps(): RunAnchorDeps {
   if (cachedAnchorDeps) return cachedAnchorDeps;
-  cachedAnchorDeps = makeAnchorRunDeps();
+  cachedAnchorDeps = makeAnchorRunDeps(getConfig());
   return cachedAnchorDeps;
+}
+
+let cachedEmailProvider: EmailProvider | null = null;
+function emailProvider(): EmailProvider {
+  if (cachedEmailProvider) return cachedEmailProvider;
+  cachedEmailProvider = makeEmailProvider(getConfig());
+  return cachedEmailProvider;
 }
 
 // ─── Anchor scheduler (every 5 minutes) ──────────────────────────────────────
@@ -179,6 +255,7 @@ export const anchorBatchScheduler = onSchedule(
 
 const adminApp = express();
 adminApp.use(corsMiddleware);
+adminApp.use(configGuard());
 adminApp.use(express.json());
 
 let cachedAdminRouter: express.Router | null = null;
@@ -197,20 +274,17 @@ export const anchorAdmin = onRequest(
 // ─── Public API (verify + sign + onboard + bilateral) ────────────────────────
 
 const publicApp = express();
+publicApp.use(configGuard(API_SECRETS));
 publicApp.use(express.json());
 
 let cachedVerifyRouter: express.Router | null = null;
 function verifyRouter(): express.Router {
   if (cachedVerifyRouter) return cachedVerifyRouter;
   const firestore = getFirestore();
-  let chainReader;
-  try {
-    const deps = anchorDeps();
-    chainReader = { readAnchor: deps.anchor.readAnchor.bind(deps.anchor) };
-  } catch {
-    const stub = makeStubAnchorProvider();
-    chainReader = { readAnchor: stub.readAnchor.bind(stub) };
-  }
+  // PFL-169: the chain reader comes from the selected anchor provider;
+  // no silent stub fallback.
+  const { anchor } = anchorDeps();
+  const chainReader = { readAnchor: anchor.readAnchor.bind(anchor) };
   const service = makeVerifyService({ firestore, chainReader });
   cachedVerifyRouter = makeVerifyRouter({ service });
   return cachedVerifyRouter;
@@ -283,7 +357,9 @@ publicApp.use("/v1/sign-silent", corsMiddleware, requireExtensionAuth,
 let cachedOnboardingRouter: express.Router | null = null;
 function onboardingRouter(): express.Router {
   if (cachedOnboardingRouter) return cachedOnboardingRouter;
-  cachedOnboardingRouter = makeOnboardingRouter(makeStubOnboardingDeps());
+  cachedOnboardingRouter = makeOnboardingRouter(
+    makeOnboardingDeps(getConfig(), { email: emailProvider(), anchor: anchorDeps().anchor }),
+  );
   return cachedOnboardingRouter;
 }
 
@@ -309,7 +385,7 @@ function bilateralRouter(): express.Router {
       store: makeFirestoreBilateralStore(),
       now:   () => Math.floor(Date.now() / 1000),
     }),
-    email: makeStubEmailProvider(),
+    email: emailProvider(),
     counterpartyPortalBaseUrl:
       process.env["COUNTERPARTY_PORTAL_URL"]
       ?? "https://counterparty.proofline.web.app",
@@ -585,7 +661,7 @@ export const api = onRequest(
     region:  "us-central1",
     cors:    false,
     memory:  "256MiB",
-    secrets: [PROOFLINE_AUTH_JWT_SECRET],
+    secrets: [PROOFLINE_AUTH_JWT_SECRET, BILATERAL_JWT_SECRET, COSIGN_REFRESH_SECRET],
   },
   publicApp,
 );

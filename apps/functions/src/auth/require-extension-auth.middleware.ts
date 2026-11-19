@@ -16,22 +16,23 @@
  * Scope: the signing routes. /v1/onboard and /v1/bilateral use the
  * Firebase ID-token middleware (firebase-auth.middleware.ts, PFL-166).
  *
- * HACKATHON CAVEAT: the HMAC secret is process.env.PROOFLINE_AUTH_JWT_SECRET
- * with a hardcoded dev fallback. Same secret as the issuer; same single-
- * instance limitation. A persistent secret / KMS rotation lands later.
+ * The HMAC secret is PROOFLINE_AUTH_JWT_SECRET (a Functions secret, no
+ * fallback; PFL-169). Same secret as the issuer.
  */
 
 import type * as express from "express";
 import * as crypto from "node:crypto";
 
 import { makeRFC7807Error } from "../api/onboarding/http.helpers.js";
+import { readSecret } from "../config/secrets.js";
 
 // ─── Shared with extension-auth.handler.ts + register-credential.handler.ts ──
 
 const EXPECTED_ISSUER = "proofline-extension-auth";
 
 function getSecret(): string {
-  return (process.env["PROOFLINE_AUTH_JWT_SECRET"] ?? "dev-ext-auth-secret-change-in-prod").trim();
+  // PFL-169: no fallback; throws when the secret is missing or too short.
+  return readSecret("PROOFLINE_AUTH_JWT_SECRET");
 }
 
 // ─── Result type ─────────────────────────────────────────────────────────────

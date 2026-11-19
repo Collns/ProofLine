@@ -28,7 +28,7 @@ export type { ManualAnchorResponse } from "./manual.js";
 
 export {
   makeAnchorRunDeps,
-  readAnchorEnv,
+  makeAnchorProviderFromConfig,
   makeConsoleLogger,
   makeFirestoreEventSource,
   makeFirestoreAnchorStore,
@@ -36,4 +36,4 @@ export {
   makeInMemoryEventSource,
   makeInMemoryAnchorStore,
 } from "./service-factory.js";
-export type { AnchorEnvConfig } from "./service-factory.js";
+export type { AnchorSelection } from "./service-factory.js";
