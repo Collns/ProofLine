@@ -23,6 +23,7 @@
  *   POST /finalize          → 200 ok=true, status=verified
  */
 
+import type { BusinessLookupInput, BusinessVerification } from "@proofline/kyb";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
@@ -80,12 +81,13 @@ vi.mock("firebase-admin/app", () => ({
 const stubSendVerificationCode = vi.fn(async (_to: string, _code: string) => {});
 
 const stubKybProvider = {
-  verifyBusiness: vi.fn(async () => ({
+  verifyBusiness: vi.fn(async (_input: BusinessLookupInput): Promise<BusinessVerification> => ({
     ok:        true,
-    vendorRef: "mid_test_12345",
-    flags:     [] as string[],
-    officers:  [{ name: "Jane Doe", role: "CEO" }] as { name: string; role: string }[],
+    vendorRef: "kyb_test_12345",
+    flags:     [],
+    officers:  [{ name: "Jane Doe", role: "CEO" }],
     raw:       {},
+    provider:  "baselayer",
   })),
 };
 
@@ -401,10 +403,11 @@ describe("Onboarding E2E — happy path", () => {
   it("returns 422 when KYB fails (sanctions hit)", async () => {
     stubKybProvider.verifyBusiness.mockResolvedValueOnce({
       ok:        false,
-      vendorRef: "mid_rejected",
-      flags:     ["SANCTIONS_HIT"] as string[],
-      officers:  [] as { name: string; role: string }[],
+      vendorRef: "kyb_rejected",
+      flags:     [{ type: "watchlist:OFAC", severity: "high", detail: "SDN list" }],
+      officers:  [],
       raw:       {},
+      provider:  "baselayer",
     });
 
     const startRes = await request(app)
@@ -423,6 +426,39 @@ describe("Onboarding E2E — happy path", () => {
 
     expect(res.status).toBe(422);
     expect(res.body.title).toBe("KYB_FAILED");
+    expect(res.body.detail).toContain("watchlist:OFAC (SDN list)");
     expect((store["companies"][cid] as any).onboardingStatus).toBe("rejected");
+  });
+
+  it("PFL-162: a pending KYB result keeps the company in pending_kyb and passes the address", async () => {
+    stubKybProvider.verifyBusiness.mockResolvedValueOnce({
+      ok:        false,
+      vendorRef: "bl_search_1",
+      flags:     [{ type: "tin_pending", severity: "low" }],
+      officers:  [],
+      raw:       {},
+      provider:  "baselayer",
+      pending:   true,
+    });
+
+    const startRes = await request(app)
+      .post("/v1/onboard/start")
+      .send({
+        domain: "slow-irs.com", legalName: "Slow IRS LLC", ein: "55-5555555", state: "TX",
+        ownerEmail: "x@slow-irs.com", city: "Austin", zip: "78701", street: "1 Congress Ave",
+      });
+    const cid = startRes.body.companyId;
+    (store["companies"][cid] as any).onboardingStatus = "pending_kyb";
+
+    const res = await request(app).post("/v1/onboard/kyb").send({ companyId: cid });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ pending: true, status: "pending_kyb", vendorRef: "bl_search_1" });
+    expect(stubKybProvider.verifyBusiness).toHaveBeenLastCalledWith(expect.objectContaining({
+      state: "TX", city: "Austin", zip: "78701", street: "1 Congress Ave",
+    }));
+    const company = store["companies"][cid] as any;
+    expect(company.onboardingStatus).toBe("pending_kyb");
+    expect(company.kybResult).toMatchObject({ ok: false, pending: true, provider: "baselayer", vendorRef: "bl_search_1" });
   });
 });

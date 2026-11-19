@@ -7,9 +7,9 @@ import { describe, it, expect, vi } from "vitest";
 import type { AnchorProvider, Hex32 } from "@proofline/anchoring";
 
 import { loadConfig } from "../../config/config.js";
-import { makeEmailProvider, makeIdvProvider, makeKmsProvider, makeOnboardingAnchorProvider, makeOnboardingDeps } from "../providers.js";
+import { makeEmailProvider, makeIdvProvider, makeKybProvider, makeKmsProvider, makeOnboardingAnchorProvider, makeOnboardingDeps } from "../providers.js";
 import { makeAnchorProviderFromConfig } from "../../anchoring/service-factory.js";
-import { stubKmsProvider, stubStripeIdentityProvider } from "../stubs.js";
+import { stubKmsProvider, stubKybProvider, stubStripeIdentityProvider } from "../stubs.js";
 
 const stripeVerifyOfficer = vi.fn(async () => ({
   ok: false, vendorRef: "vs_123", documentVerified: false, livenessConfirmed: false, matchedExpected: false,
@@ -87,5 +87,31 @@ describe("makeIdvProvider (PFL-176)", () => {
 
   it("throws instead of falling back when the key is missing", () => {
     expect(() => makeIdvProvider({ providers: { idv: "stripe" } as never })).toThrow(/STRIPE_SECRET_KEY/);
+  });
+});
+
+describe("makeKybProvider (PFL-162)", () => {
+  it("switches provider from config alone", async () => {
+    expect(makeKybProvider(loadConfig({}))).toBe(stubKybProvider);
+    expect((await stubKybProvider.verifyBusiness({ legalName: "A", ein: "12-3456789", state: "TX", country: "US" })).provider)
+      .toBe("stub");
+
+    const seen: string[] = [];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      seen.push(String(url));
+      return new Response(JSON.stringify({ id: "bl_1", state: "PENDING" }), { status: 202 });
+    });
+    const bl = makeKybProvider(loadConfig({ KYB_PROVIDER: "baselayer", BASELAYER_API_KEY: "k", BASELAYER_WEBHOOK_SECRET: "w" }));
+    const r = await bl.verifyBusiness({ legalName: "A", ein: "12-3456789", state: "TX", city: "Austin", country: "US" });
+    expect(r).toMatchObject({ provider: "baselayer", pending: true, vendorRef: "bl_1" });
+    expect(seen[0]).toBe("https://api.baselayer.com/searches");
+    fetchSpy.mockRestore();
+
+    expect(typeof makeKybProvider(loadConfig({ KYB_PROVIDER: "cobalt", COBALT_API_KEY: "c" })).verifyBusiness).toBe("function");
+  });
+
+  it("throws rather than falling back when the key is missing", () => {
+    expect(() => makeKybProvider({ providers: { kyb: "baselayer" } as never })).toThrow(/BASELAYER_API_KEY/);
+    expect(() => makeKybProvider({ providers: { kyb: "cobalt" } as never })).toThrow(/COBALT_API_KEY/);
   });
 });

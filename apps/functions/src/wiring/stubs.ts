@@ -130,6 +130,7 @@ export const stubKybProvider: KYBProvider = {
       flags:     [],
       officers:  [{ name: "Stub Officer", role: "owner" }],
       raw:       { stub: true },
+      provider:  "stub",
     };
   },
 };

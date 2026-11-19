@@ -10,7 +10,8 @@
  *     trigger; auth lock-down tracked in PFL-170).
  *   - `api` (HTTP): public verify endpoint GET /v1/verify/:id (PFL-023).
  *
- *    - `webhooks` (HTTP): POST /webhooks/stripe-identity (PFL-013).
+ *    - `webhooks` (HTTP): POST /webhooks/stripe-identity (PFL-013),
+ *      POST /webhooks/baselayer (PFL-162).
  * Existing routers still pending HTTP wiring (live as code only):
  *   - /v1/onboard via api/onboarding/router.ts (PFL-017)
  *   - /v1/sign    via signing/handlers/* (PFL-021)
@@ -53,6 +54,12 @@ const RESEND_API_KEY = defineSecret("RESEND_API_KEY");
 // file; create placeholder values while IDV_PROVIDER=stub.
 const STRIPE_SECRET_KEY              = defineSecret("STRIPE_SECRET_KEY");
 const STRIPE_IDENTITY_WEBHOOK_SECRET = defineSecret("STRIPE_IDENTITY_WEBHOOK_SECRET");
+// PFL-162: KYB vendor keys. The api reads the selected one (KYB_PROVIDER);
+// the webhooks function verifies Baselayer's Svix signature. Create
+// placeholder values for the unused ones while KYB_PROVIDER=stub.
+const BASELAYER_API_KEY        = defineSecret("BASELAYER_API_KEY");
+const BASELAYER_WEBHOOK_SECRET = defineSecret("BASELAYER_WEBHOOK_SECRET");
+const COBALT_API_KEY           = defineSecret("COBALT_API_KEY");
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -74,6 +81,8 @@ import { makeVerifyRouter, makeVerifyService } from "./verify/index.js";
 
 // --- PFL-013: Stripe Identity webhook
 import { createStripeIdentityWebhookHandler } from "./webhooks/stripe-identity.js";
+// --- PFL-162: Baselayer KYB webhook (late IRS / registry results)
+import { makeBaselayerWebhookHandler } from "./webhooks/baselayer.js";
 
 // --- PFL-060: signing + onboarding HTTP wiring
 import type { PolicyContext } from "@proofline/types";
@@ -694,6 +703,7 @@ export const api = onRequest(
     secrets: [
       PROOFLINE_AUTH_JWT_SECRET, BILATERAL_JWT_SECRET, COSIGN_REFRESH_SECRET,
       STRIPE_SECRET_KEY, STRIPE_IDENTITY_WEBHOOK_SECRET, RESEND_API_KEY,
+      BASELAYER_API_KEY, COBALT_API_KEY,
     ],
   },
   publicApp,
@@ -717,12 +727,36 @@ webhooksApp.post(
   })(),
 );
 
+// PFL-162: Baselayer delivers late KYB results (BusinessSearch.*) via Svix.
+webhooksApp.post(
+  "/webhooks/baselayer",
+  express.raw({ type: "application/json" }),
+  (() => {
+    let cachedHandler: ReturnType<typeof makeBaselayerWebhookHandler> | null = null;
+    return (req: express.Request, res: express.Response) => {
+      if (process.env.KYB_PROVIDER?.trim() !== "baselayer") {
+        res.status(404).json({ error: "Baselayer webhook is not enabled (KYB_PROVIDER)" });
+        return;
+      }
+      const secret = process.env.BASELAYER_WEBHOOK_SECRET?.trim();
+      if (!secret) {
+        res.status(503).json({ error: "BASELAYER_WEBHOOK_SECRET is not set" });
+        return;
+      }
+      if (!cachedHandler) {
+        cachedHandler = makeBaselayerWebhookHandler({ firestore: getFirestore(), webhookSecret: secret });
+      }
+      return cachedHandler(req, res);
+    };
+  })(),
+);
+
 export const webhooks = onRequest(
   {
     region:  "us-central1",
     cors:    false,
     memory:  "256MiB",
-    secrets: [STRIPE_SECRET_KEY, STRIPE_IDENTITY_WEBHOOK_SECRET],
+    secrets: [STRIPE_SECRET_KEY, STRIPE_IDENTITY_WEBHOOK_SECRET, BASELAYER_WEBHOOK_SECRET],
   },
   webhooksApp,
 );

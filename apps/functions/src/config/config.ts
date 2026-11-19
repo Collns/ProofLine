@@ -24,8 +24,10 @@
  *   - KYB/IDV may run on stub in any environment (no vendor keys yet);
  *     stub-verified companies are routed to manual review (PFL-162/177).
  *   - IDV_PROVIDER=stripe needs STRIPE_SECRET_KEY + STRIPE_IDENTITY_WEBHOOK_SECRET
- *     (PFL-176). The real KYB adapters are wired in PFL-162, so non-stub
- *     KYB values are rejected until then rather than ignored.
+ *     (PFL-176).
+ *   - KYB_PROVIDER=baselayer needs BASELAYER_API_KEY + BASELAYER_WEBHOOK_SECRET
+ *     (the webhook delivers late IRS results); KYB_PROVIDER=cobalt needs
+ *     COBALT_API_KEY (PFL-162).
  */
 
 export type ProoflineEnv = "production" | "staging" | "development";
@@ -51,6 +53,7 @@ export interface AppConfig {
   anchor?: { rpcUrl: string; deployerKey: string; contractAddress: string };
   kms?:    { projectId: string; location: string; keyRing: string };
   idv?:    { stripeSecretKey: string; stripeWebhookSecret: string };
+  kyb?:    { baselayerApiKey?: string; baselayerWebhookSecret?: string; cobaltApiKey?: string };
 }
 
 export class ConfigError extends Error {
@@ -145,11 +148,6 @@ export function loadConfig(env: Env = process.env): AppConfig {
     }
   }
 
-  // KYB / IDV adapters exist (packages/kyb) but are wired in PFL-162.
-  if (providers.kyb !== "stub") {
-    problems.push(`KYB_PROVIDER=${providers.kyb} is not wired into the functions app yet (PFL-162); use stub`);
-  }
-
   // ── Provider settings ────────────────────────────────────────────────────
   const config: AppConfig = { env: appEnv, providers };
 
@@ -193,6 +191,19 @@ export function loadConfig(env: Env = process.env): AppConfig {
       stripeSecretKey:     val(env, "STRIPE_SECRET_KEY") ?? "",
       stripeWebhookSecret: val(env, "STRIPE_IDENTITY_WEBHOOK_SECRET") ?? "",
     };
+  }
+
+  if (providers.kyb === "baselayer") {
+    requireKeys(env, "KYB_PROVIDER=baselayer", ["BASELAYER_API_KEY", "BASELAYER_WEBHOOK_SECRET"], problems);
+    config.kyb = {
+      baselayerApiKey:        val(env, "BASELAYER_API_KEY") ?? "",
+      baselayerWebhookSecret: val(env, "BASELAYER_WEBHOOK_SECRET") ?? "",
+    };
+  }
+
+  if (providers.kyb === "cobalt") {
+    requireKeys(env, "KYB_PROVIDER=cobalt", ["COBALT_API_KEY"], problems);
+    config.kyb = { cobaltApiKey: val(env, "COBALT_API_KEY") ?? "" };
   }
 
   if (problems.length > 0) throw new ConfigError(problems);
