@@ -18,10 +18,9 @@
  * values. If isWireInstruction=true the background will enforce F-SES-07
  * (high-value → always fresh biometric, regardless of session).
  *
- * Validation is inline (red border + aria-invalid) — signing is NOT blocked
- * client-side since the server always re-validates. We do surface a warning
- * notice when the user clicks Sign with invalid wire fields so they know to
- * fix them before the server rejects the request.
+ * Validation is inline (red border + aria-invalid) and mirrors the
+ * WirePayload schema. When the toggle is on and a field is invalid, Sign
+ * is blocked (sign-payload.ts) until the fields are fixed (PFL-135).
  *
  * Idempotency: a compose element is only instrumented once, tracked via
  * `data-proofline-wire-mounted`.
@@ -294,15 +293,16 @@ function validateFields(
 
   if (!amountEl || !accountEl || !routingEl) return false;
 
-  if (isNaN(amount) || amount <= 0) {
-    markInvalid(amountEl, 'Amount must be a positive number.');
+  if (isNaN(amount) || Math.round(amount) < 1) {
+    markInvalid(amountEl, 'Amount must be a positive number of dollars.');
     valid = false;
   } else {
     markValid(amountEl);
   }
 
-  if (!account || account.length < 4) {
-    markInvalid(accountEl, 'Account number is required (min 4 characters).');
+  // Matches the WirePayload schema: digits, optionally masked with X or •.
+  if (!/^[0-9X•]{4,}$/.test(account)) {
+    markInvalid(accountEl, 'Account number must be at least 4 digits (mask with X if needed).');
     valid = false;
   } else {
     markValid(accountEl);

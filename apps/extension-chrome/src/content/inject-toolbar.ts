@@ -10,7 +10,8 @@ import {
   readComposeId,
 } from './shared.js';
 import { findToolbarWithSelector } from './gmail-detector.js';
-import { extractPayload } from './extract-payload.js';
+import { buildSignPayload } from './sign-payload.js';
+import { mountWireFields } from './wire-fields.js';
 import { canonicalizeAndHash } from './canonical-bridge.js';
 
 const BUTTON_LABEL = 'Sign with ProofLine';
@@ -75,16 +76,23 @@ async function onClick(compose: Element): Promise<void> {
     composeId: detectedId,
   });
 
-  const result = extractPayload(compose);
+  const result = buildSignPayload(compose);
+  if (!result.ok && result.reason === 'wire_invalid') {
+    // Fields are already marked invalid inline; nothing is signed.
+    warn('content', 'wire fields invalid — sign blocked');
+    showWireNotice(compose);
+    return;
+  }
   if (!result.ok) {
-    warn('content', 'payload extraction failed', result.error.code);
+    warn('content', 'payload extraction failed', result.extraction.error.code);
     sendToBackground({
       type: 'EXTRACTION_FAILED',
       composeId: correlationId,
-      error: result.error,
+      error: result.extraction.error,
     });
     return;
   }
+  clearWireNotice(compose);
 
   try {
     const { payloadHashHex } = await canonicalizeAndHash(result.payload);
@@ -113,6 +121,23 @@ async function onClick(compose: Element): Promise<void> {
   }
 }
 
+const WIRE_NOTICE_ATTR = 'data-proofline-wire-notice';
+
+function showWireNotice(compose: Element): void {
+  if (compose.querySelector(`[${WIRE_NOTICE_ATTR}]`)) return;
+  const panel = compose.querySelector('[data-proofline-wire-panel]');
+  const notice = document.createElement('div');
+  notice.setAttribute(WIRE_NOTICE_ATTR, 'true');
+  notice.setAttribute('role', 'alert');
+  notice.textContent = 'Fix the highlighted wire fields before signing.';
+  notice.style.cssText = 'color:#D93025;font-size:12px;margin-top:4px;';
+  (panel ?? compose).appendChild(notice);
+}
+
+function clearWireNotice(compose: Element): void {
+  compose.querySelector(`[${WIRE_NOTICE_ATTR}]`)?.remove();
+}
+
 function injectInto(compose: Element): boolean {
   if (alreadyInjected(compose)) return false;
 
@@ -121,6 +146,8 @@ function injectInto(compose: Element): boolean {
 
   const button = buildButton(compose);
   match.toolbar.appendChild(button);
+  // PFL-135: "Wire instruction" toggle + fields next to the Sign button.
+  mountWireFields(compose, match.toolbar);
   log('content', 'injected button via selector', match.selector);
   return true;
 }

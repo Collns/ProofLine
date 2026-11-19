@@ -286,7 +286,9 @@ async function runSignFlow(input: RunSignFlowInput): Promise<void> {
   const payloadB64     = base64UrlEncode(canonicalBytes);
   const rsh            = await computeRecipientSetHash(fullPayload.to);
 
-  const existing = await getSession(rsh);
+  // PFL-135 / F-SES-07: wire instructions always take the fresh biometric
+  // path, even when a session exists for this recipient set.
+  const existing = fullPayload.isWireInstruction ? null : await getSession(rsh);
   const kind: "fresh" | "silent" = existing ? "silent" : "fresh";
 
   let response;
