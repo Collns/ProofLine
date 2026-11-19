@@ -12,6 +12,16 @@ export interface ResendOptions {
   fromName?: string;
 }
 
+/** Escapes text for HTML element content and quoted attribute values. */
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function formatUSD(amountCents: number): string {
   return `$${(amountCents / 100).toFixed(2)}`;
 }
@@ -54,7 +64,7 @@ export function makeResendProvider(opts: ResendOptions): EmailProvider {
       await rawSend({
         to: [to],
         subject: 'Your ProofLine verification code',
-        html: `<p>Your verification code: <strong style="font-size:24px;font-family:monospace">${code}</strong></p><p>This code expires in 10 minutes.</p>`,
+        html: `<p>Your verification code: <strong style="font-size:24px;font-family:monospace">${escapeHtml(code)}</strong></p><p>This code expires in 10 minutes.</p>`,
         text: `Your ProofLine verification code: ${code}\n\nThis code expires in 10 minutes.`,
         tags: { type: 'verification' },
       });
@@ -69,11 +79,11 @@ export function makeResendProvider(opts: ResendOptions): EmailProvider {
           <h2>Co-sign needed</h2>
           <p>A wire transfer of <strong>${amount}</strong> requires your approval.</p>
           <ul>
-            <li>Account ending: ${wire.recipientAccountLast4}</li>
-            <li>Routing: ${wire.routingNumber}</li>
-            ${wire.memo ? `<li>Memo: ${wire.memo}</li>` : ''}
+            <li>Account ending: ${escapeHtml(wire.recipientAccountLast4)}</li>
+            <li>Routing: ${escapeHtml(wire.routingNumber)}</li>
+            ${wire.memo ? `<li>Memo: ${escapeHtml(wire.memo)}</li>` : ''}
           </ul>
-          <p><a href="${signLink}" style="background:#0D6EFD;color:white;padding:12px 24px;text-decoration:none;border-radius:4px">Review and sign</a></p>
+          <p><a href="${escapeHtml(signLink)}" style="background:#0D6EFD;color:white;padding:12px 24px;text-decoration:none;border-radius:4px">Review and sign</a></p>
         `,
         text: `Co-sign needed for ${amount} (account ending ${wire.recipientAccountLast4}). Review: ${signLink}`,
         tags: { type: 'cosign' },
@@ -85,9 +95,9 @@ export function makeResendProvider(opts: ResendOptions): EmailProvider {
         to: [to],
         subject: `${inviterCompany} invites you to ProofLine`,
         html: `
-          <h2>${inviterCompany} has invited you to verify with ProofLine</h2>
+          <h2>${escapeHtml(inviterCompany)} has invited you to verify with ProofLine</h2>
           <p>ProofLine cryptographically signs business communications to prevent wire fraud.</p>
-          <p><a href="https://app.proofline.web.app/invite/${inviteToken}" style="background:#0D6EFD;color:white;padding:12px 24px;text-decoration:none;border-radius:4px">Get verified</a></p>
+          <p><a href="https://app.proofline.web.app/invite/${encodeURIComponent(inviteToken)}" style="background:#0D6EFD;color:white;padding:12px 24px;text-decoration:none;border-radius:4px">Get verified</a></p>
         `,
         text: `${inviterCompany} has invited you to verify with ProofLine. Get started: https://app.proofline.web.app/invite/${inviteToken}`,
         tags: { type: 'invitation' },
@@ -99,9 +109,9 @@ export function makeResendProvider(opts: ResendOptions): EmailProvider {
         to: [to],
         subject: `Bilateral document for review: ${doc.documentType}`,
         html: `
-          <h2>${doc.drafterName} at ${doc.drafterCompany} has sent you a ${doc.documentType}</h2>
+          <h2>${escapeHtml(doc.drafterName)} at ${escapeHtml(doc.drafterCompany)} has sent you a ${escapeHtml(doc.documentType)}</h2>
           <p>Review and counter-sign to confirm the agreement.</p>
-          <p><a href="${signLink}" style="background:#0D6EFD;color:white;padding:12px 24px;text-decoration:none;border-radius:4px">Review document</a></p>
+          <p><a href="${escapeHtml(signLink)}" style="background:#0D6EFD;color:white;padding:12px 24px;text-decoration:none;border-radius:4px">Review document</a></p>
         `,
         text: `${doc.drafterName} at ${doc.drafterCompany} has sent you a ${doc.documentType}. Review: ${signLink}`,
         tags: { type: 'bilateral' },

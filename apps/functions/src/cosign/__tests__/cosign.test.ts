@@ -441,10 +441,11 @@ describe("POST /v1/cosign/:messageId/finalize", () => {
 // ─── POST /v1/cosign/:messageId/refresh ─────────────────────────────────────
 
 describe("POST /v1/cosign/:messageId/refresh", () => {
-  it("happy path: mints a fresh JWS and invokes the email sender", async () => {
+  it("happy path: mints a fresh JWS and emails it to the stored approvers only", async () => {
     const messageId = "msg-refresh-happy";
     seedEnvelope(messageId, {
-      payload: { ...WIRE_PAYLOAD, to: ["mike@cosigner.com"] },
+      payload: { ...WIRE_PAYLOAD, to: ["counterparty@external.example"] },
+      cosign:  { approverEmails: ["bob@acme-title.test", "carol@acme-title.test"] },
     });
 
     const expiredToken = makeJws({
@@ -452,8 +453,8 @@ describe("POST /v1/cosign/:messageId/refresh", () => {
       iat: NOW_SEC - 3600, exp: PAST_EXP,
     });
 
-    const sendFreshLinkEmail = vi.fn(async () => {});
-    const app = buildApp({ refresh: { sendFreshLinkEmail } });
+    const sendFreshLinkEmail = vi.fn(async (_input: unknown) => {});
+    const app = buildApp({ refresh: { sendFreshLinkEmail, portalBaseUrl: "https://portal.test/" } });
 
     const res = await request(app)
       .post(`/v1/cosign/${messageId}/refresh`)
@@ -463,16 +464,53 @@ describe("POST /v1/cosign/:messageId/refresh", () => {
     expect(res.body).toEqual({ ok: true, freshLinkSent: true });
     expect(sendFreshLinkEmail).toHaveBeenCalledTimes(1);
     const arg = (sendFreshLinkEmail.mock.calls[0] as unknown[])[0] as {
-      messageId: string; freshToken: string; expiresAt: number;
+      to: string[]; messageId: string; freshToken: string; expiresAt: number; link: string;
+      wire: { amountUsd: number; recipientAccountLast4: string; routingNumber: string; memo?: string } | null;
     };
+    // Internal approvers only — never the wire's external recipient.
+    expect(arg.to).toEqual(["bob@acme-title.test", "carol@acme-title.test"]);
     expect(arg.messageId).toBe(messageId);
     expect(arg.expiresAt).toBeGreaterThan(NOW_SEC);
+    expect(arg.link).toBe(`https://portal.test/cosign/${messageId}?t=${encodeURIComponent(arg.freshToken)}`);
+    expect(arg.wire).toEqual({
+      amountUsd: WIRE_PAYLOAD.amount, recipientAccountLast4: "7842",
+      routingNumber: "026005092", memo: "Escrow disbursement",
+    });
     // Fresh token decodes to claims for the same messageId.
     const newClaims = JSON.parse(
       Buffer.from((arg.freshToken.split(".")[1]) as string, "base64url").toString("utf8"),
     );
     expect(newClaims.sub).toBe(messageId);
     expect(newClaims.exp).toBeGreaterThan(NOW_SEC);
+  });
+
+  it("does not email anyone when no approvers are stored (never falls back to payload recipients)", async () => {
+    const messageId = "msg-refresh-no-approvers";
+    seedEnvelope(messageId, { payload: { ...WIRE_PAYLOAD, to: ["counterparty@external.example"] } });
+    const token = makeJws({ iss: "acme-title", sub: messageId, payloadHash: STORED_HASH, iat: NOW_SEC - 3600, exp: PAST_EXP });
+    const sendFreshLinkEmail = vi.fn(async () => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const res = await request(buildApp({ refresh: { sendFreshLinkEmail } }))
+      .post(`/v1/cosign/${messageId}/refresh`)
+      .send({ token })
+      .expect(200);
+
+    expect(res.body).toEqual({ ok: true, freshLinkSent: false });
+    expect(sendFreshLinkEmail).not.toHaveBeenCalled();
+    expect(log.mock.calls.flat().join(" ")).not.toContain("eyJ"); // no token / link logged
+    log.mockRestore();
+  });
+
+  it("reports freshLinkSent: false when no email sender is configured", async () => {
+    const messageId = "msg-refresh-no-sender";
+    seedEnvelope(messageId, { cosign: { approverEmails: ["bob@acme-title.test"] } });
+    const token = makeJws({ iss: "acme-title", sub: messageId, payloadHash: STORED_HASH, iat: NOW_SEC - 3600, exp: PAST_EXP });
+    const res = await request(buildApp())
+      .post(`/v1/cosign/${messageId}/refresh`)
+      .send({ token })
+      .expect(200);
+    expect(res.body).toEqual({ ok: true, freshLinkSent: false });
   });
 
   it("returns ALREADY_COSIGNED if the envelope is already cosigned", async () => {

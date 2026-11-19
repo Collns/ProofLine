@@ -7,8 +7,8 @@
  * Body: { token: <expired-or-soon-to-expire JWS> }
  *
  * Re-mints a JWS for the same messageId + payloadHash with a fresh
- * expiry, and "sends" it via email (logged for now; Resend wiring is
- * follow-up). The original token may already be expired — we only need
+ * expiry and emails the link to the internal approvers stored on the
+ * message (PFL-160). The original token may already be expired — we only need
  * its claims to seed the new one, so the decode reason of "EXPIRED" is
  * acceptable. Malformed tokens are rejected.
  *
@@ -70,29 +70,53 @@ function decodeForRefresh(
   }
 }
 
-export interface CosignRefreshHandlerDeps {
-  /**
-   * Email sender — defaults to a console.log shim. Injectable for tests
-   * and for swapping in Resend once we wire it.
-   */
-  sendFreshLinkEmail?: (input: {
-    to:         string;
-    messageId:  string;
-    freshToken: string;
-    expiresAt:  number;
-  }) => Promise<void>;
+export interface CosignRefreshEmail {
+  /** Internal approvers stored on the message (never the wire's external recipients). */
+  to:         string[];
+  messageId:  string;
+  freshToken: string;
+  expiresAt:  number;
+  /** Full cosign link for the approver. */
+  link:       string;
+  wire: {
+    amountUsd:             number;
+    recipientAccountLast4: string;
+    routingNumber:         string;
+    memo?:                 string;
+  } | null;
 }
 
-const defaultSendFreshLinkEmail: NonNullable<CosignRefreshHandlerDeps["sendFreshLinkEmail"]> =
-  async ({ to, messageId, expiresAt }) => {
-    // eslint-disable-next-line no-console
-    console.log(
-      `[cosign-refresh] would email ${to || "<unknown>"} a fresh cosign link for ${messageId} (exp=${expiresAt})`,
-    );
+export interface CosignRefreshHandlerDeps {
+  /**
+   * Sends the fresh cosign link (PFL-160: wired to the configured email
+   * provider in index.ts). Without it, no email is sent and the response
+   * reports freshLinkSent: false — links are never written to the log.
+   */
+  sendFreshLinkEmail?: (input: CosignRefreshEmail) => Promise<void>;
+  /** Base URL of the cosign portal (web-counterparty). */
+  portalBaseUrl?: string;
+}
+
+const DEFAULT_PORTAL_BASE_URL = "https://proofline-counterparty.web.app";
+
+function wireSummaryFrom(payload: Record<string, unknown> | undefined): CosignRefreshEmail["wire"] {
+  if (!payload) return null;
+  // Stored payload is either a wire payload or an email payload carrying one.
+  const wire = (payload["wirePayload"] as Record<string, unknown> | undefined)
+    ?? (typeof payload["recipientRouting"] === "string" ? payload : undefined);
+  if (!wire) return null;
+  const account = String(wire["recipientAccount"] ?? "");
+  return {
+    amountUsd:             Number(wire["amount"] ?? 0),
+    recipientAccountLast4: account.slice(-4),
+    routingNumber:         String(wire["recipientRouting"] ?? ""),
+    ...(typeof wire["memo"] === "string" ? { memo: wire["memo"] as string } : {}),
   };
+}
 
 export function makeCosignRefreshHandler(deps: CosignRefreshHandlerDeps = {}) {
-  const sendEmail = deps.sendFreshLinkEmail ?? defaultSendFreshLinkEmail;
+  const sendEmail = deps.sendFreshLinkEmail;
+  const portalBaseUrl = (deps.portalBaseUrl ?? DEFAULT_PORTAL_BASE_URL).replace(/\/+$/, "");
 
   return async function cosignRefreshHandler(
     req: express.Request,
@@ -174,30 +198,38 @@ export function makeCosignRefreshHandler(deps: CosignRefreshHandlerDeps = {}) {
     };
     const freshToken = mintCosignJws(freshClaims);
 
-    // Best-effort: resolve the counterparty recipient email.
-    // signed_messages stores the wire/email/bilateral payload; for an
-    // email payload `to` is an array. For the hackathon slice we'll
-    // surface the first `to` if present and otherwise leave to="".
-    const recipient =
-      Array.isArray((stored["payload"] as Record<string, unknown> | undefined)?.["to"])
-        ? ((stored["payload"] as Record<string, unknown>)["to"] as unknown[])[0] as string ?? ""
-        : "";
+    // PFL-160: the fresh link goes only to the internal approvers recorded on
+    // the message (cosign.approverEmails). It is never sent to the wire's
+    // external recipients and never written to the log.
+    const cosign = stored["cosign"] as { approverEmails?: unknown } | undefined;
+    const approvers = Array.isArray(cosign?.approverEmails)
+      ? (cosign!.approverEmails as unknown[]).filter((e): e is string => typeof e === "string" && e.includes("@"))
+      : [];
 
-    try {
-      await sendEmail({
-        to:         recipient,
-        messageId,
-        freshToken,
-        expiresAt:  freshClaims.exp,
-      });
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error(`[cosign-refresh] sendFreshLinkEmail failed for ${messageId}`, err);
+    let freshLinkSent = false;
+    if (!sendEmail) {
+      console.warn(`[cosign-refresh] no email sender configured; fresh link for ${messageId} not sent`);
+    } else if (approvers.length === 0) {
+      console.warn(`[cosign-refresh] no approver emails stored for ${messageId}; fresh link not sent`);
+    } else {
+      try {
+        await sendEmail({
+          to:         approvers,
+          messageId,
+          freshToken,
+          expiresAt:  freshClaims.exp,
+          link:       `${portalBaseUrl}/cosign/${encodeURIComponent(messageId)}?t=${encodeURIComponent(freshToken)}`,
+          wire:       wireSummaryFrom(stored["payload"] as Record<string, unknown> | undefined),
+        });
+        freshLinkSent = true;
+      } catch (err) {
+        console.error(`[cosign-refresh] sending the fresh link failed for ${messageId}`, err instanceof Error ? err.message : err);
+      }
     }
 
     respond(res, 200, {
-      ok:            true,
-      freshLinkSent: true,
+      ok: true,
+      freshLinkSent,
     });
   };
 }
