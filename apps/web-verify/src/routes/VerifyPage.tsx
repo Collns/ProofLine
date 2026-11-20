@@ -42,6 +42,10 @@ function VerifyResult({ result }: { result: VerificationResponse }) {
         <ProoflineLogo />
         <VerifyHeader result={result} />
 
+        {(result.state === 'verified' || result.state === 'bilateral') && result.testCompany && (
+          <TestCompanyBadge />
+        )}
+
         {result.state === 'verified' && (
           <>
             <PayloadCard payload={result.payload} />
@@ -72,6 +76,18 @@ function VerifyResult({ result }: { result: VerificationResponse }) {
 
         <VerifyFooter />
       </div>
+    </div>
+  );
+}
+
+function TestCompanyBadge() {
+  return (
+    <div
+      role="note"
+      className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+    >
+      <span className="font-semibold">Test company</span> — sender-domain checks are
+      relaxed for this company, so the From address was not bound to a verified domain.
     </div>
   );
 }

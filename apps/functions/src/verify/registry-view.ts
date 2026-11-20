@@ -36,6 +36,9 @@ interface CompanyDoc {
   rootPublicKey?: string;
   status?: Company["status"];
   verifiedAt?: number;
+  allowedFromDomains?: string[];
+  allowedFromAddresses?: string[];
+  testCompany?: boolean;
 }
 
 interface UserDoc {
@@ -78,6 +81,10 @@ function shapeCompany(doc: CompanyDoc, fallbackId: string): Company | null {
     rootPublicKey: doc.rootPublicKey,
     status: doc.status,
     verifiedAt: doc.verifiedAt ?? 0,
+    // PFL-187: sender-domain binding inputs.
+    ...(Array.isArray(doc.allowedFromDomains) ? { allowedFromDomains: doc.allowedFromDomains } : {}),
+    ...(Array.isArray(doc.allowedFromAddresses) ? { allowedFromAddresses: doc.allowedFromAddresses } : {}),
+    ...(doc.testCompany === true ? { testCompany: true } : {}),
   };
 }
 

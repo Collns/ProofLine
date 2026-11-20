@@ -40,6 +40,19 @@ export interface Company {
   rootPublicKey: string;   // SPKI base64
   status: 'verified' | 'suspended' | 'revoked';
   verifiedAt: number;
+  /**
+   * PFL-187: sender-domain binding. A signed email's From address must sit on
+   * the company's verified `domain`, an explicitly allowed alias domain, or an
+   * explicitly allowed exact address — otherwise it's a suspected spoof.
+   */
+  allowedFromDomains?: string[];
+  allowedFromAddresses?: string[];
+  /**
+   * Explicit, off-by-default escape hatch for test/demo companies: skips the
+   * sender-domain binding. Surfaced on the verify page as "test company" so a
+   * relaxed check is never silent.
+   */
+  testCompany?: boolean;
 }
 
 export interface User {
@@ -98,6 +111,9 @@ export type VerificationResult =
       signers: VerifiedSignerInfo[];
       payload: WirePayload | EmailPayload | BilateralPayload;
       anchor: Anchor;
+      /** PFL-187: true when the signer's company is flagged as a test/demo
+       *  company, so the sender-domain binding was intentionally skipped. */
+      testCompany?: boolean;
     }
   | {
       ok: true;

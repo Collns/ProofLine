@@ -41,6 +41,54 @@ export async function checkPayloadIntegrity(
   return { ok: true };
 }
 
+// ─── CHECK 1b — Sender-domain binding (PFL-187) ───────────────────────────────
+//
+// A signed email's From address must sit on the signer company's verified
+// domain, an allowed alias domain, or an allowed exact address. A mismatch is
+// a suspected spoof (someone signing as Acme from a gmail.com address).
+// Bilateral payloads carry no `from`, so they are exempt. A company explicitly
+// flagged `testCompany` skips the check (surfaced on the verify page).
+
+function senderDomainOf(address: string): string {
+  return address.split('@')[1]?.trim().toLowerCase() ?? '';
+}
+
+export function checkSenderDomain(
+  envelope: SignedEnvelope,
+  signers: ResolvedSigner[],
+): { ok: true; testCompany: boolean } | { ok: false; detail: string } {
+  const payload = envelope.payload as { from?: unknown };
+  if (typeof payload.from !== 'string' || payload.from.length === 0) {
+    // No sender address (e.g. bilateral document) — nothing to bind.
+    return { ok: true, testCompany: false };
+  }
+  const signer = signers[0];
+  if (!signer) return { ok: true, testCompany: false };
+  const company = signer.company;
+
+  if (company.testCompany === true) return { ok: true, testCompany: true };
+
+  const from = payload.from.trim().toLowerCase();
+  const fromDomain = senderDomainOf(from);
+  const allowedAddresses = (company.allowedFromAddresses ?? []).map((a) => a.trim().toLowerCase());
+  if (allowedAddresses.includes(from)) return { ok: true, testCompany: false };
+
+  const allowedDomains = [company.domain, ...(company.allowedFromDomains ?? [])]
+    .map((d) => d.trim().toLowerCase())
+    .filter(Boolean);
+  if (fromDomain.length > 0 && allowedDomains.includes(fromDomain)) {
+    return { ok: true, testCompany: false };
+  }
+
+  const aliasNote = allowedDomains.length > 1 || allowedAddresses.length > 0
+    ? ' or an allowed alias'
+    : '';
+  return {
+    ok: false,
+    detail: `sender ${payload.from} is not on ${company.legalName}'s verified domain ${company.domain}${aliasNote}`,
+  };
+}
+
 // ─── CHECK 2 — Signer identities ─────────────────────────────────────────────
 
 export async function checkSignerIdentities(

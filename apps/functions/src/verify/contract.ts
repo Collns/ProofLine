@@ -34,6 +34,9 @@ export type VerificationResponse =
       signers: VerifiedSignerInfo[];
       payload: WirePayload | EmailPayload | BilateralPayload;
       anchor: SerializedAnchor;
+      /** PFL-187: the signer's company is a test/demo company, so the
+       *  sender-domain binding was skipped. The verify page shows a badge. */
+      testCompany?: boolean;
     }
   | {
       ok: true;
