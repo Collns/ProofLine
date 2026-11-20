@@ -49,4 +49,13 @@ describe("CORS preflight for /v1/extension/*", () => {
     const res = await request(app()).get("/v1/extension/policy").set("Origin", "https://evil.example");
     expect(res.headers["access-control-allow-origin"]).toBeUndefined();
   });
+
+  it("rejects an unknown/unconfigured extension id", async () => {
+    const res = await request(app())
+      .options("/v1/extension/policy")
+      .set("Origin", "chrome-extension://unknownextensionidnotallowed000000")
+      .set("Access-Control-Request-Method", "GET");
+    // Still answers the OPTIONS, but with NO Allow-Origin → browser blocks it.
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
 });

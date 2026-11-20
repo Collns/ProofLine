@@ -169,6 +169,24 @@ const ALLOWED_ORIGINS: ReadonlySet<string> = new Set([
   "https://proofline-admin.firebaseapp.com",
 ]);
 
+// PFL-188: only these extension IDs are reflected for chrome-extension CORS.
+// Configurable via EXT_ALLOWED_IDS (comma-separated); defaults to the
+// published extension id.
+const ALLOWED_EXTENSION_IDS: ReadonlySet<string> = new Set(
+  (process.env["EXT_ALLOWED_IDS"] ?? "jjdabijoladnafmdknekgbhjpbdbiieh")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
+
+/** True for `chrome-extension://<id>` whose id is in the allowlist. */
+function isAllowedExtensionOrigin(origin: string): boolean {
+  const prefix = "chrome-extension://";
+  if (!origin.startsWith(prefix)) return false;
+  const id = origin.slice(prefix.length).split("/")[0];
+  return ALLOWED_EXTENSION_IDS.has(id);
+}
+
 export function corsMiddleware(
   req: express.Request,
   res: express.Response,
@@ -179,11 +197,11 @@ export function corsMiddleware(
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Credentials", "true");
-  } else if (typeof origin === "string" && origin.startsWith("chrome-extension://")) {
+  } else if (typeof origin === "string" && isAllowedExtensionOrigin(origin)) {
     // PFL-188: the extension's background SW / content script calls
-    // /v1/extension/* and other API routes from its own origin. These are
-    // Bearer-authed (no cookies), so we reflect the chrome-extension origin
-    // WITHOUT Allow-Credentials. (Belt-and-suspenders alongside the
+    // /v1/extension/* and other API routes from its own origin. Only
+    // configured extension IDs are reflected. These are Bearer-authed (no
+    // cookies), so no Allow-Credentials. (Belt-and-suspenders alongside the
     // manifest host_permissions, which lets the background bypass CORS.)
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
