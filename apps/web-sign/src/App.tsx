@@ -3,6 +3,7 @@ import { SignStart } from './routes/SignStart';
 import { SignSilent } from './routes/SignSilent';
 import { ExtensionAuth } from './routes/ExtensionAuth';
 import { CosignApprove } from './routes/CosignApprove';
+import { CountersignApprove } from './routes/CountersignApprove';
 import { NotFoundPage } from './routes/NotFoundPage';
 
 export function App() {
@@ -12,6 +13,7 @@ export function App() {
       <Route path="/sign/silent" element={<SignSilent />} />
       <Route path="/extension/auth" element={<ExtensionAuth />} />
       <Route path="/cosign/:messageId" element={<CosignApprove />} />
+      <Route path="/countersign/:docId" element={<CountersignApprove />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

@@ -21,6 +21,7 @@ import * as express from "express";
 import { makeDraftHandler }              from "./draft.handler.js";
 import { makeSignAsDrafterHandler }      from "./sign-as-drafter.handler.js";
 import { makeSignAsCounterpartyHandler } from "./sign-as-counterparty.handler.js";
+import { makeCountersignContextHandler } from "./countersign-context.handler.js";
 import { makeGetDocumentHandler }        from "./get-document.handler.js";
 import { makeRevokeHandler }             from "./revoke.handler.js";
 import { ERR, type BilateralRouterDeps } from "./types.js";
@@ -47,6 +48,8 @@ export function makeBilateralRouter(deps: BilateralRouterDeps): express.Router {
   router.post("/draft",                 requireCompanyUser, makeDraftHandler(deps));
   router.post("/sign-as-drafter",       requireCompanyUser, makeSignAsDrafterHandler(deps));
   router.post("/sign-as-counterparty",  makeSignAsCounterpartyHandler(deps));
+  // Counterparty ceremony context (web-sign), authed by the deep-link token.
+  router.get( "/:id/countersign-context", makeCountersignContextHandler(deps));
   router.get( "/:id",                   makeGetDocumentHandler(deps));
   router.post("/:id/revoke",            requireCompanyUser, makeRevokeHandler(deps));
 

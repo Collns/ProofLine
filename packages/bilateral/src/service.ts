@@ -21,8 +21,26 @@ import type {
   DraftInput,
   ActorRef,
   Result,
+  SignatureMaterial,
 } from './types.js';
 import { deriveStatus } from './status.js';
+
+/** Accept either a bare base64url signature (legacy) or full assertion material. */
+export type SignatureInput = string | SignatureMaterial;
+
+function normalizeSignature(sig: SignatureInput): SignatureMaterial {
+  return typeof sig === 'string' ? { sig } : sig;
+}
+
+function signatureEventFields(sig: SignatureInput): Partial<SignatureMaterial> {
+  const m = normalizeSignature(sig);
+  return {
+    sig: m.sig,
+    ...(m.credentialId ? { credentialId: m.credentialId } : {}),
+    ...(m.authenticatorData ? { authenticatorData: m.authenticatorData } : {}),
+    ...(m.clientDataJSON ? { clientDataJSON: m.clientDataJSON } : {}),
+  };
+}
 
 // ─── Deps ─────────────────────────────────────────────────────────────────────
 
@@ -38,8 +56,8 @@ export interface BilateralServiceDeps {
 
 export interface BilateralService {
   draftDocument(input: DraftInput): Promise<Result<BilateralPayload>>;
-  signAsDrafter(docId: string, actor: ActorRef, sig: string): Promise<Result<BilateralDocument>>;
-  signAsCounterparty(docId: string, actor: ActorRef, sig: string): Promise<Result<BilateralDocument>>;
+  signAsDrafter(docId: string, actor: ActorRef, sig: SignatureInput): Promise<Result<BilateralDocument>>;
+  signAsCounterparty(docId: string, actor: ActorRef, sig: SignatureInput): Promise<Result<BilateralDocument>>;
   revoke(docId: string, by: ActorRef): Promise<Result<void>>;
   getStatus(docId: string): Promise<Result<BilateralStatus>>;
   /** Full document, for party-membership checks at the API edge. */
@@ -100,7 +118,7 @@ export function makeBilateralService(deps: BilateralServiceDeps): BilateralServi
     async signAsDrafter(
       docId: string,
       actor: ActorRef,
-      sig: string,
+      sig: SignatureInput,
     ): Promise<Result<BilateralDocument>> {
       const doc = await store.get(docId);
       if (!doc) return fail('DOC_NOT_FOUND', `Document ${docId} not found`);
@@ -121,7 +139,7 @@ export function makeBilateralService(deps: BilateralServiceDeps): BilateralServi
         docId,
         actorId:   actor.userId,
         timestamp: now(),
-        sig,
+        ...signatureEventFields(sig),
       });
 
       await store.save(doc);
@@ -133,7 +151,7 @@ export function makeBilateralService(deps: BilateralServiceDeps): BilateralServi
     async signAsCounterparty(
       docId: string,
       actor: ActorRef,
-      sig: string,
+      sig: SignatureInput,
     ): Promise<Result<BilateralDocument>> {
       const doc = await store.get(docId);
       if (!doc) return fail('DOC_NOT_FOUND', `Document ${docId} not found`);
@@ -155,7 +173,7 @@ export function makeBilateralService(deps: BilateralServiceDeps): BilateralServi
         docId,
         actorId:   actor.userId,
         timestamp: now(),
-        sig,
+        ...signatureEventFields(sig),
       });
 
       await store.save(doc);
