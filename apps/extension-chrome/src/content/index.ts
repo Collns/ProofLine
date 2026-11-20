@@ -4,8 +4,8 @@ import { findComposeContainers } from './gmail-detector.js';
 import { tryInject } from './inject-toolbar.js';
 import { injectBannerIntoCompose } from './inject-banner.js';
 import { isBackgroundToContentMessage } from '../shared/types.js';
-import { readComposeId } from './shared.js';
-import { installSendGuard, setSignState } from './send-guard.js';
+import { readComposeId, COMPOSE_ID_ATTR } from './shared.js';
+import { installSendGuard, setSignState, markSigned } from './send-guard.js';
 import { watchCosign, COSIGN_ENVELOPE_ATTR, type CosignStatusReply } from './cosign-release.js';
 
 // Content-script entry. Runs once per Gmail tab. We use a single
@@ -53,13 +53,16 @@ function sweep(): void {
 }
 
 function findComposeByComposeId(composeId: string): Element | null {
+  // Primary: the stable id we stamped at injection and sent to the
+  // background (PFL-181) — reliable for inline reply / forward composes.
+  const byStamp = document.querySelector(`[${COMPOSE_ID_ATTR}="${CSS.escape(composeId)}"]`);
+  if (byStamp) return byStamp;
+
   const composes = findComposeContainers(document);
   for (const compose of composes) {
     if (readComposeId(compose) === composeId) return compose;
   }
-  // Fallback — synthetic ids used when Gmail hasn't assigned a draft id
-  // yet; just take the first open compose. We expect at most one in the
-  // common case (Sarah clicking Sign on the container she just opened).
+  // Last-ditch — a single open compose is unambiguous.
   return composes.length === 1 ? composes[0]! : null;
 }
 
@@ -76,7 +79,7 @@ const cosignWatchDeps = {
     }),
   injectBanner: (compose: Element, html: string) => injectBannerIntoCompose(compose, html),
   markSigned: (compose: Element) => {
-    setSignState(compose, 'signed');
+    markSigned(compose);
     log('content', 'cosign approved; send released');
   },
   isAttached: (compose: Element) => compose.isConnected,
@@ -100,7 +103,10 @@ function listenForBackgroundMessages(): void {
       const result = injectBannerIntoCompose(compose, message.bannerHtml);
       log('content', 'banner injected', result);
       // PFL-096: only a message that carries the banner counts as signed.
-      setSignState(compose, result.ok ? 'signed' : 'failed');
+      // PFL-181: markSigned also records the content fingerprint so a later
+      // edit (or a recycled container) re-locks Send.
+      if (result.ok) markSigned(compose);
+      else setSignState(compose, 'failed');
       sendResponse({ ok: result.ok });
       return false;
     }

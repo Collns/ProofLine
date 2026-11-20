@@ -2,9 +2,9 @@
  * @file send-guard.ts
  * @module apps/extension-chrome/src/content
  *
- * PFL-096 — stop Gmail from sending a message unsigned when ProofLine
- * signing was attempted and did not complete, or when the message is
- * marked as a wire instruction and isn't signed yet.
+ * PFL-096 / PFL-181 — stop Gmail from sending a message unsigned when
+ * ProofLine signing was attempted and did not complete, or when the message
+ * is marked as a wire instruction and isn't signed yet.
  *
  * How it works:
  *   - Each compose carries a sign state in `data-proofline-sign-state`:
@@ -12,25 +12,37 @@
  *       failed          the sign flow failed / was cancelled
  *       cosign_pending  policy requires a cosigner first
  *       signed          banner injected; the message may be sent
- *   - Capture-phase listeners on the document intercept Gmail's Send
- *     button (mousedown / mouseup / click) and Ctrl/Cmd+Enter inside a
- *     compose before Gmail's own handlers run.
- *   - A blocked send shows an inline alert with "Retry signing" and
- *     "Send unsigned". Send unsigned is an explicit, logged choice that
- *     allows the next Send for that compose only.
+ *   - A `signed` compose also stores the content fingerprint it was signed
+ *     at (`data-proofline-signed-hash`). If the draft is edited after
+ *     signing — or Gmail recycles the compose container for a new message —
+ *     the fingerprint no longer matches and Send re-locks (PFL-181 bug 2).
+ *   - Capture-phase listeners on the document intercept Gmail's Send button
+ *     (mousedown / mouseup / click) and Ctrl/Cmd+Enter inside a compose
+ *     before Gmail's own handlers run. The compose is resolved from the
+ *     clicked element by climbing to the instrumented container, so inline
+ *     reply / forward / pop-out composes are guarded too (PFL-181 bug 1).
+ *   - A blocked send shows an inline alert. For a non-wire, "Send unsigned"
+ *     is an explicit, logged, one-time escape. Wire instructions are NEVER
+ *     escapable: an unsigned wire can never be sent (PFL-181 bug 3).
  *
- * Composes where signing was never attempted (and that aren't wires)
- * are not touched.
+ * Composes where signing was never attempted (and that aren't wires) are
+ * not touched.
  */
 
 import { warn } from '../shared/log.js';
-import { INJECTED_MARKER } from './shared.js';
+import {
+  INJECTED_MARKER,
+  isInsideEditable,
+  resolveInstrumentedCompose,
+} from './shared.js';
+import { contentFingerprint } from './compose-content.js';
 
 export type SignState = 'pending' | 'failed' | 'cosign_pending' | 'signed';
 
 export const SIGN_STATE_ATTR    = 'data-proofline-sign-state';
 export const SEND_UNSIGNED_ATTR = 'data-proofline-send-unsigned';
 export const SEND_ALERT_ATTR    = 'data-proofline-send-alert';
+export const SIGNED_HASH_ATTR   = 'data-proofline-signed-hash';
 const WIRE_CHECKBOX_SELECTOR    = '[data-proofline-wire-checkbox]';
 
 export interface SendGuardDeps {
@@ -47,6 +59,7 @@ export function setSignState(compose: Element, state: SignState): void {
   if (state !== 'failed' && state !== 'cosign_pending') {
     compose.removeAttribute(SEND_UNSIGNED_ATTR);
   }
+  if (state !== 'signed') compose.removeAttribute(SIGNED_HASH_ATTR);
   if (state === 'signed') clearSendAlert(compose);
 }
 
@@ -54,20 +67,73 @@ export function getSignState(compose: Element): SignState | null {
   return (compose.getAttribute(SIGN_STATE_ATTR) as SignState | null) ?? null;
 }
 
+/**
+ * Marks the compose signed AND records the content fingerprint it was signed
+ * at, so a later edit (or a recycled container holding a different draft)
+ * re-locks Send. Use this instead of `setSignState(compose, 'signed')`.
+ */
+export function markSigned(compose: Element): void {
+  setSignState(compose, 'signed');
+  const fp = contentFingerprint(compose);
+  if (fp !== null) compose.setAttribute(SIGNED_HASH_ATTR, fp);
+}
+
+/**
+ * Clears all ProofLine guard state from a compose. Called when a message is
+ * actually sent (so Gmail can safely recycle the container for a new draft)
+ * and when we first instrument a recycled container.
+ */
+export function clearComposeGuardState(compose: Element): void {
+  compose.removeAttribute(SIGN_STATE_ATTR);
+  compose.removeAttribute(SEND_UNSIGNED_ATTR);
+  compose.removeAttribute(SIGNED_HASH_ATTR);
+  clearSendAlert(compose);
+}
+
 function isWire(compose: Element): boolean {
   return compose.querySelector<HTMLInputElement>(WIRE_CHECKBOX_SELECTOR)?.checked === true;
 }
 
+/**
+ * True when the compose is marked signed but its current content no longer
+ * matches what was signed — an edit after signing, or a recycled container.
+ * When no fingerprint was recorded we do not re-lock (backward compatible).
+ */
+export function isStaleSignature(compose: Element): boolean {
+  if (getSignState(compose) !== 'signed') return false;
+  const stored = compose.getAttribute(SIGNED_HASH_ATTR);
+  if (!stored) return false;
+  const current = contentFingerprint(compose);
+  return current === null || current !== stored;
+}
+
 /** Why sending is blocked for this compose, or null when it may be sent. */
 export function sendBlockReason(compose: Element): string | null {
-  if (compose.getAttribute(SEND_UNSIGNED_ATTR) === 'true') return null;
   const state = getSignState(compose);
-  if (state === 'signed') return null;
+  const wire = isWire(compose);
+
+  if (state === 'signed') {
+    return isStaleSignature(compose)
+      ? 'This email changed after it was signed. Sign it again before sending.'
+      : null;
+  }
+  if (state === 'cosign_pending') {
+    return 'This wire is waiting for a cosigner. ProofLine unblocks Send as soon as an approver cosigns.';
+  }
+  // An unsigned wire can never be sent — no escape hatch (PFL-181 bug 3).
+  if (wire) {
+    return 'This email is marked as a wire instruction and must be signed before sending.';
+  }
+  // Non-wire: a one-time "send unsigned" choice releases exactly one send.
+  if (compose.getAttribute(SEND_UNSIGNED_ATTR) === 'true') return null;
   if (state === 'pending') return 'ProofLine is still signing this email.';
   if (state === 'failed') return 'ProofLine signing failed, so this email is not signed.';
-  if (state === 'cosign_pending') return 'This wire is waiting for a cosigner. ProofLine unblocks Send as soon as an approver cosigns.';
-  if (isWire(compose)) return 'This email is marked as a wire instruction and has not been signed.';
   return null;
+}
+
+/** Whether the inline alert may offer a "Send unsigned" escape hatch. */
+function maySendUnsigned(compose: Element): boolean {
+  return !isWire(compose) && getSignState(compose) !== 'cosign_pending';
 }
 
 // ─── Detection ───────────────────────────────────────────────────────────────
@@ -81,6 +147,11 @@ export function isGmailSendButton(el: Element | null): boolean {
 }
 
 function composeFor(target: Element, deps: SendGuardDeps): Element | null {
+  // Primary: climb to the instrumented container. Works for dialogs AND
+  // inline reply/forward boxes, independent of Gmail's DOM differences.
+  const resolved = resolveInstrumentedCompose(target);
+  if (resolved) return resolved;
+  // Fallback: containment search over the detector's current composes.
   return deps.findComposes(document).find((c) => c.contains(target)) ?? null;
 }
 
@@ -88,6 +159,31 @@ function composeFor(target: Element, deps: SendGuardDeps): Element | null {
 
 function clearSendAlert(compose: Element): void {
   compose.querySelector(`[${SEND_ALERT_ATTR}]`)?.remove();
+}
+
+/**
+ * Finds a safe place to insert ProofLine UI: a parent and a reference node,
+ * guaranteed to be OUTSIDE Gmail's editable body so the UI is never
+ * serialized into the sent email (PFL-181 bug 3). Prefers the row that holds
+ * our Sign button.
+ */
+function safeAnchor(compose: Element): { parent: Element; before: Node | null } {
+  const signBtn = compose.querySelector<HTMLElement>(`[${INJECTED_MARKER}="true"]`);
+  const toolbarRow = signBtn?.parentElement ?? null;
+  const candidate = toolbarRow?.parentElement ?? toolbarRow ?? compose;
+  if (!isInsideEditable(candidate)) {
+    const before = toolbarRow && candidate.contains(toolbarRow) ? toolbarRow : null;
+    return { parent: candidate, before };
+  }
+  // The preferred anchor is inside an editable region — never insert there.
+  // Fall back to placing the UI immediately before the body editable.
+  const body = compose.querySelector(
+    '[contenteditable="true"], [role="textbox"], [g_editable="true"]',
+  );
+  if (body?.parentElement && !isInsideEditable(body.parentElement)) {
+    return { parent: body.parentElement, before: body };
+  }
+  return { parent: compose, before: compose.firstChild };
 }
 
 function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps): void {
@@ -119,11 +215,10 @@ function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps): v
     alert.appendChild(retry);
   }
 
-  // Offered (also while pending) so a lost sign result can never trap the
-  // user; it is an explicit, logged choice. Not offered while a wire waits
-  // for its cosigner: that state is known, and sending would skip the
-  // approval (PFL-136).
-  if (getSignState(compose) !== 'cosign_pending') {
+  // "Send unsigned" is offered only for a non-wire that isn't waiting on a
+  // cosigner: an explicit, logged, one-time choice. A wire instruction is
+  // never escapable (PFL-181 bug 3) and the cosign state is known-pending.
+  if (maySendUnsigned(compose)) {
     const unsigned = document.createElement('button');
     unsigned.type = 'button';
     unsigned.textContent = 'Send unsigned';
@@ -139,8 +234,8 @@ function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps): v
     alert.appendChild(unsigned);
   }
 
-  const toolbarRow = signBtn?.parentElement;
-  (toolbarRow?.parentElement ?? compose).insertBefore(alert, toolbarRow ?? null);
+  const { parent, before } = safeAnchor(compose);
+  parent.insertBefore(alert, before);
 }
 
 // ─── Install ─────────────────────────────────────────────────────────────────
@@ -149,6 +244,14 @@ function block(event: Event): void {
   event.preventDefault();
   event.stopPropagation();
   event.stopImmediatePropagation();
+}
+
+/** A send is passing — consume any one-time unsigned choice and, for a
+ *  message that was signed, clear the guard state so Gmail may recycle the
+ *  container for a fresh draft without it looking pre-signed. */
+function onSendAllowed(compose: Element): void {
+  compose.removeAttribute(SEND_UNSIGNED_ATTR);
+  if (getSignState(compose) === 'signed') clearComposeGuardState(compose);
 }
 
 /**
@@ -172,8 +275,7 @@ export function installSendGuard(doc: Document, deps: SendGuardDeps): () => void
     if (!compose) return;
     const reason = sendBlockReason(compose);
     if (!reason) {
-      // A one-time "send unsigned" choice is consumed by this send.
-      if (event.type === 'click') compose.removeAttribute(SEND_UNSIGNED_ATTR);
+      if (event.type === 'click') onSendAllowed(compose);
       return;
     }
     block(event);
@@ -188,7 +290,7 @@ export function installSendGuard(doc: Document, deps: SendGuardDeps): () => void
     if (!compose) return;
     const reason = sendBlockReason(compose);
     if (!reason) {
-      compose.removeAttribute(SEND_UNSIGNED_ATTR);
+      onSendAllowed(compose);
       return;
     }
     block(event);
