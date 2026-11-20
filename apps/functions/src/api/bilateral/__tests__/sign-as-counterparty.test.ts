@@ -30,7 +30,16 @@ function docRef(c: string, id: string) {
     async delete() { delete col(c)[id]; },
   };
 }
-const db = { collection: (c: string) => ({ doc: (id: string) => docRef(c, id) }) };
+const db = {
+  collection: (c: string) => ({
+    doc: (id: string) => docRef(c, id),
+    async add(data: Record<string, unknown>) {
+      const id = `auto_${Object.keys(col(c)).length + 1}`;
+      col(c)[id] = { ...data };
+      return { id };
+    },
+  }),
+};
 
 vi.mock("firebase-admin/firestore", () => ({ getFirestore: () => db }));
 vi.mock("firebase-admin/app", () => ({ initializeApp: vi.fn(), getApps: vi.fn(() => [{}]), getApp: vi.fn() }));
@@ -137,6 +146,12 @@ describe("POST /v1/bilateral/sign-as-counterparty (PFL-182)", () => {
     expect(cpEvent && cpEvent.actorId).toBe(CP_USER);
     expect(cpEvent && cpEvent.credentialId).toBe(CP_CRED);
     expect(cpEvent && cpEvent.clientDataJSON).toBe("cd");
+
+    // PFL-146: the completed document is queued for anchoring, tagged with
+    // its source collection so coordinates land on bilateral_documents.
+    const queued = Object.values(col("anchor_queue"));
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ envelopeId: docId, collection: "bilateral_documents" });
   });
 
   it("rejects an unverified assertion (401) and does not sign", async () => {

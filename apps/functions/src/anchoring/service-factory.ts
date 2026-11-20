@@ -27,6 +27,8 @@ import type { AnchorProvider, Hex32, AnchorReceipt, MerkleProof } from "@proofli
 // provider is now re-exported from the package root.
 import { makeViemBaseSepoliaAnchorProvider } from "@proofline/anchoring";
 
+import { getFirestore } from "firebase-admin/firestore";
+
 import type { RegistryEvent } from "./batch.js";
 import type {
   AnchorRecord,
@@ -66,8 +68,6 @@ export function makeConsoleLogger(): AnchorLogger {
 export function makeFirestoreEventSource(): EventSource {
   return {
     async collectUnanchoredEvents(): Promise<RegistryEvent[]> {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { getFirestore } = require("firebase-admin/firestore");
       const db   = getFirestore();
       const snap = await db.collection("anchor_queue").orderBy("queuedAt").get();
 
@@ -98,8 +98,6 @@ export function makeFirestoreEventSource(): EventSource {
 export function makeFirestoreAnchorStore(): AnchorStore {
   return {
     async getLatestSequence(): Promise<number> {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { getFirestore } = require("firebase-admin/firestore");
       const db = getFirestore();
       const snap = await db
         .collection("anchors")
@@ -111,8 +109,6 @@ export function makeFirestoreAnchorStore(): AnchorStore {
     },
 
     async findAnchorRecordByRoot(root: Hex32): Promise<AnchorRecord | null> {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { getFirestore } = require("firebase-admin/firestore");
       const db = getFirestore();
       const snap = await db
         .collection("anchors")
@@ -124,16 +120,12 @@ export function makeFirestoreAnchorStore(): AnchorStore {
     },
 
     async writeAnchorRecord(rec: AnchorRecord): Promise<void> {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { getFirestore } = require("firebase-admin/firestore");
       const db = getFirestore();
       await db.collection("anchors").doc(rec.id).set(rec);
     },
 
     async markEventsAnchored(eventIds: string[], anchorRecordId: string): Promise<void> {
       if (eventIds.length === 0) return;
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { getFirestore } = require("firebase-admin/firestore");
       const db = getFirestore();
 
       // PFL-106: the previous impl only DELETED the anchor_queue entries —
@@ -166,10 +158,16 @@ export function makeFirestoreAnchorStore(): AnchorStore {
           const id = chunk[j];
           const qd = queueDocs[j];
           if (anchorData?.root && qd.exists) {
-            const envelopeId = (qd.data() as { envelopeId?: string }).envelopeId;
+            const entry = qd.data() as { envelopeId?: string; collection?: string };
+            const envelopeId = entry.envelopeId;
+            // PFL-146: bilateral documents live in bilateral_documents, not
+            // signed_messages. The queue entry names its source collection so
+            // the on-chain coordinates land on the right doc (default keeps
+            // the signed_messages path for wire/email envelopes).
+            const targetCollection = entry.collection ?? "signed_messages";
             if (envelopeId) {
               batch.set(
-                db.collection("signed_messages").doc(envelopeId),
+                db.collection(targetCollection).doc(envelopeId),
                 {
                   anchorRoot:           anchorData.root,
                   anchorTxHash:         anchorData.txHash ?? "",
