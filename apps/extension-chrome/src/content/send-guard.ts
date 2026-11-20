@@ -254,8 +254,12 @@ export function sendBlockReason(compose: Element): string | null {
   if (state === 'failed') return 'ProofLine signing failed, so this email is not signed.';
   // Plain unsigned email, never signed — governed by the company policy (PFL-188).
   if (unsignedPolicy.mode === 'allow') return null;
-  return unsignedPolicy.mode === 'warn'
-    ? "This email isn't signed. Your company asks you to confirm before sending it unsigned."
+  if (unsignedPolicy.mode === 'warn') {
+    return "This email isn't signed. Your company asks you to confirm before sending it unsigned.";
+  }
+  // block — distinguish a genuine policy from failing closed so the user knows why.
+  return unsignedPolicy.failed
+    ? "Couldn't load your company's signing policy, so sending is blocked until it loads. Reconnect ProofLine (click the extension icon) or try again."
     : 'Your company requires outgoing email to be signed with ProofLine.';
 }
 

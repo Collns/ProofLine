@@ -169,7 +169,7 @@ const ALLOWED_ORIGINS: ReadonlySet<string> = new Set([
   "https://proofline-admin.firebaseapp.com",
 ]);
 
-function corsMiddleware(
+export function corsMiddleware(
   req: express.Request,
   res: express.Response,
   next: express.NextFunction,
@@ -179,6 +179,14 @@ function corsMiddleware(
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Credentials", "true");
+  } else if (typeof origin === "string" && origin.startsWith("chrome-extension://")) {
+    // PFL-188: the extension's background SW / content script calls
+    // /v1/extension/* and other API routes from its own origin. These are
+    // Bearer-authed (no cookies), so we reflect the chrome-extension origin
+    // WITHOUT Allow-Credentials. (Belt-and-suspenders alongside the
+    // manifest host_permissions, which lets the background bypass CORS.)
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
   }
   // DELETE: web-admin cancels a counterparty invitation (PFL-026).
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");

@@ -6,7 +6,8 @@
   "permissions": ["storage", "scripting", "activeTab", "tabs"],
   "host_permissions": [
     "https://mail.google.com/*",
-    "https://proofline-sign.web.app/*"
+    "https://proofline-sign.web.app/*",
+    "https://us-central1-proofline-cdabb.cloudfunctions.net/*"
   ],
   "background": {
     "service_worker": "background.js",

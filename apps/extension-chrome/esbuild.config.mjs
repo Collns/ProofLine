@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { copyFile, mkdir, rm } from 'node:fs/promises';
+import { copyFile, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 
 const outdir = 'dist';
@@ -25,7 +25,23 @@ await Promise.all([
   build({ ...common, entryPoints: ['src/popup/popup.ts'],      outfile: `${outdir}/popup.js`,      format: 'iife' }),
 ]);
 
-await copyFile('manifest.json', `${outdir}/manifest.json`);
+// PFL-188: when the build points at another environment (EXT_API_ORIGIN /
+// EXT_SIGN_ORIGIN), add those origins to host_permissions so the background
+// SW can reach them without a CORS preflight, and let the sign popup connect.
+// A normal `pnpm build` (no env vars) ships the manifest unchanged.
+const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
+const asHostGlob = (value) => {
+  try { return `${new URL(value).origin}/*`; } catch { return null; }
+};
+const extraHosts = [asHostGlob(process.env.EXT_API_ORIGIN), asHostGlob(process.env.EXT_SIGN_ORIGIN)].filter(Boolean);
+for (const h of extraHosts) {
+  if (!manifest.host_permissions.includes(h)) manifest.host_permissions.push(h);
+}
+const signGlob = asHostGlob(process.env.EXT_SIGN_ORIGIN);
+if (signGlob && Array.isArray(manifest.externally_connectable?.matches) && !manifest.externally_connectable.matches.includes(signGlob)) {
+  manifest.externally_connectable.matches.push(signGlob);
+}
+await writeFile(`${outdir}/manifest.json`, JSON.stringify(manifest, null, 2));
 await copyFile('public/popup.html', `${outdir}/popup.html`);
 for (const size of [16, 48, 128]) {
   await copyFile(`public/icon-${size}.png`, `${outdir}/icon-${size}.png`);
