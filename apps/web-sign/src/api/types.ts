@@ -9,6 +9,7 @@ import type {
   SignedEnvelope,
   PolicyErrorCode,
   SignatureRecord,
+  SigningScreening,
 } from '@proofline/types';
 
 // ── /v1/sign ─────────────────────────────────────────────────────────────────
@@ -28,9 +29,10 @@ export interface SignRequest {
 // older callers, but cross-origin fetch can't read custom headers
 // without CORS exposure — so we rely on the body field.)
 export type SignResponse =
-  | { ok: true; challenge: WebAuthnChallenge; policyDecision: 'APPROVED'; challengeId: string }
+  // `screening` (PFL-028) is present for wire instructions: advisory, never blocks.
+  | { ok: true; challenge: WebAuthnChallenge; policyDecision: 'APPROVED'; challengeId: string; screening?: SigningScreening }
   // PFL-136: the sender still signs first; approvers are emailed after finalize.
-  | { ok: true; challenge: WebAuthnChallenge; policyDecision: 'COSIGN_REQUIRED'; challengeId: string; approvers: string[] }
+  | { ok: true; challenge: WebAuthnChallenge; policyDecision: 'COSIGN_REQUIRED'; challengeId: string; approvers: string[]; screening?: SigningScreening }
   | { ok: false; error: PolicyErrorCode };
 
 // ── /v1/sign-silent ──────────────────────────────────────────────────────────

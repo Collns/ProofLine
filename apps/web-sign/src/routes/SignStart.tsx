@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { EmailPayload } from '@proofline/types';
+import type { EmailPayload, SigningScreening } from '@proofline/types';
 import { ProofLineLogo } from '../components/ProofLineLogo';
 import { PayloadPreview } from '../components/PayloadPreview';
+import { ScreeningWarning } from '../components/ScreeningWarning';
 import { BiometricButton } from '../components/BiometricButton';
 import { SessionInfo } from '../components/SessionInfo';
 import { ErrorScreen } from '../components/ErrorScreen';
@@ -41,8 +42,8 @@ type Phase =
   | { kind: 'loading' }
   | { kind: 'tamper'; message: string }
   | { kind: 'opener-error'; reason: string }
-  | { kind: 'ready'; payload: EmailPayload; payloadHash: string; serverChallenge: string; challengeId: string; cosignApprovers: number }
-  | { kind: 'signing'; payload: EmailPayload; payloadHash: string; serverChallenge: string; challengeId: string; cosignApprovers: number }
+  | { kind: 'ready'; payload: EmailPayload; payloadHash: string; serverChallenge: string; challengeId: string; cosignApprovers: number; screening?: SigningScreening }
+  | { kind: 'signing'; payload: EmailPayload; payloadHash: string; serverChallenge: string; challengeId: string; cosignApprovers: number; screening?: SigningScreening }
   | { kind: 'cosign-pending'; approverCount: number; emailed: boolean }
   | { kind: 'finalize-error'; code: string; detail: string }
   | { kind: 'cancelled' }
@@ -164,6 +165,7 @@ export function SignStart() {
           serverChallenge: signResp.challenge.challenge,
           challengeId: signResp.challengeId,
           cosignApprovers: signResp.policyDecision === 'COSIGN_REQUIRED' ? signResp.approvers.length : 0,
+          ...(signResp.screening ? { screening: signResp.screening } : {}),
         });
       } catch (e) {
         if (cancelled) return;
@@ -181,8 +183,8 @@ export function SignStart() {
   // ── Sign + finalize
   async function runCeremony(): Promise<void> {
     if (phase.kind !== 'ready' || !params) return;
-    const { payload, payloadHash, serverChallenge, challengeId, cosignApprovers } = phase;
-    setPhase({ kind: 'signing', payload, payloadHash, serverChallenge, challengeId, cosignApprovers });
+    const { payload, payloadHash, serverChallenge, challengeId, cosignApprovers, screening } = phase;
+    setPhase({ kind: 'signing', payload, payloadHash, serverChallenge, challengeId, cosignApprovers, screening });
 
     try {
       // userVerification: 'required' — the actual biometric prompt.
@@ -376,6 +378,7 @@ export function SignStart() {
         )}
         {(phase.kind === 'ready' || phase.kind === 'signing') && (
           <>
+            <ScreeningWarning screening={phase.screening} />
             {phase.cosignApprovers > 0 && (
               <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="note">
                 This wire is above your limit. After you sign, {phase.cosignApprovers === 1 ? 'an approver' : `${phase.cosignApprovers} approvers`} will
