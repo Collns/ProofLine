@@ -83,16 +83,16 @@ export function makeStubEmailProvider(opts?: StubEmailOptions): StubEmailProvide
       });
     },
 
-    async sendInvitation(to: string, inviterCompany: string, inviteToken: string) {
+    async sendInvitation(to: string, inviterCompany: string, inviteLink: string) {
       const id = genId();
       captured.push({
         id,
         type: 'invitation',
         to: [to],
         subject: `${inviterCompany} invites you to ProofLine`,
-        html: `<p>${inviterCompany} has invited you. Token: ${inviteToken}</p>`,
-        text: `${inviterCompany} has invited you. Token: ${inviteToken}`,
-        meta: { inviterCompany, inviteToken },
+        html: `<p>${inviterCompany} has invited you. <a href="${inviteLink}">Get verified</a></p>`,
+        text: `${inviterCompany} has invited you. Get started: ${inviteLink}`,
+        meta: { inviterCompany, inviteLink },
         capturedAt: now(),
       });
     },

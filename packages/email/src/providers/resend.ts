@@ -90,16 +90,16 @@ export function makeResendProvider(opts: ResendOptions): EmailProvider {
       });
     },
 
-    async sendInvitation(to: string, inviterCompany: string, inviteToken: string) {
+    async sendInvitation(to: string, inviterCompany: string, inviteLink: string) {
       await rawSend({
         to: [to],
         subject: `${inviterCompany} invites you to ProofLine`,
         html: `
           <h2>${escapeHtml(inviterCompany)} has invited you to verify with ProofLine</h2>
           <p>ProofLine cryptographically signs business communications to prevent wire fraud.</p>
-          <p><a href="https://app.proofline.web.app/invite/${encodeURIComponent(inviteToken)}" style="background:#0D6EFD;color:white;padding:12px 24px;text-decoration:none;border-radius:4px">Get verified</a></p>
+          <p><a href="${escapeHtml(inviteLink)}" style="background:#0D6EFD;color:white;padding:12px 24px;text-decoration:none;border-radius:4px">Get verified</a></p>
         `,
-        text: `${inviterCompany} has invited you to verify with ProofLine. Get started: https://app.proofline.web.app/invite/${inviteToken}`,
+        text: `${inviterCompany} has invited you to verify with ProofLine. Get started: ${inviteLink}`,
         tags: { type: 'invitation' },
       });
     },

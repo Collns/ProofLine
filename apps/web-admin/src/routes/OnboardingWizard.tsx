@@ -1,4 +1,5 @@
-import { useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { WizardLayout } from '../components/WizardLayout';
 import { useWizard, clearWizardStorage } from '../state/wizard-store';
 import { StepIntro } from './steps/StepIntro';
@@ -11,9 +12,30 @@ import { StepKeyCeremony } from './steps/StepKeyCeremony';
 import { StepAnchored } from './steps/StepAnchored';
 import { StepInstallExtension } from './steps/StepInstallExtension';
 
+/** Where the counterparty invite token is stashed for the acceptance step (PFL-133). */
+export const INVITE_TOKEN_KEY = 'proofline.web-admin.inviteToken';
+
 export function OnboardingWizard() {
   const { state, dispatch } = useWizard();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // PFL-132: the invitation email links to /onboarding?invite=<token>. Capture
+  // the one-time token for the acceptance step, then drop it from the URL so it
+  // isn't left in history or copied around.
+  useEffect(() => {
+    const token = searchParams.get('invite');
+    if (!token) return;
+    try {
+      window.sessionStorage.setItem(INVITE_TOKEN_KEY, token);
+    } catch {
+      // sessionStorage unavailable (private mode): the token stays in the URL.
+      return;
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('invite');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   return (
     <WizardLayout step={state.step}>
