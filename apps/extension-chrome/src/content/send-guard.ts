@@ -267,15 +267,26 @@ export function clearSendAlert(compose: Element): void {
  * our Sign button.
  */
 function safeAnchor(compose: Element): { parent: Element; before: Node | null } {
+  // PFL-181 #4: insert the alert/progress as a BLOCK child of the compose,
+  // directly before the toolbar's top-level block. In inline reply/forward
+  // the Sign button lives inside a <table> toolbar (tr.btC); inserting a <div>
+  // into that table region shifted the toolbar down over the wire panel and
+  // hid the "Amount (USD)" label. Anchoring in the compose's own block flow
+  // keeps the toolbar intact and the wire panel (also a compose child,
+  // appended after) below the toolbar.
   const signBtn = compose.querySelector<HTMLElement>(`[${INJECTED_MARKER}="true"]`);
-  const toolbarRow = signBtn?.parentElement ?? null;
-  const candidate = toolbarRow?.parentElement ?? toolbarRow ?? compose;
-  if (!isInsideEditable(candidate)) {
-    const before = toolbarRow && candidate.contains(toolbarRow) ? toolbarRow : null;
-    return { parent: candidate, before };
+  if (signBtn) {
+    // Climb to the highest ancestor of the Sign button that is still a direct
+    // child of the compose — the toolbar's top-level block.
+    let block: Element = signBtn;
+    while (block.parentElement && block.parentElement !== compose) {
+      block = block.parentElement;
+    }
+    if (block.parentElement === compose && !isInsideEditable(block)) {
+      return { parent: compose, before: block };
+    }
   }
-  // The preferred anchor is inside an editable region — never insert there.
-  // Fall back to placing the UI immediately before the body editable.
+  // Fallback: place the UI immediately before the body editable, outside it.
   const body = compose.querySelector(
     '[contenteditable="true"], [role="textbox"], [g_editable="true"]',
   );
