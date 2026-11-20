@@ -218,7 +218,11 @@ const POLICY_CHIP_ATTR = 'data-proofline-policy-chip';
 
 /** Idempotently reflects the active unsigned-email policy in the compose.
  *  Shown for block/warn (and when the policy couldn't be fetched); hidden for
- *  allow. Safe to call on every sweep — it updates text in place. */
+ *  allow. Safe to call on every sweep: it performs NO DOM mutation when the
+ *  chip is already in the desired state — critical, because the content
+ *  script's MutationObserver re-runs the sweep on any DOM change, so a chip
+ *  that rewrote itself every sweep would loop forever and freeze Gmail
+ *  (PFL-188). */
 export function updatePolicyChip(compose: Element): void {
   const policy = getUnsignedPolicy();
   const existing = compose.querySelector<HTMLElement>(`[${POLICY_CHIP_ATTR}]`);
@@ -228,7 +232,12 @@ export function updatePolicyChip(compose: Element): void {
   else if (policy.mode === 'block') message = 'Company policy: signing required';
   else if (policy.mode === 'warn') message = 'Company policy: signing recommended';
 
-  if (!message) { existing?.remove(); return; }
+  // No-op fast paths — never touch the DOM when nothing would change.
+  if (!message) {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing && existing.textContent === message) return;
 
   const chip = existing ?? document.createElement('div');
   if (!existing) {

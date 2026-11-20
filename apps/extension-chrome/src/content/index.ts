@@ -48,7 +48,7 @@ function refreshPolicy(force = false): void {
         const mode = (r.policy.mode === 'warn' || r.policy.mode === 'allow') ? r.policy.mode : 'block';
         setUnsignedPolicy({ mode, allowOverride: r.policy.allowUnsignedOverride === true, failed: false });
       }
-      sweep();
+      scheduleSweep(); // reflect the (possibly changed) policy in open composes
     });
   } catch {
     failClosedPolicy();
@@ -83,12 +83,26 @@ function sweep(): void {
     for (const compose of composes) {
       if (tryInject(compose)) injected = true;
     }
-    // PFL-188: reflect the current policy in every open compose.
+    // PFL-188: reflect the current policy in every open compose. These calls
+    // are idempotent — no DOM mutation when the chip is already correct — so
+    // the MutationObserver below can't feed itself into a loop.
     for (const compose of composes) updatePolicyChip(compose);
-    // Refresh the policy when a compose newly opens (throttled).
+    // Refresh the policy when a compose newly opens (throttled to 10s).
     if (injected) refreshPolicy();
   }
   sweepInboundMessages(document);
+}
+
+// PFL-188: coalesce MutationObserver bursts (Gmail fires many mutations as a
+// compose opens, and our own injections fire more) into a single sweep on the
+// next macrotask, and never run two sweeps concurrently. Combined with the
+// idempotent injections above, this stops the observer→mutate→observe loop
+// that froze the Gmail renderer.
+let sweepScheduled = false;
+function scheduleSweep(): void {
+  if (sweepScheduled) return;
+  sweepScheduled = true;
+  setTimeout(() => { sweepScheduled = false; sweep(); }, 0);
 }
 
 /** PFL-188: record a "send unsigned" override for the admin audit log. */
@@ -248,8 +262,10 @@ function start(): void {
   // PFL-188: refresh the policy on a short interval too.
   setInterval(() => refreshPolicy(true), POLICY_REFRESH_MS);
 
+  // Debounced: a mutation (including our own injections) schedules one sweep
+  // on the next macrotask rather than running synchronously per mutation.
   const observer = new MutationObserver(() => {
-    sweep();
+    scheduleSweep();
   });
   observer.observe(document.body, { childList: true, subtree: true });
 }
