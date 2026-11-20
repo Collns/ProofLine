@@ -53,11 +53,16 @@ describe('makeResendProvider templates', () => {
       { documentId: 'd1', documentType: EVIL, drafterName: EVIL, drafterCompany: EVIL },
       'https://portal.test/b/d1?t=x',
     );
-    await provider.sendInvitation('bob@scotia.test', EVIL, 'tok/../x');
+    await provider.sendInvitation(
+      'bob@scotia.test',
+      EVIL,
+      'https://proofline-admin.web.app/onboarding?invite=tok_abc&x="evil"',
+    );
     for (const { html } of sent) {
       expect(html).not.toContain('<img');
       expect(html).not.toContain('<a href="https://evil.example"');
     }
-    expect(sent[1]!.html).toContain('/invite/tok%2F..%2Fx');
+    // The server-built link lands in the href, with its quotes escaped.
+    expect(sent[1]!.html).toContain('href="https://proofline-admin.web.app/onboarding?invite=tok_abc&amp;x=&quot;evil&quot;"');
   });
 });

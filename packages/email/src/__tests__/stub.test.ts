@@ -102,17 +102,20 @@ describe('makeStubEmailProvider — sendInvitation', () => {
   let p: StubEmailProvider;
   beforeEach(() => { p = makeStubEmailProvider(); });
 
+  const LINK = 'https://proofline-admin.web.app/onboarding?invite=tok_abc123';
+
   it('uses inviter company name in subject', async () => {
-    await p.sendInvitation('alice@vendor.com', 'Acme Title', 'tok_abc123');
+    await p.sendInvitation('alice@vendor.com', 'Acme Title', LINK);
     expect(p.getLast()?.subject).toBe('Acme Title invites you to ProofLine');
   });
 
-  it('captures inviteToken in meta', async () => {
-    await p.sendInvitation('alice@vendor.com', 'Acme Title', 'tok_abc123');
+  it('captures the invite link in meta and body', async () => {
+    await p.sendInvitation('alice@vendor.com', 'Acme Title', LINK);
     expect(p.getLast()?.meta).toEqual({
       inviterCompany: 'Acme Title',
-      inviteToken: 'tok_abc123',
+      inviteLink: LINK,
     });
+    expect(p.getLast()?.text).toContain(LINK);
   });
 });
 

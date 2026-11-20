@@ -36,7 +36,7 @@ export interface EmailProvider {
   sendInvitation(
     to: string,
     inviterCompany: string,
-    inviteToken: string,
+    inviteLink: string,
   ): Promise<void>;
   sendBilateralRequest(
     to: string,

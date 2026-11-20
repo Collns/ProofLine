@@ -266,6 +266,16 @@ function signAppBaseUrl(): string {
   return process.env["SIGN_APP_URL"]?.trim() || "https://proofline-sign.web.app";
 }
 
+/** Base URL of the admin app (web-admin): onboarding for invited counterparties (PFL-132). */
+function adminAppBaseUrl(): string {
+  return process.env["ADMIN_APP_URL"]?.trim() || "https://proofline-admin.web.app";
+}
+
+/** Onboarding link carrying a one-time invite token (PFL-132). */
+function inviteLink(token: string): string {
+  return `${adminAppBaseUrl()}/onboarding?invite=${encodeURIComponent(token)}`;
+}
+
 let cachedEmailProvider: EmailProvider | null = null;
 function emailProvider(): EmailProvider {
   if (cachedEmailProvider) return cachedEmailProvider;
@@ -455,8 +465,9 @@ publicApp.use(
 //
 // Firebase ID token with a company (makeFirebaseAuth); the router itself
 // requires owner/manager on a verified company and scopes every lookup to
-// the caller's companyId. Invite-link email delivery is PFL-132, so no
-// `deliver` is wired yet: invitations are recorded but not emailed.
+// the caller's companyId. PFL-132: each issued token is emailed as an
+// onboarding link; the token is never returned to the caller or logged, and
+// a delivery failure is logged but does not fail the request.
 
 const invitationsAuth = makeFirebaseAuth({ requireCompany: true });
 
@@ -464,6 +475,7 @@ let cachedInvitationsRouter: express.Router | null = null;
 function invitationsRouter(): express.Router {
   if (cachedInvitationsRouter) return cachedInvitationsRouter;
   const firestore = getFirestore();
+  const email = emailProvider();
   cachedInvitationsRouter = makeInvitationsRouter({
     service: makeInvitationService({ store: makeFirestoreInvitationStore(firestore) }),
     async loadCompany(companyId) {
@@ -471,6 +483,14 @@ function invitationsRouter(): express.Router {
       if (!snap.exists) return null;
       const c = snap.data() as { legalName?: string; domain?: string; status?: string };
       return { legalName: c.legalName ?? "", domain: c.domain ?? "", ...(c.status ? { status: c.status } : {}) };
+    },
+    // PFL-132: email the branded invitation with a one-time onboarding link.
+    async deliver(issued, inviter) {
+      await email.sendInvitation(
+        issued.invitation.email,
+        inviter.companyName,
+        inviteLink(issued.token),
+      );
     },
   });
   return cachedInvitationsRouter;
