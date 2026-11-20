@@ -12,7 +12,10 @@ import {
   getSignState,
   sendBlockReason,
   isGmailSendButton,
+  beginSigning,
+  endSigning,
   SEND_ALERT_ATTR,
+  SIGNING_PROGRESS_ATTR,
 } from '../src/content/send-guard.js';
 
 let uninstall: () => void = () => {};
@@ -78,9 +81,27 @@ describe('detection + state', () => {
     expect(gmailSend).toHaveBeenCalledOnce();
   });
 
-  it('a Sign click marks the compose pending', () => {
+  it('a Sign click alone does NOT mark the compose pending (the button handler owns that after validation)', () => {
     sign.click();
+    expect(getSignState(compose)).toBeNull();
+  });
+
+  it('beginSigning marks pending and shows a progress chip; a result clears it', () => {
+    beginSigning(compose, { timeoutMs: 100_000 });
     expect(getSignState(compose)).toBe('pending');
+    expect(compose.querySelector(`[${SIGNING_PROGRESS_ATTR}]`)).not.toBeNull();
+    endSigning(compose);
+    expect(compose.querySelector(`[${SIGNING_PROGRESS_ATTR}]`)).toBeNull();
+  });
+
+  it('times out a stuck sign → failed with a reason, and the progress chip is gone', () => {
+    let fire: () => void = () => {};
+    beginSigning(compose, { timeoutMs: 1, schedule: (fn) => { fire = fn; return { cancel: () => {} }; } });
+    expect(getSignState(compose)).toBe('pending');
+    fire(); // simulate the timeout elapsing with no result
+    expect(getSignState(compose)).toBe('failed');
+    expect(compose.querySelector(`[${SIGNING_PROGRESS_ATTR}]`)).toBeNull();
+    expect(compose.querySelector(`[${SEND_ALERT_ATTR}]`)?.textContent).toContain("didn't hear back");
   });
 });
 
@@ -140,13 +161,15 @@ describe('escape hatches', () => {
     expect(gmailSend).toHaveBeenCalledOnce(); // blocked again: the choice was one-time
   });
 
-  it('"Retry signing" re-runs the Sign button', () => {
-    const signClick = vi.fn();
+  it('"Retry signing" re-runs the Sign button (which re-enters the signing lifecycle)', () => {
+    // The real Sign button re-runs onClick → beginSigning; simulate that.
+    const signClick = vi.fn(() => beginSigning(compose, { timeoutMs: 100_000 }));
     sign.addEventListener('click', signClick);
     setSignState(compose, 'failed');
     send.click();
     compose.querySelector<HTMLElement>('[data-proofline-retry-sign]')!.click();
     expect(signClick).toHaveBeenCalledOnce();
     expect(getSignState(compose)).toBe('pending');
+    endSigning(compose);
   });
 });

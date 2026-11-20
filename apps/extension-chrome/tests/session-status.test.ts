@@ -311,7 +311,7 @@ describe('mountWireFields', () => {
 
     mountWireFields(compose, toolbar);
 
-    const panel = toolbar.querySelector<HTMLElement>('[data-proofline-wire-panel]');
+    const panel = compose.querySelector<HTMLElement>('[data-proofline-wire-panel]');
     expect(panel?.style.display).toBe('none');
   });
 
@@ -329,7 +329,7 @@ describe('mountWireFields', () => {
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event('change'));
 
-    const panel = toolbar.querySelector<HTMLElement>('[data-proofline-wire-panel]');
+    const panel = compose.querySelector<HTMLElement>('[data-proofline-wire-panel]');
     expect(panel?.style.display).not.toBe('none');
   });
 
@@ -349,7 +349,7 @@ describe('mountWireFields', () => {
     checkbox.checked = false;
     checkbox.dispatchEvent(new Event('change'));
 
-    const panel = toolbar.querySelector<HTMLElement>('[data-proofline-wire-panel]');
+    const panel = compose.querySelector<HTMLElement>('[data-proofline-wire-panel]');
     expect(panel?.style.display).toBe('none');
   });
 });

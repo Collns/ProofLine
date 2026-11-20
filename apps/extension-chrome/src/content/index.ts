@@ -5,7 +5,7 @@ import { tryInject } from './inject-toolbar.js';
 import { injectBannerIntoCompose } from './inject-banner.js';
 import { isBackgroundToContentMessage } from '../shared/types.js';
 import { readComposeId, COMPOSE_ID_ATTR } from './shared.js';
-import { installSendGuard, setSignState, markSigned } from './send-guard.js';
+import { installSendGuard, setSignState, markSigned, endSigning } from './send-guard.js';
 import { watchCosign, COSIGN_ENVELOPE_ATTR, type CosignStatusReply } from './cosign-release.js';
 
 // Content-script entry. Runs once per Gmail tab. We use a single
@@ -100,6 +100,7 @@ function listenForBackgroundMessages(): void {
         return false;
       }
       compose.removeAttribute(COSIGN_ENVELOPE_ATTR);
+      endSigning(compose); // result is back: cancel the signing timeout + progress
       const result = injectBannerIntoCompose(compose, message.bannerHtml);
       log('content', 'banner injected', result);
       // PFL-096: only a message that carries the banner counts as signed.
@@ -115,7 +116,7 @@ function listenForBackgroundMessages(): void {
       findComposeByComposeId(message.composeId)?.removeAttribute(COSIGN_ENVELOPE_ATTR);
       warn('content', 'sign failed', message.code, message.message);
       const compose = findComposeByComposeId(message.composeId);
-      if (compose) setSignState(compose, 'failed');
+      if (compose) { endSigning(compose); setSignState(compose, 'failed'); }
       sendResponse({ ok: true });
       return false;
     }
@@ -123,6 +124,7 @@ function listenForBackgroundMessages(): void {
       log('content', 'cosign required', message.approvers);
       const compose = findComposeByComposeId(message.composeId);
       if (compose) {
+        endSigning(compose); // result is back: cancel the signing timeout + progress
         setSignState(compose, 'cosign_pending');
         // PFL-136: release the send automatically once a cosigner approves.
         if (message.envelopeId) watchCosign(compose, message.envelopeId, cosignWatchDeps);

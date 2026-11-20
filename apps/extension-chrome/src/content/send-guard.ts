@@ -87,7 +87,106 @@ export function clearComposeGuardState(compose: Element): void {
   compose.removeAttribute(SIGN_STATE_ATTR);
   compose.removeAttribute(SEND_UNSIGNED_ATTR);
   compose.removeAttribute(SIGNED_HASH_ATTR);
+  endSigning(compose);
   clearSendAlert(compose);
+}
+
+// ─── Signing lifecycle: progress + timeout (PFL-181 #2/#3) ───────────────────
+//
+// The Sign button's own handler calls beginSigning() AFTER the payload
+// validates, so a validation failure never leaves the compose looking like it
+// is "still signing". While pending we show a visible progress chip and arm a
+// timeout: if no result comes back (popup blocked / closed / SW asleep), the
+// compose flips to `failed` with a clear reason instead of hanging forever.
+
+export const SIGNING_PROGRESS_ATTR = 'data-proofline-signing-progress';
+export const DEFAULT_SIGN_TIMEOUT_MS = 90_000;
+
+interface SigningTimer { cancel: () => void; }
+const signingTimers = new WeakMap<Element, SigningTimer>();
+
+export interface BeginSigningOptions {
+  timeoutMs?: number;
+  /** Injectable scheduler for tests; returns a handle with cancel(). */
+  schedule?: (fn: () => void, ms: number) => { cancel: () => void };
+}
+
+export function beginSigning(compose: Element, opts?: BeginSigningOptions): void {
+  endSigning(compose);
+  clearSendAlert(compose);
+  setSignState(compose, 'pending');
+  showSigningProgress(compose);
+
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_SIGN_TIMEOUT_MS;
+  const schedule =
+    opts?.schedule ??
+    ((fn: () => void, ms: number) => {
+      const h = setTimeout(fn, ms);
+      return { cancel: () => clearTimeout(h) };
+    });
+  const timer = schedule(() => {
+    if (getSignState(compose) !== 'pending') return;
+    setSignState(compose, 'failed');
+    removeSigningProgress(compose);
+    showSigningFailed(
+      compose,
+      "ProofLine didn't hear back from the signing popup — it may have been blocked or closed.",
+    );
+  }, timeoutMs);
+  signingTimers.set(compose, timer);
+}
+
+/** Cancels the signing timeout and removes the progress chip. */
+export function endSigning(compose: Element): void {
+  const t = signingTimers.get(compose);
+  if (t) { t.cancel(); signingTimers.delete(compose); }
+  removeSigningProgress(compose);
+}
+
+function showSigningProgress(compose: Element): void {
+  removeSigningProgress(compose);
+  const chip = document.createElement('div');
+  chip.setAttribute(SIGNING_PROGRESS_ATTR, 'true');
+  chip.setAttribute('role', 'status');
+  chip.setAttribute('aria-live', 'polite');
+  chip.style.cssText = [
+    'display:flex', 'gap:8px', 'align-items:center',
+    'margin:6px 0', 'padding:8px 10px', 'border-radius:6px',
+    'background:#EFF6FF', 'color:#1E3A8A', 'font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+  ].join(';');
+  chip.textContent = 'Signing with ProofLine… approve in the popup, then return here.';
+  const { parent, before } = safeAnchor(compose);
+  parent.insertBefore(chip, before);
+}
+
+function removeSigningProgress(compose: Element): void {
+  compose.querySelector(`[${SIGNING_PROGRESS_ATTR}]`)?.remove();
+}
+
+function showSigningFailed(compose: Element, reason: string): void {
+  clearSendAlert(compose);
+  const alert = document.createElement('div');
+  alert.setAttribute(SEND_ALERT_ATTR, 'true');
+  alert.setAttribute('role', 'alert');
+  alert.style.cssText = [
+    'display:flex', 'gap:8px', 'align-items:center', 'flex-wrap:wrap',
+    'margin:6px 0', 'padding:8px 10px', 'border-radius:6px',
+    'background:#FDECEA', 'color:#B3261E', 'font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+  ].join(';');
+  const text = document.createElement('span');
+  text.textContent = reason;
+  alert.appendChild(text);
+  const signBtn = compose.querySelector<HTMLElement>(`[${INJECTED_MARKER}="true"]`);
+  if (signBtn) {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = 'Retry signing';
+    retry.setAttribute('data-proofline-retry-sign', 'true');
+    retry.addEventListener('click', (e) => { e.preventDefault(); clearSendAlert(compose); signBtn.click(); });
+    alert.appendChild(retry);
+  }
+  const { parent, before } = safeAnchor(compose);
+  parent.insertBefore(alert, before);
 }
 
 function isWire(compose: Element): boolean {
@@ -157,7 +256,7 @@ function composeFor(target: Element, deps: SendGuardDeps): Element | null {
 
 // ─── Alert UI ────────────────────────────────────────────────────────────────
 
-function clearSendAlert(compose: Element): void {
+export function clearSendAlert(compose: Element): void {
   compose.querySelector(`[${SEND_ALERT_ATTR}]`)?.remove();
 }
 
@@ -262,13 +361,10 @@ export function installSendGuard(doc: Document, deps: SendGuardDeps): () => void
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
 
-    // Track Sign clicks so a later Send knows signing is in flight.
-    const signBtn = target.closest(`[${INJECTED_MARKER}="true"]`);
-    if (signBtn && event.type === 'click') {
-      const compose = composeFor(signBtn, deps);
-      if (compose) setSignState(compose, 'pending');
-      return;
-    }
+    // The Sign button's own handler drives the signing lifecycle (validate →
+    // beginSigning → pending + progress + timeout). The guard only needs to
+    // not mistake the Sign button for Gmail's Send button.
+    if (target.closest(`[${INJECTED_MARKER}="true"]`)) return;
 
     if (!isGmailSendButton(target)) return;
     const compose = composeFor(target, deps);
