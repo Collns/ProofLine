@@ -67,8 +67,14 @@ export function mountWireFields(compose: Element, toolbar: Element): void {
   if (compose.getAttribute(WIRE_MOUNTED_ATTR) === 'true') return;
   compose.setAttribute(WIRE_MOUNTED_ATTR, 'true');
 
-  const row = buildWireRow(compose);
-  toolbar.appendChild(row);
+  // PFL-181 #5: the compact toggle sits inline in the toolbar, but the fields
+  // PANEL is a constrained block in the compose body column — NOT inline in
+  // the toolbar row. Inline, its min-width widened the toolbar past the
+  // compose, causing horizontal scroll, off-screen fields, and the panel
+  // covering the send-blocked alert.
+  const { checkRow, panel } = buildWireControls(compose);
+  toolbar.appendChild(checkRow);
+  compose.appendChild(panel);
 }
 
 /**
@@ -124,27 +130,24 @@ export function getWireState(compose: Element): WireState {
 
 // ─── DOM construction ─────────────────────────────────────────────────────────
 
-function buildWireRow(compose: Element): HTMLDivElement {
-  const container = document.createElement('div');
-  container.style.cssText = [
-    'display:inline-flex',
-    'flex-direction:column',
-    'margin-left:10px',
-    'vertical-align:middle',
-    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
-    'font-size:12px',
-  ].join(';');
+const WIRE_ALERT_SELECTOR  = '[data-proofline-send-alert]';
+const WIRE_NOTICE_SELECTOR = '[data-proofline-wire-notice]';
 
-  // ── Checkbox row ──
+function buildWireControls(compose: Element): { checkRow: HTMLLabelElement; panel: HTMLDivElement } {
+  // ── Compact toggle (inline in the toolbar) ──
   const checkRow = document.createElement('label');
   checkRow.style.cssText = [
     'display:inline-flex',
     'align-items:center',
     'gap:5px',
+    'margin-left:10px',
+    'vertical-align:middle',
     'cursor:pointer',
     'color:#374151',
     'user-select:none',
     'white-space:nowrap',
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+    'font-size:12px',
   ].join(';');
 
   const checkbox = document.createElement('input');
@@ -160,7 +163,7 @@ function buildWireRow(compose: Element): HTMLDivElement {
   checkRow.appendChild(checkbox);
   checkRow.appendChild(checkLabel);
 
-  // ── Wire fields panel (hidden until checked) ──
+  // ── Wire fields panel (constrained block, hidden until checked) ──
   const panel = buildFieldsPanel();
   panel.style.display = 'none';
 
@@ -169,12 +172,15 @@ function buildWireRow(compose: Element): HTMLDivElement {
     if (checkbox.checked) {
       const firstInput = panel.querySelector<HTMLInputElement>('input');
       firstInput?.focus();
+    } else {
+      // PFL-181 #4: unticking Wire instruction clears a stale send-blocked
+      // alert and the invalid-fields notice — the message is no longer a wire.
+      compose.querySelector(WIRE_ALERT_SELECTOR)?.remove();
+      compose.querySelector(WIRE_NOTICE_SELECTOR)?.remove();
     }
   });
 
-  container.appendChild(checkRow);
-  container.appendChild(panel);
-  return container;
+  return { checkRow, panel };
 }
 
 function buildFieldsPanel(): HTMLDivElement {
@@ -186,12 +192,18 @@ function buildFieldsPanel(): HTMLDivElement {
     'display:flex',
     'flex-direction:column',
     'gap:6px',
-    'margin-top:6px',
+    'margin:8px 0',
     'padding:10px 12px',
     'background:#f8fafc',
     'border:1px solid #e2e8f0',
     'border-radius:6px',
-    'min-width:260px',
+    // PFL-181 #5: flow within the compose column — never widen it. No fixed
+    // min-width (it forced the toolbar/compose to overflow and scroll
+    // sideways); box-sizing keeps padding inside the compose width.
+    'width:100%',
+    'max-width:100%',
+    'box-sizing:border-box',
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
   ].join(';');
 
   // High-value warning banner (hidden by default)

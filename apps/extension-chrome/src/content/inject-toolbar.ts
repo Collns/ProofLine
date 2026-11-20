@@ -13,7 +13,7 @@ import { findToolbarWithSelector } from './gmail-detector.js';
 import { buildSignPayload } from './sign-payload.js';
 import { mountWireFields } from './wire-fields.js';
 import { canonicalizeAndHash } from './canonical-bridge.js';
-import { clearComposeGuardState } from './send-guard.js';
+import { clearComposeGuardState, beginSigning, endSigning, setSignState, clearSendAlert } from './send-guard.js';
 
 const BUTTON_LABEL = 'Sign with ProofLine';
 const FALLBACK_TIMEOUT_MS = 3000;
@@ -70,6 +70,10 @@ async function onClick(compose: Element): Promise<void> {
   // landed. The stamped id is always present once the Sign button exists.
   const correlationId = ensureComposeId(compose);
 
+  // Fresh attempt: drop any stale block/fail alert from a prior click so a
+  // validation failure can't leave an old "still signing" message on screen.
+  clearSendAlert(compose);
+
   // Keep SIGN_BUTTON_CLICKED for backwards compatibility with PFL-042.
   // PFL-044 will collapse this once the live ceremony lands.
   sendToBackground({
@@ -77,9 +81,10 @@ async function onClick(compose: Element): Promise<void> {
     composeId: correlationId,
   });
 
+  // Validate BEFORE marking the compose pending (PFL-181 #3): a wire with
+  // invalid fields or an unreadable DOM must not look like it is "signing".
   const result = buildSignPayload(compose);
   if (!result.ok && result.reason === 'wire_invalid') {
-    // Fields are already marked invalid inline; nothing is signed.
     warn('content', 'wire fields invalid — sign blocked');
     showWireNotice(compose);
     return;
@@ -94,6 +99,10 @@ async function onClick(compose: Element): Promise<void> {
     return;
   }
   clearWireNotice(compose);
+
+  // Payload is valid — now the compose is genuinely signing. Show progress and
+  // arm the timeout so a lost popup result can't hang on "still signing".
+  beginSigning(compose);
 
   try {
     const { payloadHashHex } = await canonicalizeAndHash(result.payload);
@@ -110,6 +119,8 @@ async function onClick(compose: Element): Promise<void> {
     });
   } catch (err) {
     warn('content', 'canonicalize/hash threw', err);
+    endSigning(compose);
+    setSignState(compose, 'failed');
     sendToBackground({
       type: 'EXTRACTION_FAILED',
       composeId: correlationId,

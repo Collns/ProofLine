@@ -194,6 +194,23 @@ describe('bug 3 — unsigned wire never escapable, body never touched', () => {
     expect(c.querySelector('[data-proofline-send-unsigned-btn]')).not.toBeNull();
   });
 
+  it('clears the send-blocked alert when Wire instruction is unticked (PFL-181 #4)', () => {
+    document.body.innerHTML = dialogHtml('New Message');
+    const { composes, sends } = instrumentAll();
+    const c = composes[0]!;
+    const cb = wireCheckbox(c);
+
+    cb.checked = true;
+    sendButton(c).click();
+    expect(sends[0]).not.toHaveBeenCalled();
+    expect(c.querySelector(`[${SEND_ALERT_ATTR}]`)).not.toBeNull();
+
+    // Untick → no longer a wire; the stale block alert must disappear.
+    cb.checked = false;
+    cb.dispatchEvent(new Event('change'));
+    expect(c.querySelector(`[${SEND_ALERT_ATTR}]`)).toBeNull();
+  });
+
   it('leaves the editable body untouched when toggling wire and after a blocked send', () => {
     document.body.innerHTML = dialogHtml('New Message', 'Please wire the funds today.');
     const { composes } = instrumentAll();
