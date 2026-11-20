@@ -141,8 +141,15 @@ await writeFile(
 // the repo-root `.env.local` so secrets that don't belong on the function
 // (e.g. third-party API keys for the local dev stack) don't leak into the
 // deploy bundle.
+// Every NON-SECRET env key the deployed function reads. Secrets (RESEND_API_KEY,
+// STRIPE_*, BASELAYER_API_KEY, COBALT_API_KEY, GEMINI_API_KEY, the HMAC JWT
+// secrets) are deliberately absent — they're bound via Secret Manager
+// (defineSecret), not .env. A drift test
+// (src/config/__tests__/env-promotion.test.ts) fails if config.ts reads a
+// non-secret key that isn't listed here, so the two can't silently diverge
+// (this is what let PROOFLINE_ENV/*_PROVIDER go missing on a prod deploy).
 const RUNTIME_ENV_KEYS = [
-  // PFL-169: environment + explicit provider selection (non-secret).
+  // PFL-169: environment + explicit provider selection.
   "PROOFLINE_ENV",
   "EMAIL_PROVIDER",
   "ANCHOR_PROVIDER",
@@ -152,15 +159,30 @@ const RUNTIME_ENV_KEYS = [
   "AI_PROVIDER",
   "GEMINI_MODEL",
   "RESEND_FROM_DOMAIN",
+  // KMS project + its fallbacks (config.ts tries each).
   "KMS_PROJECT",
+  "GOOGLE_CLOUD_PROJECT",
+  "GCLOUD_PROJECT",
+  "GCP_PROJECT",
+  "KMS_KEYRING",
+  "KMS_LOCATION",
+  // Anchor (base-sepolia).
   "BASE_SEPOLIA_RPC",
   "DEPLOYER_PRIVATE_KEY",
   "ANCHOR_CONTRACT_ADDRESS",
   "ANCHOR_CHAIN_ID",
   "FIREBASE_PROJECT_ID",
-  "KMS_KEYRING",
-  "KMS_LOCATION",
+  // App URLs + extension allowlist read in index.ts (optional; have defaults).
+  "SIGN_APP_URL",
+  "COUNTERPARTY_PORTAL_URL",
+  "ADMIN_APP_URL",
+  "EXT_ALLOWED_IDS",
 ];
+
+// Must be present in the source env for a production/staging deploy build, or
+// the function would 503 with CONFIG_INVALID at runtime. We fail the build
+// instead (fail fast, before deploy).
+const REQUIRED_FOR_DEPLOY = ["PROOFLINE_ENV", "EMAIL_PROVIDER", "ANCHOR_PROVIDER", "KMS_PROVIDER"];
 
 async function readDotenv(path) {
   try {
@@ -186,20 +208,42 @@ async function readDotenv(path) {
   }
 }
 
-const repoEnvLocal = new URL("../../.env.local", import.meta.url);
-const sourceEnv = (await readDotenv(repoEnvLocal)) ?? {};
+// Source the runtime env from the co-located apps/functions/.env (preferred,
+// Firebase's conventional location) merged over the repo-root .env.local
+// (fallback). Reading both means values put in either file are promoted — the
+// earlier bug was values living in apps/functions/.env while the build only
+// read .env.local.
+const functionsEnv = (await readDotenv(new URL("./.env", import.meta.url))) ?? {};
+const repoEnvLocal = (await readDotenv(new URL("../../.env.local", import.meta.url))) ?? {};
+const sourceEnv = { ...repoEnvLocal, ...functionsEnv };
+
 const promoted = [];
 for (const key of RUNTIME_ENV_KEYS) {
   const v = sourceEnv[key];
   if (typeof v === "string" && v.length > 0) promoted.push(`${key}=${v}`);
 }
+
+// Fail fast on a production/staging DEPLOY build that's missing a required
+// runtime key, rather than shipping a function that 503s with CONFIG_INVALID.
+const deployEnv = sourceEnv["PROOFLINE_ENV"];
+const isDeployBuild = deployEnv === "production" || deployEnv === "staging";
+if (isDeployBuild) {
+  const missing = REQUIRED_FOR_DEPLOY.filter((k) => !(typeof sourceEnv[k] === "string" && sourceEnv[k].length > 0));
+  if (missing.length > 0) {
+    throw new Error(
+      `[esbuild] PROOFLINE_ENV=${deployEnv} deploy build is missing required runtime env keys: ` +
+        `${missing.join(", ")}. Set them in apps/functions/.env (or repo-root .env.local) before deploying.`,
+    );
+  }
+}
+
 if (promoted.length > 0) {
   await writeFile(`${outdir}/.env`, promoted.join("\n") + "\n");
   console.log(`Promoted ${promoted.length} env keys to ${outdir}/.env`);
 } else {
   console.warn(
-    "[esbuild] no runtime env keys found in .env.local — the deployed function will refuse " +
-      "requests until PROOFLINE_ENV and the *_PROVIDER settings are configured",
+    "[esbuild] no runtime env keys found in apps/functions/.env or .env.local — the deployed " +
+      "function will refuse requests until PROOFLINE_ENV and the *_PROVIDER settings are configured",
   );
 }
 
