@@ -105,6 +105,25 @@ describe('bug 1 — guard blocks an unsigned wire in every compose surface', () 
     });
   }
 
+  it('in an inline reply, the send-blocked alert sits ABOVE the toolbar, keeping the wire panel below it (PFL-181 #4)', () => {
+    document.body.innerHTML = inlineHtml();
+    const { composes } = instrumentAll();
+    const c = composes[0]!;
+    wireCheckbox(c).checked = true;
+    sendButton(c).click();
+
+    const alert = c.querySelector(`[${SEND_ALERT_ATTR}]`)!;
+    const toolbarTable = c.querySelector('table')!;
+    const panel = c.querySelector('[data-proofline-wire-panel]')!;
+    // The alert is a block child of the compose, not wedged inside the table.
+    expect(alert.parentElement).toBe(c);
+    expect(toolbarTable.contains(alert)).toBe(false);
+    // Order within the compose: alert → toolbar → panel (panel stays below).
+    const kids = Array.from(c.children);
+    expect(kids.indexOf(alert)).toBeLessThan(kids.indexOf(toolbarTable));
+    expect(kids.indexOf(toolbarTable)).toBeLessThan(kids.indexOf(panel));
+  });
+
   it('blocks the unsigned wire in an inline reply (not a dialog)', () => {
     document.body.innerHTML = inlineHtml();
     const { composes, sends } = instrumentAll();
