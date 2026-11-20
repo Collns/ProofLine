@@ -121,6 +121,10 @@ import { makeRevokeDeviceHandler } from "./auth/revoke-device.handler.js";
 import { makeUpdateRoleHandler   } from "./auth/update-role.handler.js";
 import { makeUpdateStatusHandler } from "./auth/update-status.handler.js";
 import { makeRevokeSessionHandler } from "./auth/revoke-session.handler.js";
+import { makeUpdateUnsignedPolicyHandler } from "./auth/update-unsigned-policy.handler.js";
+// --- PFL-188: unsigned-email policy (extension fetch + override audit)
+import { makeGetPolicyHandler } from "./api/policy/get-policy.handler.js";
+import { makeUnsignedOverrideHandler } from "./api/policy/unsigned-override.handler.js";
 
 // --- PFL-127: admin API (Firebase Auth-scoped read endpoints)
 import { adminAuthMiddleware } from "./auth/admin-auth.middleware.js";
@@ -130,6 +134,7 @@ import {
   makeSignedMessagesHandler,
   makeSessionsHandler,
   makeInvitationsHandler,
+  makeAuditHandler,
 } from "./api/admin/handlers.js";
 
 // --- PFL-087: real Bearer auth for signing routes
@@ -575,6 +580,24 @@ publicApp.post(
 );
 publicApp.options("/v1/extension/register-credential", corsMiddleware);
 
+// ─── PFL-188: unsigned-email policy for the extension ────────────────────────
+// Both authed by the extension JWS Bearer (requireExtensionAuth sets req.user).
+publicApp.get(
+  "/v1/extension/policy",
+  corsMiddleware,
+  requireExtensionAuth,
+  (req, res, next) => { makeGetPolicyHandler()(req, res).catch(next); },
+);
+publicApp.options("/v1/extension/policy", corsMiddleware);
+
+publicApp.post(
+  "/v1/extension/unsigned-override",
+  corsMiddleware,
+  requireExtensionAuth,
+  (req, res, next) => { makeUnsignedOverrideHandler()(req, res).catch(next); },
+);
+publicApp.options("/v1/extension/unsigned-override", corsMiddleware);
+
 // PFL-095: server-issued WebAuthn registration challenges. The popup
 // calls this BEFORE running navigator.credentials.create() and then
 // posts the resulting attestation (carrying the same challenge in
@@ -676,6 +699,22 @@ publicApp.post(
 );
 publicApp.options("/v1/admin/update-role", corsMiddleware);
 
+// PFL-188: owner/manager set the company's unsigned-email policy. Same
+// self-verified Bearer pattern as update-role; registered before the GET
+// sub-router so Express matches this POST first.
+let cachedUpdateUnsignedPolicyHandler:
+  | ((req: express.Request, res: express.Response) => Promise<void>)
+  | null = null;
+publicApp.post(
+  "/v1/admin/update-unsigned-policy",
+  corsMiddleware,
+  (req, res, next) => {
+    cachedUpdateUnsignedPolicyHandler ??= makeUpdateUnsignedPolicyHandler();
+    cachedUpdateUnsignedPolicyHandler(req, res).catch(next);
+  },
+);
+publicApp.options("/v1/admin/update-unsigned-policy", corsMiddleware);
+
 let cachedUpdateStatusHandler:
   | ((req: express.Request, res: express.Response) => Promise<void>)
   | null = null;
@@ -742,6 +781,7 @@ function adminApiRouter(): express.Router {
   router.get("/signed-messages", wrap(makeSignedMessagesHandler));
   router.get("/sessions",        wrap(makeSessionsHandler));
   router.get("/invitations",     wrap(makeInvitationsHandler));
+  router.get("/audit",           wrap(makeAuditHandler));
   cachedAdminApiRouter = router;
   return cachedAdminApiRouter;
 }

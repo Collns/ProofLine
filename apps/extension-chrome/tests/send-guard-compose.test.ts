@@ -25,6 +25,7 @@ import {
   markSigned,
   setSignState,
   sendBlockReason,
+  setUnsignedPolicy,
   SEND_ALERT_ATTR,
 } from '../src/content/send-guard.js';
 
@@ -251,5 +252,88 @@ describe('bug 3 — unsigned wire never escapable, body never touched', () => {
     const alert = c.querySelector(`[${SEND_ALERT_ATTR}]`);
     expect(alert).not.toBeNull();
     expect(body(c).contains(alert)).toBe(false);
+  });
+});
+
+// ─── PFL-188: company unsigned-email policy ───────────────────────────────────
+
+describe('unsigned-email policy (PFL-188)', () => {
+  afterEach(() => setUnsignedPolicy({ mode: 'allow', allowOverride: true }));
+
+  const surfaces: Array<[string, string]> = [
+    ['new compose', dialogHtml('New Message')],
+    ['pop-out reply', dialogHtml('Reply')],
+    ['inline reply', inlineHtml()],
+  ];
+
+  for (const [name, html] of surfaces) {
+    it(`block policy blocks a plain unsigned email in ${name}`, () => {
+      setUnsignedPolicy({ mode: 'block', allowOverride: true });
+      document.body.innerHTML = html;
+      const { composes, sends } = instrumentAll();
+      sendButton(composes[0]!).click();
+      expect(sends[0]).not.toHaveBeenCalled();
+      expect(sendBlockReason(composes[0]!)).toMatch(/requires outgoing email to be signed/);
+    });
+
+    it(`allow policy lets a plain unsigned email send in ${name}`, () => {
+      setUnsignedPolicy({ mode: 'allow', allowOverride: true });
+      document.body.innerHTML = html;
+      const { composes, sends } = instrumentAll();
+      sendButton(composes[0]!).click();
+      expect(sends[0]).toHaveBeenCalledOnce();
+    });
+
+    it(`warn policy blocks until confirmed in ${name}`, () => {
+      setUnsignedPolicy({ mode: 'warn', allowOverride: true });
+      document.body.innerHTML = html;
+      const { composes, sends } = instrumentAll();
+      const c = composes[0]!;
+      sendButton(c).click();
+      expect(sends[0]).not.toHaveBeenCalled();
+      // The one-click "Send without signing" confirm is offered.
+      const confirm = c.querySelector<HTMLElement>('[data-proofline-send-unsigned-btn]');
+      expect(confirm?.textContent).toBe('Send without signing');
+      confirm!.click();
+      sendButton(c).click();
+      expect(sends[0]).toHaveBeenCalledOnce();
+    });
+  }
+
+  it('block mode hides the override when the admin disallows it', () => {
+    setUnsignedPolicy({ mode: 'block', allowOverride: false });
+    document.body.innerHTML = dialogHtml('New Message');
+    const { composes } = instrumentAll();
+    sendButton(composes[0]!).click();
+    expect(composes[0]!.querySelector('[data-proofline-send-unsigned-btn]')).toBeNull();
+  });
+
+  it('block mode offers the override when the admin allows it', () => {
+    setUnsignedPolicy({ mode: 'block', allowOverride: true });
+    document.body.innerHTML = dialogHtml('New Message');
+    const { composes } = instrumentAll();
+    sendButton(composes[0]!).click();
+    const btn = composes[0]!.querySelector<HTMLElement>('[data-proofline-send-unsigned-btn]');
+    expect(btn?.textContent).toBe('Send unsigned');
+  });
+
+  it('fail-closed (block, no override) blocks with no escape', () => {
+    setUnsignedPolicy({ mode: 'block', allowOverride: false, failed: true });
+    document.body.innerHTML = inlineHtml();
+    const { composes, sends } = instrumentAll();
+    sendButton(composes[0]!).click();
+    expect(sends[0]).not.toHaveBeenCalled();
+    expect(composes[0]!.querySelector('[data-proofline-send-unsigned-btn]')).toBeNull();
+  });
+
+  it('a wire is ALWAYS blocked unsigned with no override, even under allow policy', () => {
+    setUnsignedPolicy({ mode: 'allow', allowOverride: true });
+    document.body.innerHTML = dialogHtml('New Message');
+    const { composes, sends } = instrumentAll();
+    wireCheckbox(composes[0]!).checked = true;
+    sendButton(composes[0]!).click();
+    expect(sends[0]).not.toHaveBeenCalled();
+    expect(sendBlockReason(composes[0]!)).toMatch(/wire instruction/);
+    expect(composes[0]!.querySelector('[data-proofline-send-unsigned-btn]')).toBeNull();
   });
 });

@@ -199,6 +199,29 @@ export interface CompanyPolicy {
   cosignTtlMs: number;
 }
 
+/**
+ * PFL-188 — per-company policy for UNSIGNED outbound email (not wires; wires
+ * are always blocked unsigned regardless of this policy).
+ *   block — Send/Cmd+Enter on any unsigned email is blocked ("Sign and send").
+ *           A one-time "Send unsigned" override is offered only when
+ *           `allowUnsignedOverride` is true.
+ *   warn  — one-click "Send without signing?" confirm, then the send goes.
+ *   allow — plain unsigned emails send normally.
+ */
+export type UnsignedEmailPolicyMode = 'block' | 'warn' | 'allow';
+
+export interface UnsignedEmailPolicy {
+  mode: UnsignedEmailPolicyMode;
+  /** When false, no "Send unsigned" override exists in block mode. */
+  allowUnsignedOverride: boolean;
+}
+
+/** LOCKED by default: every company (including existing ones) starts at block. */
+export const DEFAULT_UNSIGNED_EMAIL_POLICY: UnsignedEmailPolicy = {
+  mode: 'block',
+  allowUnsignedOverride: true,
+};
+
 export interface CounterpartyRecord {
   email: string;
   companyId: string;

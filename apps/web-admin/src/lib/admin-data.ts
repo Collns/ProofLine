@@ -41,6 +41,8 @@ export interface CompanyProfile {
   ein: string | null;
   onboardingStatus: string | null;
   kmsKeyName: string | null;
+  // PFL-188: unsigned-email policy (defaults to block server-side).
+  unsignedEmailPolicy?: { mode: 'block' | 'warn' | 'allow'; allowUnsignedOverride: boolean };
 }
 
 export interface AdminDevice {

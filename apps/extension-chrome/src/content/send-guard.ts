@@ -52,6 +52,31 @@ export interface SendGuardDeps {
   onSendUnsigned?: (compose: Element) => void;
 }
 
+// ─── PFL-188: company unsigned-email policy ───────────────────────────────────
+//
+// Governs a PLAIN unsigned, non-wire email that was never signed. Wires and
+// attempted-but-incomplete signs are handled above and are unaffected. The
+// content script sets the real policy (company default is block; fail-closed
+// is block + no override). The guard's own default is permissive so unit
+// tests that don't care about policy behave as before.
+
+export type UnsignedSendMode = 'block' | 'warn' | 'allow';
+export interface EffectiveUnsignedPolicy {
+  mode: UnsignedSendMode;
+  allowOverride: boolean;
+  /** True when the policy couldn't be fetched and we're failing closed. */
+  failed?: boolean;
+}
+
+let unsignedPolicy: EffectiveUnsignedPolicy = { mode: 'allow', allowOverride: true };
+
+export function setUnsignedPolicy(policy: EffectiveUnsignedPolicy): void {
+  unsignedPolicy = policy;
+}
+export function getUnsignedPolicy(): EffectiveUnsignedPolicy {
+  return unsignedPolicy;
+}
+
 // ─── State ───────────────────────────────────────────────────────────────────
 
 export function setSignState(compose: Element, state: SignState): void {
@@ -227,12 +252,21 @@ export function sendBlockReason(compose: Element): string | null {
   if (compose.getAttribute(SEND_UNSIGNED_ATTR) === 'true') return null;
   if (state === 'pending') return 'ProofLine is still signing this email.';
   if (state === 'failed') return 'ProofLine signing failed, so this email is not signed.';
-  return null;
+  // Plain unsigned email, never signed — governed by the company policy (PFL-188).
+  if (unsignedPolicy.mode === 'allow') return null;
+  return unsignedPolicy.mode === 'warn'
+    ? "This email isn't signed. Your company asks you to confirm before sending it unsigned."
+    : 'Your company requires outgoing email to be signed with ProofLine.';
 }
 
 /** Whether the inline alert may offer a "Send unsigned" escape hatch. */
 function maySendUnsigned(compose: Element): boolean {
-  return !isWire(compose) && getSignState(compose) !== 'cosign_pending';
+  if (isWire(compose)) return false;                              // wires never (PFL-181)
+  if (getSignState(compose) === 'cosign_pending') return false;   // cosign is known-pending
+  // PFL-188: in block mode the override exists only if the admin allows it;
+  // warn always offers the one-click confirm; allow has no block anyway.
+  if (unsignedPolicy.mode === 'block') return unsignedPolicy.allowOverride;
+  return true;
 }
 
 // ─── Detection ───────────────────────────────────────────────────────────────
@@ -315,7 +349,8 @@ function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps): v
   if (signBtn) {
     const retry = document.createElement('button');
     retry.type = 'button';
-    retry.textContent = 'Retry signing';
+    // Never-attempted block/warn reads as "Sign and send"; a prior attempt reads as a retry.
+    retry.textContent = getSignState(compose) ? 'Retry signing' : 'Sign and send';
     retry.setAttribute('data-proofline-retry-sign', 'true');
     retry.addEventListener('click', (e) => {
       e.preventDefault();
@@ -325,13 +360,14 @@ function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps): v
     alert.appendChild(retry);
   }
 
-  // "Send unsigned" is offered only for a non-wire that isn't waiting on a
-  // cosigner: an explicit, logged, one-time choice. A wire instruction is
-  // never escapable (PFL-181 bug 3) and the cosign state is known-pending.
+  // The unsigned override: a wire is never escapable (PFL-181) and cosign is
+  // known-pending; otherwise it depends on the company policy (PFL-188) —
+  // always offered in warn (the one-click confirm), and in block only when
+  // the admin allows overrides.
   if (maySendUnsigned(compose)) {
     const unsigned = document.createElement('button');
     unsigned.type = 'button';
-    unsigned.textContent = 'Send unsigned';
+    unsigned.textContent = unsignedPolicy.mode === 'warn' ? 'Send without signing' : 'Send unsigned';
     unsigned.setAttribute('data-proofline-send-unsigned-btn', 'true');
     unsigned.addEventListener('click', (e) => {
       e.preventDefault();

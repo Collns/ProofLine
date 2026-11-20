@@ -1,12 +1,15 @@
 import { sweepInboundMessages } from './inject-badge.js';
 import { log, warn } from '../shared/log.js';
 import { findComposeContainers } from './gmail-detector.js';
-import { tryInject } from './inject-toolbar.js';
+import { tryInject, updatePolicyChip } from './inject-toolbar.js';
 import { injectBannerIntoCompose } from './inject-banner.js';
 import { isBackgroundToContentMessage } from '../shared/types.js';
 import { readComposeId, COMPOSE_ID_ATTR } from './shared.js';
-import { installSendGuard, setSignState, markSigned, endSigning } from './send-guard.js';
+import { installSendGuard, setSignState, markSigned, endSigning, setUnsignedPolicy, getUnsignedPolicy } from './send-guard.js';
 import { watchCosign, COSIGN_ENVELOPE_ATTR, type CosignStatusReply } from './cosign-release.js';
+import { composeType } from './compose-type.js';
+import { canonicalizeAndHash } from './canonical-bridge.js';
+import { buildSignPayload } from './sign-payload.js';
 
 // Content-script entry. Runs once per Gmail tab. We use a single
 // MutationObserver on document.body — cheaper than polling and catches
@@ -20,6 +23,37 @@ import { watchCosign, COSIGN_ENVELOPE_ATTR, type CosignStatusReply } from './cos
 // it on a timer + on the AUTH_LOGOUT broadcast.
 let isAuthenticated = false;
 const AUTH_REFRESH_MS = 30_000;
+
+// ─── PFL-188: company unsigned-email policy (fetch, cache, fail closed) ───────
+const POLICY_REFRESH_MS = 60_000;
+const POLICY_MIN_INTERVAL_MS = 10_000;
+let lastPolicyFetch = 0;
+
+/** Fail closed: block, no override. */
+function failClosedPolicy(): void {
+  setUnsignedPolicy({ mode: 'block', allowOverride: false, failed: true });
+}
+
+function refreshPolicy(force = false): void {
+  const nowMs = Date.now();
+  if (!force && nowMs - lastPolicyFetch < POLICY_MIN_INTERVAL_MS) return;
+  lastPolicyFetch = nowMs;
+  try {
+    chrome.runtime.sendMessage({ type: 'GET_POLICY' }, (response) => {
+      if (chrome.runtime.lastError) { failClosedPolicy(); return; }
+      const r = response as { policyFailed?: boolean; policy?: { mode?: string; allowUnsignedOverride?: boolean } } | undefined;
+      if (!r || r.policyFailed || !r.policy || !r.policy.mode) {
+        failClosedPolicy();
+      } else {
+        const mode = (r.policy.mode === 'warn' || r.policy.mode === 'allow') ? r.policy.mode : 'block';
+        setUnsignedPolicy({ mode, allowOverride: r.policy.allowUnsignedOverride === true, failed: false });
+      }
+      sweep();
+    });
+  } catch {
+    failClosedPolicy();
+  }
+}
 
 function refreshAuthStatus(): void {
   try {
@@ -45,11 +79,39 @@ function refreshAuthStatus(): void {
 function sweep(): void {
   if (isAuthenticated) {
     const composes = findComposeContainers(document);
+    let injected = false;
     for (const compose of composes) {
-      tryInject(compose);
+      if (tryInject(compose)) injected = true;
     }
+    // PFL-188: reflect the current policy in every open compose.
+    for (const compose of composes) updatePolicyChip(compose);
+    // Refresh the policy when a compose newly opens (throttled).
+    if (injected) refreshPolicy();
   }
   sweepInboundMessages(document);
+}
+
+/** PFL-188: record a "send unsigned" override for the admin audit log. */
+function auditUnsignedOverride(compose: Element): void {
+  const policy = getUnsignedPolicy();
+  const type = composeType(compose);
+  const done = (recipientSetHash: string) => {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'UNSIGNED_OVERRIDE_AUDIT',
+        recipientSetHash,
+        composeType: type,
+        policyMode: policy.failed ? 'block_failclosed' : policy.mode,
+      });
+    } catch { /* best-effort */ }
+  };
+  // Best-effort recipient-set hash from the current recipients.
+  const built = buildSignPayload(compose);
+  if (!built.ok) { done(''); return; }
+  const p = built.payload;
+  canonicalizeAndHash({ to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [] })
+    .then((r) => done(r.payloadHashHex))
+    .catch(() => done(''));
 }
 
 function findComposeByComposeId(composeId: string): Element | null {
@@ -134,6 +196,7 @@ function listenForBackgroundMessages(): void {
     }
     if (message.type === 'AUTH_LOGIN') {
       isAuthenticated = true;
+      refreshPolicy(true); // PFL-188: pull the company policy right after connecting
       // Inject into any compose windows already open at sign-in time,
       // without waiting for the next Gmail DOM mutation or re-check.
       sweep();
@@ -166,18 +229,24 @@ function start(): void {
   // cosigner, or for an unsigned wire instruction.
   installSendGuard(document, {
     findComposes: findComposeContainers,
-    onSendUnsigned: (compose) => warn('content', 'send unsigned chosen', readComposeId(compose)),
+    onSendUnsigned: (compose) => {
+      warn('content', 'send unsigned chosen', readComposeId(compose));
+      auditUnsignedOverride(compose); // PFL-188: audit the override
+    },
   });
 
   // Resolve auth status, then sweep (refreshAuthStatus runs sweep() itself
   // when the flag flips). Also run an initial sweep for inbound-message
   // badges, which don't depend on auth.
   refreshAuthStatus();
+  refreshPolicy(true); // PFL-188: fetch the company policy up front (fails closed)
   sweep();
 
   // Periodically re-check auth so a login/logout in another surface
   // propagates even if the AUTH_LOGOUT broadcast was missed (SW asleep).
   setInterval(refreshAuthStatus, AUTH_REFRESH_MS);
+  // PFL-188: refresh the policy on a short interval too.
+  setInterval(() => refreshPolicy(true), POLICY_REFRESH_MS);
 
   const observer = new MutationObserver(() => {
     sweep();

@@ -6,6 +6,7 @@ import { OnboardingWizard } from './routes/OnboardingWizard';
 import { DashboardHome } from './routes/DashboardHome';
 import { DemoHub } from './routes/DemoHub';
 import { TeamPage } from './routes/TeamPage';
+import { SettingsPage } from './routes/SettingsPage';
 import { InviteCounterparties } from './routes/invitations/InviteCounterparties';
 import { InvitationsList } from './routes/invitations/InvitationsList';
 import { InvitationDetail } from './routes/invitations/InvitationDetail';
@@ -41,6 +42,11 @@ export function App() {
         <Route
           path="/team"
           element={<ProtectedRoute><TeamPage /></ProtectedRoute>}
+        />
+        {/* PFL-188: company signing policy (owner/manager only). */}
+        <Route
+          path="/settings"
+          element={<ProtectedRoute><SettingsPage /></ProtectedRoute>}
         />
         <Route
           path="/invitations"
