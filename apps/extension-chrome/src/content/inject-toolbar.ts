@@ -7,12 +7,13 @@ import {
   INJECTED_MARKER,
   TOOLBAR_NOT_FOUND_MARKER,
   alreadyInjected,
-  readComposeId,
+  ensureComposeId,
 } from './shared.js';
 import { findToolbarWithSelector } from './gmail-detector.js';
 import { buildSignPayload } from './sign-payload.js';
 import { mountWireFields } from './wire-fields.js';
 import { canonicalizeAndHash } from './canonical-bridge.js';
+import { clearComposeGuardState } from './send-guard.js';
 
 const BUTTON_LABEL = 'Sign with ProofLine';
 const FALLBACK_TIMEOUT_MS = 3000;
@@ -62,18 +63,18 @@ function sendToBackground(message: ContentToBackgroundMessage): void {
 }
 
 async function onClick(compose: Element): Promise<void> {
-  // SIGN_BUTTON_CLICKED's composeId may be null (compose with no draft id
-  // yet). Extraction messages carry a non-null id, so synthesize one for
-  // routing if Gmail hasn't given us a draft id.
-  const detectedId = readComposeId(compose);
-  const correlationId =
-    detectedId ?? `synthetic-${crypto.randomUUID()}`;
+  // Route every background round-trip through the stable per-instance id we
+  // stamped at injection (PFL-181). Gmail's own draft id is often absent in
+  // inline reply / forward composes, which is why PAYLOAD_SIGNED replies
+  // could fail to find the compose and the banner / signed state never
+  // landed. The stamped id is always present once the Sign button exists.
+  const correlationId = ensureComposeId(compose);
 
   // Keep SIGN_BUTTON_CLICKED for backwards compatibility with PFL-042.
   // PFL-044 will collapse this once the live ceremony lands.
   sendToBackground({
     type: 'SIGN_BUTTON_CLICKED',
-    composeId: detectedId,
+    composeId: correlationId,
   });
 
   const result = buildSignPayload(compose);
@@ -143,6 +144,11 @@ function injectInto(compose: Element): boolean {
 
   const match = findToolbarWithSelector(compose);
   if (!match) return false;
+
+  // Stamp the stable per-instance id and clear any guard state left over
+  // from a previous extension session on this element (PFL-181).
+  ensureComposeId(compose);
+  clearComposeGuardState(compose);
 
   const button = buildButton(compose);
   match.toolbar.appendChild(button);
