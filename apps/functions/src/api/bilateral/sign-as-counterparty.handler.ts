@@ -177,6 +177,17 @@ export function makeSignAsCounterpartyHandler(deps: BilateralRouterDeps) {
     // Single-use: drop the challenge so the same assertion can't be replayed.
     await challengeRef.delete();
 
+    // PFL-146: queue the fully-signed document for the anchor batcher. The
+    // entry names its collection so the on-chain coordinates are stamped back
+    // onto bilateral_documents (not signed_messages).
+    await firestore.collection("anchor_queue").add({
+      envelopeId:  docId,
+      collection:  "bilateral_documents",
+      payloadHash: stored.payloadHash,
+      queuedAt:    Date.now(),
+      source:      "bilateral-sign-as-counterparty",
+    });
+
     res.status(200).json({ docId, status: "BILATERAL_SIGNED" });
   };
 }
