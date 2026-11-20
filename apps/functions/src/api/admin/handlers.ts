@@ -23,8 +23,11 @@
 
 import type * as express from "express";
 
+import type { UnsignedEmailPolicy } from "@proofline/types";
+
 import { ERR } from "../onboarding/http.helpers.js";
 import type { AdminAuthRequest, AdminUserClaims } from "../../auth/admin-auth.middleware.js";
+import { readUnsignedPolicy } from "../policy/policy.helpers.js";
 
 // ─── Public response shapes ──────────────────────────────────────────────────
 //
@@ -45,6 +48,16 @@ export interface AdminCompanyResponse {
   verifiedAt:        number | null;
   anchorTxHash:      string | null;
   anchorBlockNumber: number | null;
+  /** PFL-188: current unsigned-email policy (defaults to block). */
+  unsignedEmailPolicy: UnsignedEmailPolicy;
+}
+
+export interface AdminAuditEventResponse {
+  id:          string;
+  type:        string;
+  actorUserId: string | null;
+  createdAt:   number | null;
+  detail:      Record<string, unknown>;
 }
 
 export interface AdminDeviceResponse {
@@ -172,8 +185,41 @@ export function makeCompanyHandler(deps: AdminHandlersDeps) {
       verifiedAt:        num(d.verifiedAt),
       anchorTxHash:      strOrNull(d.anchorTxHash),
       anchorBlockNumber: num(d.anchorBlockNumber),
+      unsignedEmailPolicy: readUnsignedPolicy(d),
     };
     res.status(200).json(response);
+  };
+}
+
+/**
+ * GET /v1/admin/audit — recent audit events for the caller's company,
+ * newest first (PFL-188 surfaces unsigned-send overrides + policy changes
+ * here, alongside role/status/session events).
+ */
+export function makeAuditHandler(deps: AdminHandlersDeps) {
+  return async function auditHandler(
+    req: express.Request,
+    res: express.Response,
+  ): Promise<void> {
+    const { companyId } = adminUser(req);
+    const snap = await deps.getFirestore()
+      .collection("audit_events")
+      .where("companyId", "==", companyId)
+      .orderBy("createdAt", "desc")
+      .limit(200)
+      .get();
+    const events: AdminAuditEventResponse[] = snap.docs.map((doc) => {
+      const d = doc.data() ?? {};
+      const { type, actorUserId, companyId: _c, createdAt, ...detail } = d as Record<string, unknown>;
+      return {
+        id:          doc.id,
+        type:        str(type, "UNKNOWN"),
+        actorUserId: strOrNull(actorUserId),
+        createdAt:   num(createdAt),
+        detail,
+      };
+    });
+    res.status(200).json({ events });
   };
 }
 

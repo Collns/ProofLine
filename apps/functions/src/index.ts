@@ -121,6 +121,10 @@ import { makeRevokeDeviceHandler } from "./auth/revoke-device.handler.js";
 import { makeUpdateRoleHandler   } from "./auth/update-role.handler.js";
 import { makeUpdateStatusHandler } from "./auth/update-status.handler.js";
 import { makeRevokeSessionHandler } from "./auth/revoke-session.handler.js";
+import { makeUpdateUnsignedPolicyHandler } from "./auth/update-unsigned-policy.handler.js";
+// --- PFL-188: unsigned-email policy (extension fetch + override audit)
+import { makeGetPolicyHandler } from "./api/policy/get-policy.handler.js";
+import { makeUnsignedOverrideHandler } from "./api/policy/unsigned-override.handler.js";
 
 // --- PFL-127: admin API (Firebase Auth-scoped read endpoints)
 import { adminAuthMiddleware } from "./auth/admin-auth.middleware.js";
@@ -130,6 +134,7 @@ import {
   makeSignedMessagesHandler,
   makeSessionsHandler,
   makeInvitationsHandler,
+  makeAuditHandler,
 } from "./api/admin/handlers.js";
 
 // --- PFL-087: real Bearer auth for signing routes
@@ -164,7 +169,25 @@ const ALLOWED_ORIGINS: ReadonlySet<string> = new Set([
   "https://proofline-admin.firebaseapp.com",
 ]);
 
-function corsMiddleware(
+// PFL-188: only these extension IDs are reflected for chrome-extension CORS.
+// Configurable via EXT_ALLOWED_IDS (comma-separated); defaults to the
+// published extension id.
+const ALLOWED_EXTENSION_IDS: ReadonlySet<string> = new Set(
+  (process.env["EXT_ALLOWED_IDS"] ?? "jjdabijoladnafmdknekgbhjpbdbiieh")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
+
+/** True for `chrome-extension://<id>` whose id is in the allowlist. */
+function isAllowedExtensionOrigin(origin: string): boolean {
+  const prefix = "chrome-extension://";
+  if (!origin.startsWith(prefix)) return false;
+  const id = origin.slice(prefix.length).split("/")[0];
+  return ALLOWED_EXTENSION_IDS.has(id);
+}
+
+export function corsMiddleware(
   req: express.Request,
   res: express.Response,
   next: express.NextFunction,
@@ -174,6 +197,14 @@ function corsMiddleware(
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Credentials", "true");
+  } else if (typeof origin === "string" && isAllowedExtensionOrigin(origin)) {
+    // PFL-188: the extension's background SW / content script calls
+    // /v1/extension/* and other API routes from its own origin. Only
+    // configured extension IDs are reflected. These are Bearer-authed (no
+    // cookies), so no Allow-Credentials. (Belt-and-suspenders alongside the
+    // manifest host_permissions, which lets the background bypass CORS.)
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
   }
   // DELETE: web-admin cancels a counterparty invitation (PFL-026).
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
@@ -575,6 +606,24 @@ publicApp.post(
 );
 publicApp.options("/v1/extension/register-credential", corsMiddleware);
 
+// ─── PFL-188: unsigned-email policy for the extension ────────────────────────
+// Both authed by the extension JWS Bearer (requireExtensionAuth sets req.user).
+publicApp.get(
+  "/v1/extension/policy",
+  corsMiddleware,
+  requireExtensionAuth,
+  (req, res, next) => { makeGetPolicyHandler()(req, res).catch(next); },
+);
+publicApp.options("/v1/extension/policy", corsMiddleware);
+
+publicApp.post(
+  "/v1/extension/unsigned-override",
+  corsMiddleware,
+  requireExtensionAuth,
+  (req, res, next) => { makeUnsignedOverrideHandler()(req, res).catch(next); },
+);
+publicApp.options("/v1/extension/unsigned-override", corsMiddleware);
+
 // PFL-095: server-issued WebAuthn registration challenges. The popup
 // calls this BEFORE running navigator.credentials.create() and then
 // posts the resulting attestation (carrying the same challenge in
@@ -676,6 +725,22 @@ publicApp.post(
 );
 publicApp.options("/v1/admin/update-role", corsMiddleware);
 
+// PFL-188: owner/manager set the company's unsigned-email policy. Same
+// self-verified Bearer pattern as update-role; registered before the GET
+// sub-router so Express matches this POST first.
+let cachedUpdateUnsignedPolicyHandler:
+  | ((req: express.Request, res: express.Response) => Promise<void>)
+  | null = null;
+publicApp.post(
+  "/v1/admin/update-unsigned-policy",
+  corsMiddleware,
+  (req, res, next) => {
+    cachedUpdateUnsignedPolicyHandler ??= makeUpdateUnsignedPolicyHandler();
+    cachedUpdateUnsignedPolicyHandler(req, res).catch(next);
+  },
+);
+publicApp.options("/v1/admin/update-unsigned-policy", corsMiddleware);
+
 let cachedUpdateStatusHandler:
   | ((req: express.Request, res: express.Response) => Promise<void>)
   | null = null;
@@ -742,6 +807,7 @@ function adminApiRouter(): express.Router {
   router.get("/signed-messages", wrap(makeSignedMessagesHandler));
   router.get("/sessions",        wrap(makeSessionsHandler));
   router.get("/invitations",     wrap(makeInvitationsHandler));
+  router.get("/audit",           wrap(makeAuditHandler));
   cachedAdminApiRouter = router;
   return cachedAdminApiRouter;
 }

@@ -170,7 +170,38 @@ Status values: **Built** (real, in the production path) · **Partial** (real but
 | Wire-instruction marking UI | Not built (wiring) | `content/wire-fields.ts` exists, not mounted (PFL-135) |
 | Counterparty invitations | Not built | Backend missing; admin UI on fixtures (PFL-026 / PFL-132) |
 | Gemini memo screening | Not built | `packages/ai` is empty (PFL-028) |
-| Block Gmail Send on sign failure | Not built | No Send interception (PFL-096) |
+| Block Gmail Send on sign failure | Built | Capture-phase Send/Cmd+Enter guard across new/reply/forward/pop-out (PFL-096/181) |
+| Unsigned-email policy (F-EXT-03/09) | Built | Per-company `block`/`warn`/`allow` + `allowUnsignedOverride`; fail-closed to block; wires always blocked; override audited (PFL-188) |
+
+---
+
+### Unsigned-email policy (PFL-188, F-EXT-03 / F-EXT-09)
+
+Per-company, admin-controlled, **locked to `block` by default** (every company,
+including existing ones — the company doc field is absent → server defaults to
+`{ mode: 'block', allowUnsignedOverride: true }`).
+
+- **Storage:** `companies/{id}.unsignedEmailPolicy = { mode, allowUnsignedOverride }`.
+  `mode ∈ block|warn|allow`. Set only by `POST /v1/admin/update-unsigned-policy`
+  (owner/manager, self-verified Firebase Bearer; change written to `audit_events`
+  as `UNSIGNED_POLICY_UPDATED`). Employees are rejected 403.
+- **Extension fetch:** `GET /v1/extension/policy` (extension JWS Bearer →
+  `req.user.companyId`). The content script caches it, refreshes on a 60s
+  interval and whenever a compose opens, and surfaces it subtly in the compose
+  ("Company policy: signing required").
+- **Enforcement (content/send-guard):** governs a *plain, never-signed,
+  non-wire* email on every surface (new / inline reply / reply-all / inline
+  forward / popped-out). `block` → Send + Cmd/Ctrl+Enter blocked, "Send unsigned"
+  shown only when `allowUnsignedOverride`; `warn` → one-click "Send without
+  signing?" confirm; `allow` → sends. **Wires are always blocked unsigned with
+  no override, independent of the policy.**
+- **Fail closed:** any fetch failure (offline, API down, not signed in) → treat
+  as `block` with no override, and say why. A broken/disconnected extension
+  never silently sends unsigned email.
+- **Override audit:** each "Send unsigned" choice POSTs
+  `/v1/extension/unsigned-override` → `audit_events` `UNSIGNED_SEND_OVERRIDE`
+  (actor + company from the token, recipient-set hash, compose type, timestamp,
+  policy at the time). Surfaced to admins via `GET /v1/admin/audit`.
 
 ---
 

@@ -30,6 +30,7 @@ import type {
   WebAuthnAssertion,
   WebAuthnChallenge,
   PolicyErrorCode,
+  UnsignedEmailPolicy,
 } from "@proofline/types";
 
 import { CONFIG } from "../shared/config.js";
@@ -169,6 +170,35 @@ export async function getSignStatus(envelopeId: string): Promise<SignStatus> {
     throw new ApiError(`HTTP_${response.status}`, response.status, `Status request failed (${response.status})`);
   }
   return (await response.json()) as SignStatus;
+}
+
+// ─── PFL-188: unsigned-email policy ───────────────────────────────────────────
+
+/** Fetches the caller company's unsigned-email policy. Throws ApiError on
+ *  any failure so the caller can fail CLOSED (treat as block, no override). */
+export async function getCompanyPolicy(): Promise<UnsignedEmailPolicy> {
+  const auth = await authHeader();
+  const response = await fetch(`${CONFIG.apiOrigin}/v1/extension/policy`, {
+    headers: { Accept: "application/json", ...auth },
+  });
+  if (!response.ok) {
+    throw new ApiError(`HTTP_${response.status}`, response.status, `Policy request failed (${response.status})`);
+  }
+  const body = (await response.json()) as { ok?: boolean; policy?: UnsignedEmailPolicy };
+  if (!body?.ok || !body.policy) {
+    throw new ApiError("POLICY_UNAVAILABLE", 502, "Policy response malformed");
+  }
+  return body.policy;
+}
+
+/** Records a "send unsigned" override for the admin audit log (PFL-188). The
+ *  server stamps user/company/timestamp from the auth token. Best-effort. */
+export async function postUnsignedOverrideAudit(input: {
+  recipientSetHash: string;
+  composeType: string;
+  policyMode: string;
+}): Promise<void> {
+  await postJson("/v1/extension/unsigned-override", input);
 }
 
 // ─── Internals ────────────────────────────────────────────────────────────────

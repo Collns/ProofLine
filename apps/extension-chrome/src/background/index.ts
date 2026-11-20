@@ -30,7 +30,8 @@ import {
   handleWindowClosed,
 } from "./popup-manager.js";
 import { openPopupCeremony } from "./popup-launcher.js";
-import { getSignStatus } from "./api-client.js";
+import { getSignStatus, getCompanyPolicy, postUnsignedOverrideAudit } from "./api-client.js";
+import type { UnsignedEmailPolicy } from "@proofline/types";
 import {
   clearAuthToken,
   getAuthToken,
@@ -111,6 +112,10 @@ interface ContentRouteResult {
   email?:         string;
   companyId?:     string;
   userId?:        string;
+  // PFL-188: unsigned-email policy. `policyFailed` true → the content script
+  // fails closed (block, no override).
+  policy?:        UnsignedEmailPolicy;
+  policyFailed?:  boolean;
 }
 
 async function routeContentMessage(
@@ -166,6 +171,31 @@ async function routeContentMessage(
       // without waiting for the next periodic re-check.
       broadcastLogout();
       return { loggedOut: true };
+    }
+
+    case "GET_POLICY": {
+      // PFL-188: fetch the company's unsigned-email policy. Any failure —
+      // offline, API down, not signed in — fails CLOSED at the content side.
+      try {
+        const policy = await getCompanyPolicy();
+        return { policy, policyFailed: false };
+      } catch {
+        return { policyFailed: true };
+      }
+    }
+
+    case "UNSIGNED_OVERRIDE_AUDIT": {
+      // PFL-188: record a "send unsigned" override. Best-effort; never blocks
+      // the user's send if the audit POST fails.
+      const recipientSetHash = typeof msg["recipientSetHash"] === "string" ? msg["recipientSetHash"] : "";
+      const composeType = typeof msg["composeType"] === "string" ? msg["composeType"] : "unknown";
+      const policyMode = typeof msg["policyMode"] === "string" ? msg["policyMode"] : "unknown";
+      try {
+        await postUnsignedOverrideAudit({ recipientSetHash, composeType, policyMode });
+      } catch {
+        /* best-effort audit */
+      }
+      return { status: "ok" };
     }
 
     case "GET_SESSION_STATUS": {

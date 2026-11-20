@@ -13,7 +13,7 @@ import { findToolbarWithSelector } from './gmail-detector.js';
 import { buildSignPayload } from './sign-payload.js';
 import { mountWireFields } from './wire-fields.js';
 import { canonicalizeAndHash } from './canonical-bridge.js';
-import { clearComposeGuardState, beginSigning, endSigning, setSignState, clearSendAlert } from './send-guard.js';
+import { clearComposeGuardState, beginSigning, endSigning, setSignState, clearSendAlert, getUnsignedPolicy } from './send-guard.js';
 
 const BUTTON_LABEL = 'Sign with ProofLine';
 const FALLBACK_TIMEOUT_MS = 3000;
@@ -210,6 +210,37 @@ function showNotice(compose: Element): void {
     zIndex: '999999',
   } satisfies Partial<CSSStyleDeclaration>);
   compose.appendChild(notice);
+}
+
+// ─── PFL-188: subtle company-policy chip in the compose ───────────────────────
+
+const POLICY_CHIP_ATTR = 'data-proofline-policy-chip';
+
+/** Idempotently reflects the active unsigned-email policy in the compose.
+ *  Shown for block/warn (and when the policy couldn't be fetched); hidden for
+ *  allow. Safe to call on every sweep — it updates text in place. */
+export function updatePolicyChip(compose: Element): void {
+  const policy = getUnsignedPolicy();
+  const existing = compose.querySelector<HTMLElement>(`[${POLICY_CHIP_ATTR}]`);
+
+  let message: string | null = null;
+  if (policy.failed) message = "Company policy: signing required (couldn't reach ProofLine)";
+  else if (policy.mode === 'block') message = 'Company policy: signing required';
+  else if (policy.mode === 'warn') message = 'Company policy: signing recommended';
+
+  if (!message) { existing?.remove(); return; }
+
+  const chip = existing ?? document.createElement('div');
+  if (!existing) {
+    chip.setAttribute(POLICY_CHIP_ATTR, 'true');
+    chip.style.cssText = [
+      'display:inline-block', 'margin-left:10px', 'vertical-align:middle',
+      'color:#6b7280', 'font:11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+    ].join(';');
+    const signBtn = compose.querySelector<HTMLElement>(`[${INJECTED_MARKER}="true"]`);
+    (signBtn?.parentElement ?? compose).appendChild(chip);
+  }
+  chip.textContent = message;
 }
 
 // Public entry — idempotent. Returns true if a button was newly injected
