@@ -62,6 +62,10 @@ export interface WizardState {
   ein: string;
   state: string;
   ownerEmail: string;
+  street: string;
+  city: string;
+  zip: string;
+  website: string;
   dnsVerifiedAt: number | null;
   emailVerifiedAt: number | null;
   kybVendorRef: string | null;
@@ -90,6 +94,10 @@ const INITIAL_STATE: WizardState = {
   ein:                '',
   state:              '',
   ownerEmail:         '',
+  street:             '',
+  city:               '',
+  zip:                '',
+  website:            '',
   dnsVerifiedAt:      null,
   emailVerifiedAt:    null,
   kybVendorRef:       null,
@@ -121,6 +129,10 @@ export type WizardAction =
         ein: string;
         state: string;
         ownerEmail: string;
+        street: string;
+        city: string;
+        zip: string;
+        website: string;
       };
     }
   | {

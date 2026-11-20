@@ -65,6 +65,19 @@ export function normalizeEin(input: string): string {
   return `${digits.slice(0, 2)}-${digits.slice(2)}`;
 }
 
+// US ZIP: 5 digits, optionally +4 (matches the server's start handler).
+export const ZIP_REGEX = /^\d{5}(-\d{4})?$/;
+
+/**
+ * Validates an optional US ZIP. The business address is optional at
+ * onboarding (PFL-162 wires it into KYB when present), so an empty value is
+ * valid; a non-empty value must be a US ZIP.
+ */
+export function isValidZip(zip: string): boolean {
+  const trimmed = zip.trim();
+  return trimmed === '' || ZIP_REGEX.test(trimmed);
+}
+
 // ── Relative time ────────────────────────────────────────────────────────────
 
 const SECOND_MS = 1000;
