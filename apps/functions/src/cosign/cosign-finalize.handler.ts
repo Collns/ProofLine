@@ -33,7 +33,12 @@ import { z } from "zod";
 
 import { decodeCosignJws } from "./cosign.helpers.js";
 import type { FinalizeCosignResponse } from "./cosign.types.js";
-import { finishAssertion, InMemoryChallengeStore } from "@proofline/webauthn";
+import {
+  verifyWebAuthnAssertion,
+  extractCredentialId,
+  extractSig,
+  type AssertionCredential,
+} from "../webauthn/verify-assertion.js";
 
 // ─── Request body schema ─────────────────────────────────────────────────────
 //
@@ -54,93 +59,7 @@ export const COSIGN_ORIGINS = [
   "https://proofline-counterparty.web.app",
 ];
 
-interface CredentialRecord {
-  userId?:    string;
-  companyId?: string;
-  publicKey?: string;
-}
-
-async function verifyAssertion(
-  challenge: string,
-  assertion: unknown,
-  credentialId: string | null,
-  credential: CredentialRecord | null,
-): Promise<{ ok: boolean; reason?: string }> {
-  try {
-    if (!credentialId) {
-      return { ok: false, reason: "NO_CREDENTIAL_ID" };
-    }
-    if (!credential) {
-      return { ok: false, reason: "CREDENTIAL_NOT_FOUND" };
-    }
-    const publicKey = credential.publicKey;
-    if (typeof publicKey !== "string") {
-      return { ok: false, reason: "PUBKEY_MISSING" };
-    }
-
-    // The popup posts the assertion as a structural subset of
-    // AuthenticationResponseJSON; finishAssertion reads clientDataJSON to pull
-    // the challenge, then looks it up in the ChallengeStore we seed below.
-    const response = adaptAssertionForFinish(assertion);
-    if (!response) {
-      return { ok: false, reason: "ASSERTION_SHAPE_INVALID" };
-    }
-
-    const challengeStore = new InMemoryChallengeStore();
-    const now = Date.now();
-    await challengeStore.put({
-      challenge,
-      userId: "",
-      purpose: "assertion",
-      rpId: COSIGN_RP_ID,
-      createdAt: now,
-      expiresAt: now + 60_000,
-      consumed: false,
-    });
-
-    const result = await finishAssertion({
-      response,
-      expectedRPID: COSIGN_RP_ID,
-      expectedOrigin: COSIGN_ORIGINS,
-      storedPublicKey: publicKey,
-      storedSignCount: 0,
-      challengeStore,
-    });
-    return { ok: result.ok, ...(result.ok ? {} : { reason: result.reason }) };
-  } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : "VERIFY_THREW" };
-  }
-}
-
-function adaptAssertionForFinish(
-  assertion: unknown,
-): Parameters<typeof finishAssertion>[0]["response"] | null {
-  if (!assertion || typeof assertion !== "object") return null;
-  const a = assertion as Record<string, unknown>;
-  const id = (a["id"] ?? a["credentialId"]) as string | undefined;
-  const inner = a["response"];
-  if (!id || !inner || typeof inner !== "object") return null;
-  const r = inner as Record<string, unknown>;
-  if (
-    typeof r["clientDataJSON"] !== "string" ||
-    typeof r["authenticatorData"] !== "string" ||
-    typeof r["signature"] !== "string"
-  ) {
-    return null;
-  }
-  return {
-    id,
-    rawId: id,
-    type: "public-key",
-    clientExtensionResults: {},
-    response: {
-      clientDataJSON: r["clientDataJSON"] as string,
-      authenticatorData: r["authenticatorData"] as string,
-      signature: r["signature"] as string,
-      ...(typeof r["userHandle"] === "string" ? { userHandle: r["userHandle"] as string } : {}),
-    },
-  } as Parameters<typeof finishAssertion>[0]["response"];
-}
+type CredentialRecord = AssertionCredential;
 
 // ─── Cosigner eligibility ────────────────────────────────────────────────────
 
@@ -267,18 +186,20 @@ export function makeCosignFinalizeHandler() {
       return;
     }
 
-    const credentialId =
-      typeof assertion === "object" && assertion !== null
-        ? ((assertion as Record<string, unknown>)["credentialId"] as string | undefined)
-          ?? ((assertion as Record<string, unknown>)["id"] as string | undefined)
-          ?? null
-        : null;
+    const credentialId = extractCredentialId(assertion);
     const credSnap = credentialId
       ? await firestore.collection("webauthn_credentials").doc(credentialId).get()
       : null;
     const credential = credSnap?.exists ? (credSnap.data() as CredentialRecord) : null;
 
-    const verification = await verifyAssertion(clientChallenge, assertion, credentialId, credential);
+    const verification = await verifyWebAuthnAssertion({
+      challenge: clientChallenge,
+      assertion,
+      credentialId,
+      credential,
+      rpId: COSIGN_RP_ID,
+      origins: COSIGN_ORIGINS,
+    });
     if (!verification.ok || !credentialId || !credential) {
       console.warn(`[cosign-finalize] assertion rejected for ${messageId} (${verification.reason ?? "unknown"})`);
       respond(res, 401, {
@@ -403,19 +324,6 @@ export function makeCosignFinalizeHandler() {
     };
     respond(res, 200, response);
   };
-}
-
-function extractSig(assertion: unknown): string {
-  if (!assertion || typeof assertion !== "object") return "";
-  const a = assertion as Record<string, unknown>;
-  const direct = a["signature"];
-  if (typeof direct === "string") return direct;
-  const resp = a["response"];
-  if (resp && typeof resp === "object") {
-    const r = resp as Record<string, unknown>;
-    if (typeof r["signature"] === "string") return r["signature"] as string;
-  }
-  return "";
 }
 
 function respond(

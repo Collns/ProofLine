@@ -25,12 +25,29 @@ export type BilateralEventKind =
   | 'COUNTERPARTY_SIGNED'
   | 'REVOKED';
 
+/**
+ * WebAuthn assertion material captured on a SIGNED event (PFL-182). The
+ * counterparty ceremony runs on web-sign and the server verifies the
+ * assertion before appending the event; these artifacts let the verify
+ * endpoint reconstruct the signed bytes and render the signer.
+ */
+export interface SignatureMaterial {
+  /** base64url WebAuthn assertion signature. */
+  sig:                string;
+  credentialId?:      string;
+  authenticatorData?: string;  // base64url
+  clientDataJSON?:    string;  // base64url
+}
+
 export interface BilateralEvent {
   kind:      BilateralEventKind;
   docId:     string;
   actorId:   string;       // userId or companyId of the actor
   timestamp: number;       // unix seconds
   sig?:      string;       // base64url signature (present on SIGNED events)
+  credentialId?:      string;
+  authenticatorData?: string;
+  clientDataJSON?:    string;
 }
 
 // ─── Document record ──────────────────────────────────────────────────────────

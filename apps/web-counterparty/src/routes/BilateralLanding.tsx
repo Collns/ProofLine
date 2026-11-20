@@ -3,11 +3,17 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { CosignLayout } from '../components/CosignLayout';
 import { ErrorScreen }  from '../components/ErrorScreen';
-import { runCosignAssertion } from '../lib/webauthn-bridge';
 
 const API_BASE = (import.meta as any).env?.VITE_FUNCTIONS_BASE_URL
   ?? 'https://us-central1-proofline-cdabb.cloudfunctions.net/api';
 const BILATERAL_BASE = `${API_BASE}/v1/bilateral`;
+
+// PFL-182: the WebAuthn ceremony runs on the sign app, where counterparties'
+// passkeys are registered (RP proofline-sign.web.app). The portal keeps the
+// review/display and hands off to web-sign for signing.
+const SIGN_APP_BASE = (
+  (import.meta as any).env?.VITE_SIGN_APP_URL ?? 'https://proofline-sign.web.app'
+).replace(/\/$/, '');
 
 // Dev server only: a ?fixture= link has no effect in production builds.
 const FIXTURE_MODE =
@@ -80,61 +86,16 @@ export function BilateralLanding() {
       });
   }, [docId, token, navigate]);
 
-  async function handleSign(): Promise<void> {
+  function handleSign(): void {
     if (!doc) return;
     setBusy(true);
     setPhase('signing');
-
-    try {
-      let assertion: unknown;
-
-      if (FIXTURE_MODE) {
-        await new Promise((r) => setTimeout(r, 1200));
-        assertion = { id: 'fixture', type: 'public-key', response: {} };
-      } else {
-        // Bilateral keeps its existing RP (this portal's own hostname);
-        // only the cosign ceremony uses the sign app's RP (PFL-171).
-        const result = await runCosignAssertion({ challenge: doc.docId, rpId: window.location.hostname });
-        if (!result.ok) {
-          setTerminalError({
-            title:  'Could not capture biometric',
-            detail: result.code === 'USER_CANCELLED'
-              ? 'You cancelled the biometric prompt. Tap Sign again when ready.'
-              : 'Biometric capture failed. Please try again.',
-          });
-          setPhase('error');
-          setBusy(false);
-          return;
-        }
-        assertion = result.assertion;
-      }
-
-      const res = await fetch(`${BILATERAL_BASE}/sign-as-counterparty`, {
-        method:  'POST',
-        headers: {
-          'Content-Type':                'application/json',
-          'X-ProofLine-Bilateral-Token': token,
-        },
-        body: JSON.stringify({
-          docId,
-          // The server derives the counterparty company from the signed
-          // link token; no identity is sent from the client (PFL-166).
-          sig: JSON.stringify(assertion),
-        }),
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => null) as { detail?: string } | null;
-        throw new Error(body?.detail ?? `Server returned ${res.status}`);
-      }
-
-      navigate(`/b/${encodeURIComponent(docId)}/success`, { replace: true });
-    } catch (err) {
-      setTerminalError({ title: 'Signing failed', detail: (err as Error).message });
-      setPhase('error');
-    } finally {
-      setBusy(false);
-    }
+    // Hand off to the sign app, which runs the passkey ceremony against the
+    // RP the counterparty's passkey is registered for and verifies the
+    // assertion server-side (PFL-182). The token travels in the URL exactly
+    // as it arrived here.
+    const signUrl = `${SIGN_APP_BASE}/countersign/${encodeURIComponent(docId)}?t=${encodeURIComponent(token)}`;
+    window.location.assign(signUrl);
   }
 
   if (phase === 'error' && terminalError) {
@@ -183,11 +144,11 @@ export function BilateralLanding() {
           <div className="mx-auto max-w-2xl px-4 py-3 sm:px-0 sm:py-0">
             <button
               type="button"
-              onClick={() => void handleSign()}
+              onClick={() => handleSign()}
               disabled={busy || phase === 'signing'}
               className="w-full rounded-xl bg-blue-600 px-5 py-4 text-base font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
             >
-              {busy ? 'Waiting for biometric…' : 'Sign document with Touch ID'}
+              {busy ? 'Opening secure signing…' : 'Continue to sign securely'}
             </button>
           </div>
         </div>

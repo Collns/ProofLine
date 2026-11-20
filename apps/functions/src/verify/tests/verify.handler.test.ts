@@ -4,12 +4,14 @@ import request from "supertest";
 
 import { makeApp } from "../../index.js";
 import { makeStubFirestore } from "./firestore-stub.js";
+import { canonicalize } from "@proofline/canonical";
 import {
   plantScenario,
   makeEmailPayload,
   makeBilateralPayload,
   buildEnvelope,
   hashPayload,
+  signBytes,
   makeChainReader,
   ANCHOR_ROOT,
 } from "./envelope-helpers.js";
@@ -67,6 +69,41 @@ describe("GET /v1/verify/:id", () => {
     expect(res.status).toBe(200);
     expect(res.body.state).toBe("bilateral");
     expect(res.body.signers).toHaveLength(2);
+  });
+
+  it("PFL-182: renders BOTH signers for a bilateral document stored as an event log", async () => {
+    const sc = plantScenario();
+    const payload = makeBilateralPayload();
+    const message = canonicalize(payload);
+    // The production shape: { docId, payload, events[] }, not a canonical
+    // envelope. The verify bridge must project the two SIGNED events into the
+    // signers list so both parties render.
+    const eventLogDoc = {
+      docId: "doc-el-1",
+      payload,
+      anchorRoot: ANCHOR_ROOT,
+      events: [
+        { kind: "DRAFTED", docId: "doc-el-1", actorId: "company-a", timestamp: 1_700_000_000 },
+        {
+          kind: "DRAFTER_SIGNED", docId: "doc-el-1", actorId: "user-a",
+          credentialId: sc.credAId, sig: signBytes(sc.userAKp.privateKey, message), timestamp: 1_700_000_100,
+        },
+        {
+          kind: "COUNTERPARTY_SIGNED", docId: "doc-el-1", actorId: "user-b",
+          credentialId: sc.credBId, sig: signBytes(sc.userBKp.privateKey, message), timestamp: 1_700_000_200,
+        },
+      ],
+    };
+    sc.store.set("bilateral_documents", "doc-el-1", eventLogDoc as unknown as Record<string, unknown>);
+
+    const app = buildApp(sc);
+    const res = await request(app).get("/v1/verify/doc-el-1");
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe("bilateral");
+    expect(res.body.signers).toHaveLength(2);
+    const userIds = res.body.signers.map((s: { userId: string }) => s.userId).sort();
+    expect(userIds).toEqual(["user-a", "user-b"]);
   });
 
   it("returns 200 + state=rejected with PAYLOAD_HASH_MISMATCH for tampered payload", async () => {

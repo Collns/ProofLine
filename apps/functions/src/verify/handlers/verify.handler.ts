@@ -15,6 +15,8 @@ import type { SignedEnvelope as SignedEnvelopeType } from "@proofline/types";
 import { SignedEnvelope } from "@proofline/types";
 import { verifyEnvelope } from "@proofline/verification";
 import type { Anchor, Hex32 } from "@proofline/verification";
+import { canonicalize } from "@proofline/canonical";
+import { sha256 } from "@proofline/crypto";
 
 import type { VerifyService } from "../service-factory.js";
 import { shapeResponse } from "../shape-response.js";
@@ -39,6 +41,12 @@ function bridgeStoredEnvelope(raw: unknown): unknown {
   if (!raw || typeof raw !== "object") return raw;
   const obj = raw as Record<string, unknown>;
   if (Array.isArray(obj.signers)) return raw;
+  // PFL-182: bilateral documents are stored as an event log, not a canonical
+  // envelope. Project DRAFTER_SIGNED + COUNTERPARTY_SIGNED into the signers
+  // list the verifier reads, so a BILATERAL_SIGNED doc renders BOTH parties.
+  if (Array.isArray(obj.events) && !Array.isArray(obj.signatures)) {
+    return bridgeBilateralEventLog(obj);
+  }
   if (!Array.isArray(obj.signatures)) return raw;
 
   const payload = obj.payload as Record<string, unknown> | undefined;
@@ -84,6 +92,41 @@ function bridgeStoredEnvelope(raw: unknown): unknown {
   return {
     v: 1,
     payloadType,
+    payload: obj.payload,
+    payloadHash,
+    signers,
+    anchorRoot: obj.anchorRoot ?? null,
+    anchorTxHash: obj.anchorTxHash ?? null,
+    anchorBlockNumber: obj.anchorBlockNumber ?? null,
+  };
+}
+
+// PFL-182: project a bilateral event-log document into the canonical
+// envelope shape. Both signed events (drafter + counterparty) become signers
+// in the SAME list the verifier reads, each carrying its WebAuthn assertion
+// artifacts when present. payloadHash is recomputed from the payload so the
+// verifier's binding check passes.
+function bridgeBilateralEventLog(obj: Record<string, unknown>): unknown {
+  const events = obj.events as Array<Record<string, unknown>>;
+  const signed = events.filter(
+    (e) => e.kind === "DRAFTER_SIGNED" || e.kind === "COUNTERPARTY_SIGNED",
+  );
+  const signers = signed.map((e) => ({
+    userId: String(e.actorId ?? ""),
+    credentialId: String(e.credentialId ?? ""),
+    role: e.kind === "DRAFTER_SIGNED" ? "drafter" : "counterparty",
+    sig: String(e.sig ?? ""),
+    signedAt: Number(e.timestamp ?? 0) * 1000,
+    sessionId: null,
+    ...(typeof e.authenticatorData === "string" ? { authenticatorData: e.authenticatorData } : {}),
+    ...(typeof e.clientDataJSON === "string" ? { clientDataJSON: e.clientDataJSON } : {}),
+  }));
+
+  const payloadHash = Buffer.from(sha256(canonicalize(obj.payload))).toString("base64url");
+
+  return {
+    v: 1,
+    payloadType: "bilateral",
     payload: obj.payload,
     payloadHash,
     signers,

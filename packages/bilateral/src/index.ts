@@ -15,9 +15,10 @@ export type {
   BilateralStore,
   BilateralError,
   Result,
+  SignatureMaterial,
 } from './types.js';
 
 export { deriveStatus }        from './status.js';
 export { makeMemoryStore }     from './store.js';
 export { makeBilateralService } from './service.js';
-export type { BilateralService, BilateralServiceDeps } from './service.js';
+export type { BilateralService, BilateralServiceDeps, SignatureInput } from './service.js';

@@ -96,35 +96,9 @@ describe("GET /v1/bilateral/:id", () => {
   });
 });
 
-describe("POST /v1/bilateral/sign-as-counterparty", () => {
-  it("uses the token's counterparty company and ignores body identity", async () => {
-    const docId = await pendingDoc();
-    const link = await buildCounterpartyJwsLink({
-      baseUrl: "https://portal.test", docId, drafterCompanyId: "co-drafter",
-      counterpartyCompanyId: "co-counterparty", expiresAt: NOW + 3600,
-    });
-    await request(buildApp())
-      .post("/v1/bilateral/sign-as-counterparty")
-      .set("X-ProofLine-Bilateral-Token", tokenFromLink(link))
-      .send({ docId, sig: "sig-cp", companyId: "co-attacker", userId: "u-attacker" })
-      .expect(200);
-    const status = await service.getStatus(docId);
-    expect(status.ok && status.value).toBe("BILATERAL_SIGNED");
-  });
-
-  it("403 when the token names a different counterparty than the document", async () => {
-    const docId = await pendingDoc();
-    const link = await buildCounterpartyJwsLink({
-      baseUrl: "https://portal.test", docId, drafterCompanyId: "co-drafter",
-      counterpartyCompanyId: "co-attacker", expiresAt: NOW + 3600,
-    });
-    await request(buildApp())
-      .post("/v1/bilateral/sign-as-counterparty")
-      .set("X-ProofLine-Bilateral-Token", tokenFromLink(link))
-      .send({ docId, sig: "sig-cp", companyId: "co-counterparty" })
-      .expect(403);
-  });
-});
+// The counterparty-signing flow (PFL-182: server-issued challenge + verified
+// WebAuthn assertion + identity from the token's `cp` claim) is covered end to
+// end in sign-as-counterparty.test.ts, which stubs Firestore + finishAssertion.
 
 describe("verifyCounterpartyJwsToken", () => {
   it("returns the counterparty claim and rejects a payload with the claim removed", async () => {
