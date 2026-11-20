@@ -49,9 +49,37 @@ import { resolveCosignApprovers } from "../../cosign/cosign-request.js";
 import { makeRFC7807Error } from "./http.helpers.js";
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
+/** The sender's company identity needed to bind the From address (PFL-187). */
+export interface CompanySenderIdentity {
+  domain: string;
+  allowedFromDomains?: string[];
+  allowedFromAddresses?: string[];
+  testCompany?: boolean;
+}
+
 export interface SignHandlerDeps {
   /** Wire memo screener (AI_PROVIDER). Omitted → no screening. */
   screener?: MemoScreener;
+  /**
+   * PFL-187: loads the signer company's verified domain + alias config so the
+   * From address can be bound at sign time. Omitted → the check is skipped
+   * (the verify endpoint still enforces it authoritatively).
+   */
+  loadCompanyIdentity?: (companyId: string) => Promise<CompanySenderIdentity | null>;
+}
+
+const SENDER_DOMAIN_OF = (addr: string) => addr.split("@")[1]?.trim().toLowerCase() ?? "";
+
+/** Whether `from` is allowed to sign on behalf of `company`. */
+export function senderAllowed(from: string, company: CompanySenderIdentity): boolean {
+  if (company.testCompany === true) return true;
+  const addr = from.trim().toLowerCase();
+  if ((company.allowedFromAddresses ?? []).map((a) => a.trim().toLowerCase()).includes(addr)) return true;
+  const domain = SENDER_DOMAIN_OF(addr);
+  const allowed = [company.domain, ...(company.allowedFromDomains ?? [])]
+    .map((d) => d.trim().toLowerCase())
+    .filter(Boolean);
+  return domain.length > 0 && allowed.includes(domain);
 }
 
 /** Screens a wire instruction; null for non-wire payloads or no screener. */
@@ -112,6 +140,26 @@ export function makeSignHandler(ctx: PolicyContext, deps: SignHandlerDeps = {}) 
       userId: string;
       companyId: string;
     };
+
+    // ── 1b. Sender-domain binding (PFL-187) ───────────────────────────────────
+    // Reject at sign time if the From address isn't on the company's verified
+    // domain (or an allowed alias). Defence-in-depth; verify enforces it too.
+    if (deps.loadCompanyIdentity) {
+      const company = await deps.loadCompanyIdentity(companyId);
+      if (!company || !senderAllowed(body.payload.from, company)) {
+        res.status(403).json(
+          makeRFC7807Error(
+            "https://proofline.app/errors/SENDER_DOMAIN_MISMATCH",
+            "SENDER_DOMAIN_MISMATCH",
+            403,
+            company
+              ? `This account can only sign mail from ${company.domain}. "${body.payload.from}" is a different domain.`
+              : "Your company could not be loaded to verify the sender domain.",
+          ),
+        );
+        return;
+      }
+    }
 
     // ── 2. Compute payload hash ───────────────────────────────────────────────
 

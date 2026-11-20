@@ -400,7 +400,24 @@ function withPerRequestPolicyCtx(factory: SignHandlerFactory): express.RequestHa
 
 const signRouter = express.Router();
 // PFL-028: wire instructions get advisory memo screening (AI_PROVIDER).
-signRouter.post("/",         withPerRequestPolicyCtx((ctx) => makeSignHandler(ctx, { screener: memoScreener() })));
+signRouter.post("/",         withPerRequestPolicyCtx((ctx) => makeSignHandler(ctx, {
+  screener: memoScreener(),
+  // PFL-187: bind the From address to the signer company's verified domain.
+  loadCompanyIdentity: async (companyId: string) => {
+    const snap = await getFirestore().collection("companies").doc(companyId).get();
+    if (!snap.exists) return null;
+    const c = snap.data() as {
+      domain?: string; allowedFromDomains?: string[]; allowedFromAddresses?: string[]; testCompany?: boolean;
+    };
+    if (!c.domain) return null;
+    return {
+      domain: c.domain,
+      ...(Array.isArray(c.allowedFromDomains) ? { allowedFromDomains: c.allowedFromDomains } : {}),
+      ...(Array.isArray(c.allowedFromAddresses) ? { allowedFromAddresses: c.allowedFromAddresses } : {}),
+      ...(c.testCompany === true ? { testCompany: true } : {}),
+    };
+  },
+})));
 // PFL-136: over-limit wires are recorded PENDING_COSIGN and the approvers
 // are emailed a link to the web-sign approval page.
 signRouter.post("/finalize", withPerRequestPolicyCtx((ctx) => makeSignFinalizeHandler(ctx, {

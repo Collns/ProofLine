@@ -64,5 +64,6 @@ export function shapeResponse(result: VerificationResult): VerificationResponse 
     signers: copySigners(result.signers),
     payload: result.payload,
     anchor: serializeAnchor(result.anchor),
+    ...(result.testCompany ? { testCompany: true } : {}),
   };
 }

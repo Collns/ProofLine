@@ -4,6 +4,7 @@ import type { ResolvedSigner } from './checks.js';
 import {
   checkPayloadIntegrity,
   checkSignerIdentities,
+  checkSenderDomain,
   checkSignatures,
   checkRoleCredentials,
   checkAnchor,
@@ -101,6 +102,13 @@ export async function verifyEnvelope(input: VerifyEnvelopeInput): Promise<Verifi
   const c2 = await checkSignerIdentities(envelope, registry);
   if (!c2.ok) return rejected(c2);
 
+  // PFL-187: the From address must bind to the signer company's verified
+  // domain (or an allowed alias). A mismatch is a suspected spoof — someone
+  // signing as a real company from an address they don't control.
+  const cDomain = checkSenderDomain(envelope, c2.signers);
+  if (!cDomain.ok) return suspectedSpoof(c2.signers[0].company, cDomain.detail);
+  const testCompany = cDomain.testCompany;
+
   // PFL-125: signature check is ALWAYS run. New envelopes carry the
   // WebAuthn artifacts and verify properly; legacy envelopes without
   // them either fall through the canonical-bytes path or — under
@@ -165,5 +173,6 @@ export async function verifyEnvelope(input: VerifyEnvelopeInput): Promise<Verifi
     signers: c2.signers.map(toVerifiedSignerInfo),
     payload: envelope.payload,
     anchor,
+    ...(testCompany ? { testCompany: true } : {}),
   };
 }
