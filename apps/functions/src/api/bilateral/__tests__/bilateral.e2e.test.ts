@@ -86,6 +86,7 @@ const CP = "company-b";
 const CP_USER = "user-b";
 const CP_CRED = "cred-b";
 const DRAFTER_USER = "user-a";
+const DRAFTER_CRED = "cred-a";
 const DOC_ID = "doc_e2e_0001";
 
 function buildApp() {
@@ -122,6 +123,7 @@ function tokenFor(docId: string) {
 void DOC_ID; // the drafter route assigns its own doc id
 
 const assertion = { id: CP_CRED, response: { clientDataJSON: "cd", authenticatorData: "ad", signature: "cp-sig" } };
+const drafterAssertion = { id: DRAFTER_CRED, response: { clientDataJSON: "cd", authenticatorData: "ad", signature: "drafter-sig" } };
 
 /** Simulate the anchor batch draining the queue for a stub-anchored root. */
 async function runAnchorWriteBack(): Promise<void> {
@@ -138,7 +140,9 @@ async function runAnchorWriteBack(): Promise<void> {
 beforeEach(() => {
   for (const k of Object.keys(store)) delete store[k];
   col("webauthn_credentials")[CP_CRED] = { userId: CP_USER, companyId: CP, publicKey: "cose-b" };
+  col("webauthn_credentials")[DRAFTER_CRED] = { userId: DRAFTER_USER, companyId: DRAFTER, publicKey: "cose-a" };
   col("users")[CP_USER] = { companyId: CP, status: "active" };
+  col("users")[DRAFTER_USER] = { companyId: DRAFTER, status: "active" };
 });
 
 describe("bilateral end-to-end (PFL-146)", () => {
@@ -156,7 +160,7 @@ describe("bilateral end-to-end (PFL-146)", () => {
     expect(docId).toBeTruthy();
 
     await request(app).post("/v1/bilateral/sign-as-drafter").send({
-      docId, sig: "drafter-sig", counterpartyEmail: "cp@company-b.com", drafterName: "Dana Drafter",
+      docId, assertion: drafterAssertion, counterpartyEmail: "cp@company-b.com", drafterName: "Dana Drafter",
     }).expect(200);
 
     // 2. Counterparty opens web-sign: fetch the context (server-issued challenge).
