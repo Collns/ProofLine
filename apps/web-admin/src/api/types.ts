@@ -7,6 +7,11 @@ export interface StartRequest {
   ein: string;
   state: string;        // 2-char US state code, uppercased
   ownerEmail: string;
+  // Business address (optional) — passed to KYB when present (PFL-162).
+  street?: string;
+  city?: string;
+  zip?: string;         // US ZIP, 5 digits or ZIP+4
+  website?: string;
 }
 export interface StartResponse {
   companyId: string;
