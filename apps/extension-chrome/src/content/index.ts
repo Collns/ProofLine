@@ -5,7 +5,7 @@ import { tryInject, updatePolicyChip } from './inject-toolbar.js';
 import { injectBannerIntoCompose } from './inject-banner.js';
 import { isBackgroundToContentMessage } from '../shared/types.js';
 import { readComposeId, ensureComposeId, COMPOSE_ID_ATTR } from './shared.js';
-import { installSendGuard, setSignState, markSigned, endSigning, setUnsignedPolicy, getUnsignedPolicy, failSigningWithMessage, friendlySignError } from './send-guard.js';
+import { installSendGuard, setSignState, markSigned, endSigning, setUnsignedPolicy, getUnsignedPolicy, reconcileComposeGuard, failSigningWithMessage, friendlySignError } from './send-guard.js';
 import { watchCosign, COSIGN_ENVELOPE_ATTR, type CosignStatusReply } from './cosign-release.js';
 import { composeType } from './compose-type.js';
 import { canonicalizeAndHash } from './canonical-bridge.js';
@@ -94,6 +94,9 @@ function sweep(): void {
     // are idempotent — no DOM mutation when the chip is already correct — so
     // the MutationObserver below can't feed itself into a loop.
     for (const compose of composes) updatePolicyChip(compose);
+    // PFL-190 #3: clear a stale "send blocked" banner when a compose's type or
+    // recipients changed (e.g. Reply → Forward via the ▾ menu).
+    for (const compose of composes) reconcileComposeGuard(compose);
     // Refresh the policy when a compose newly opens (throttled to 10s).
     if (injected) refreshPolicy();
   }
@@ -291,7 +294,12 @@ function start(): void {
     },
     onUnsignedSend: (compose, info) => {
       // PFL-190: sender-facing notice near Gmail's "Message sent" toast.
-      showUnsignedSentNotice();
+      // Scheduled sends read "Scheduled …" rather than "Sent …".
+      showUnsignedSentNotice({
+        message: info.path === 'schedule'
+          ? 'Scheduled without a ProofLine signature.'
+          : 'Sent without a ProofLine signature.',
+      });
       // PFL-188/190: record the send (recent activity + override audit).
       reportUnsignedSend(compose, info);
     },

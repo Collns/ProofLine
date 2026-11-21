@@ -32,11 +32,13 @@
 import { log } from '../shared/log.js';
 import {
   INJECTED_MARKER,
+  COMPOSE_ID_ATTR,
   isInsideEditable,
   resolveInstrumentedCompose,
 } from './shared.js';
 import { contentFingerprint } from './compose-content.js';
 import { insertUnsignedFooter } from './unsigned-footer.js';
+import { composeType } from './compose-type.js';
 
 export type SignState = 'pending' | 'failed' | 'cosign_pending' | 'signed';
 
@@ -55,10 +57,14 @@ export interface SendGuardDeps {
    * PFL-190 — called when an unsigned send actually proceeds: allow mode, the
    * warn-mode confirm, or a block-mode override. `overrode` is true for the
    * confirm/override paths (false for plain allow-mode); `footerAdded` says
-   * whether the recipient "sent unsigned" footer was appended to this send.
+   * whether the recipient "sent unsigned" footer was appended to this send;
+   * `path` is which send surface committed it (immediate vs. scheduled send).
    */
-  onUnsignedSend?: (compose: Element, info: { overrode: boolean; footerAdded: boolean }) => void;
+  onUnsignedSend?: (compose: Element, info: { overrode: boolean; footerAdded: boolean; path: SendPath }) => void;
 }
+
+/** Which Gmail send surface a guarded action came from (PFL-190 schedule-send). */
+export type SendPath = 'send' | 'schedule';
 
 // ─── PFL-188: company unsigned-email policy ───────────────────────────────────
 //
@@ -325,12 +331,37 @@ function maySendUnsigned(compose: Element): boolean {
 
 // ─── Detection ───────────────────────────────────────────────────────────────
 
-/** Gmail's Send button: role=button whose tooltip / label starts with "Send". */
+/** Gmail's Send button: role=button whose tooltip / label starts with "Send".
+ *  Also matches "Send & Archive" (label still starts with "Send"). */
 export function isGmailSendButton(el: Element | null): boolean {
   const btn = el?.closest('[role="button"]');
   if (!btn || btn.hasAttribute(INJECTED_MARKER)) return false;
   const label = (btn.getAttribute('data-tooltip') ?? btn.getAttribute('aria-label') ?? '').trim();
   return /^send\b/i.test(label);
+}
+
+/**
+ * PFL-190 schedule-send gap: the "Schedule send" entry in Gmail's "More send
+ * options" menu. It is the single choke point for the entire scheduled-send
+ * flow (presets + the custom date/time picker all open from it), and it lives
+ * in a popup menu rendered outside the compose DOM. We match it by its menu
+ * item / button text so block/warn/allow apply to scheduling exactly as to Send.
+ */
+export function isScheduleSendTrigger(el: Element | null): boolean {
+  const item = el?.closest('[role="menuitem"], [role="button"], button, [role="option"]');
+  if (!item || item.hasAttribute(INJECTED_MARKER)) return false;
+  const text = (item.textContent ?? '').replace(/\s+/g, ' ').trim();
+  const label = (item.getAttribute('aria-label') ?? '').trim();
+  return /^schedule send\b/i.test(text) || /^schedule send\b/i.test(label);
+}
+
+/** Classify a clicked/activated element as a send-committing trigger, or null. */
+export function classifySendTrigger(el: Element | null): SendPath | null {
+  if (!el) return null;
+  if (el.closest(`[${INJECTED_MARKER}="true"]`)) return null; // never our own Sign button
+  if (isGmailSendButton(el)) return 'send';
+  if (isScheduleSendTrigger(el)) return 'schedule';
+  return null;
 }
 
 /**
@@ -352,6 +383,74 @@ function composeFor(target: Element, deps: SendGuardDeps): Element | null {
   if (resolved) return resolved;
   // Fallback: containment search over the detector's current composes.
   return deps.findComposes(document).find((c) => c.contains(target)) ?? null;
+}
+
+/**
+ * Resolve the compose a send trigger belongs to. For the main Send button the
+ * target is inside the compose, so `composeFor` resolves it directly. The
+ * "Schedule send" menu/dialog is rendered OUTSIDE the compose, so we fall back
+ * to the last compose the user interacted with (set when they clicked the "More
+ * send options" arrow, which is inside the compose) — or, failing that, the
+ * single open compose.
+ */
+function resolveSendCompose(
+  target: Element,
+  deps: SendGuardDeps,
+  lastInteracted: () => Element | null,
+): Element | null {
+  const direct = composeFor(target, deps);
+  if (direct) return direct;
+  const last = lastInteracted();
+  if (last && last.isConnected) return last;
+  const open = deps.findComposes(document);
+  return open.length === 1 ? open[0]! : null;
+}
+
+// ─── PFL-190 #3: clear a stale block banner when the compose changes ──────────
+//
+// Switching an inline compose between Reply / Reply-all / Forward (via the ▾
+// type menu), or changing the recipients, must not leave the previous "Gmail
+// send was blocked" banner (and its one-time override) in place. We stamp a
+// signature of (compose type + recipients) whenever the banner is shown, and
+// clear the banner + guard state when that signature changes.
+
+const GUARD_KEY_ATTR = 'data-proofline-guard-key';
+
+function recipientKey(compose: Element): string {
+  const emails = new Set<string>();
+  for (const el of Array.from(compose.querySelectorAll('[email]'))) {
+    // Only real recipient chips — never addresses inside the quoted thread or
+    // the editable body.
+    if (el.closest('[contenteditable="true"], [role="textbox"], blockquote, .gmail_quote')) continue;
+    const addr = el.getAttribute('email')?.trim().toLowerCase();
+    if (addr) emails.add(addr);
+  }
+  return [...emails].sort().join(',');
+}
+
+function guardKey(compose: Element): string {
+  return `${composeType(compose)}|${recipientKey(compose)}`;
+}
+
+/** Stamp the current (type + recipients) signature so a later change is detectable. */
+function stampGuardKey(compose: Element): void {
+  compose.setAttribute(GUARD_KEY_ATTR, guardKey(compose));
+}
+
+/**
+ * PFL-190 #3 — called on each sweep. If a send-blocked banner is showing and
+ * the compose's type or recipients changed since it was shown, clear the banner
+ * and the per-compose guard state so the switched compose re-evaluates fresh.
+ * A signed compose is left alone (an edit/recipient change re-locks it via the
+ * stale-signature check).
+ */
+export function reconcileComposeGuard(compose: Element): void {
+  const stamped = compose.getAttribute(GUARD_KEY_ATTR);
+  if (stamped === null) return;            // no banner was shown for this compose
+  if (stamped === guardKey(compose)) return; // unchanged
+  compose.removeAttribute(GUARD_KEY_ATTR);
+  if (getSignState(compose) === 'signed') { clearSendAlert(compose); return; }
+  clearComposeGuardState(compose);
 }
 
 // ─── Alert UI ────────────────────────────────────────────────────────────────
@@ -396,7 +495,7 @@ function safeAnchor(compose: Element): { parent: Element; before: Node | null } 
   return { parent: compose, before: compose.firstChild };
 }
 
-function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps): void {
+function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps, path: SendPath): void {
   clearSendAlert(compose);
   const alert = document.createElement('div');
   alert.setAttribute(SEND_ALERT_ATTR, 'true');
@@ -444,16 +543,20 @@ function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps): v
       // extension Errors page lists console.warn/error (PFL-190 follow-up).
       log('content', 'user chose to send unsigned', getSignState(compose));
       deps.onSendUnsigned?.(compose);
-      if (unsignedPolicy.mode === 'warn') {
-        // PFL-190 #2: warn is a ONE-CLICK confirm — send immediately. The
-        // programmatic Send click flows back through the guard, which now
-        // allows it (override armed), appends the footer, fires onUnsignedSend
-        // (notice + audit), then Gmail's own handler sends.
+      if (unsignedPolicy.mode === 'warn' && path === 'send') {
+        // PFL-190 #2: warn on the main Send is a ONE-CLICK confirm — send
+        // immediately. The programmatic Send click flows back through the guard,
+        // which now allows it (override armed), appends the footer, fires
+        // onUnsignedSend (notice + audit), then Gmail's own handler sends.
         clearSendAlert(compose);
         triggerGmailSend(compose);
       } else {
-        // block override keeps the explicit two-step confirmation.
-        text.textContent = 'Click Send again to send this email without a ProofLine signature.';
+        // Block override, and the scheduled-send path (whose Gmail menu has
+        // already closed), keep an explicit two-step confirmation: arm the
+        // override, then re-trigger from the same surface.
+        text.textContent = path === 'schedule'
+          ? 'Click Schedule send again to schedule this email without a ProofLine signature.'
+          : 'Click Send again to send this email without a ProofLine signature.';
         unsigned.remove();
       }
     });
@@ -462,6 +565,9 @@ function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps): v
 
   const { parent, before } = safeAnchor(compose);
   parent.insertBefore(alert, before);
+  // PFL-190 #3: remember what the compose looked like when we blocked it, so a
+  // later type/recipient switch clears this stale banner (reconcileComposeGuard).
+  stampGuardKey(compose);
 }
 
 // ─── Install ─────────────────────────────────────────────────────────────────
@@ -478,13 +584,13 @@ function block(event: Event): void {
  *  send (allow mode, warn confirm, or block override) PFL-190 appends the
  *  recipient footer (if the policy enables it) and notifies the caller so it
  *  can show the sender notice and audit the send. */
-function onSendAllowed(compose: Element, deps: SendGuardDeps): void {
+function onSendAllowed(compose: Element, deps: SendGuardDeps, path: SendPath): void {
   const overrode = compose.getAttribute(SEND_UNSIGNED_ATTR) === 'true';
   const wasSigned = getSignState(compose) === 'signed';
   compose.removeAttribute(SEND_UNSIGNED_ATTR);
   if (wasSigned) {
-    // A valid signed send: clear guard state so Gmail may recycle the
-    // container. Signed emails never get the unsigned footer or notice.
+    // A valid signed send (immediate OR scheduled): clear guard state so Gmail
+    // may recycle the container. Signed emails never get the footer or notice.
     clearComposeGuardState(compose);
     return;
   }
@@ -493,55 +599,99 @@ function onSendAllowed(compose: Element, deps: SendGuardDeps): void {
   // place when Gmail reads the body. insertUnsignedFooter is idempotent, so a
   // resend never duplicates it.
   const footerAdded = shouldAppendFooter() ? insertUnsignedFooter(compose) : false;
-  deps.onUnsignedSend?.(compose, { overrode, footerAdded });
+  deps.onUnsignedSend?.(compose, { overrode, footerAdded, path });
 }
 
 /**
  * Installs the capture-phase listeners. Returns an uninstall function.
  */
 export function installSendGuard(doc: Document, deps: SendGuardDeps): () => void {
+  // PFL-190: the last compose the user touched, so a "Schedule send" click in
+  // Gmail's popup menu (rendered outside the compose DOM) resolves to the right
+  // draft. Updated on any pointer/focus interaction inside an instrumented
+  // compose — including the "More send options" arrow that opens the menu.
+  let lastInteractedId: string | null = null;
+  const lastInteracted = (): Element | null =>
+    lastInteractedId
+      ? doc.querySelector(`[${COMPOSE_ID_ATTR}="${CSS.escape(lastInteractedId)}"]`)
+      : null;
+
+  const noteInteraction = (event: Event): void => {
+    const target = event.target instanceof Element ? event.target : null;
+    const compose = target ? resolveInstrumentedCompose(target) : null;
+    const id = compose?.getAttribute(COMPOSE_ID_ATTR);
+    if (id) lastInteractedId = id;
+  };
+
+  /**
+   * THE single guard every send surface funnels through (PFL-190): main Send,
+   * Send & Archive, Cmd/Ctrl+Enter, Tab-to-Send Enter/Space, and Schedule send.
+   * `commit` is true when the event would actually send (so it consumes the
+   * one-time override + appends the footer + fires the notice); false lets us
+   * block earlier pointer phases (mousedown/mouseup) without committing.
+   */
+  const guard = (event: Event, compose: Element, path: SendPath, commit: boolean): void => {
+    const reason = sendBlockReason(compose);
+    if (!reason) {
+      if (commit) onSendAllowed(compose, deps, path);
+      return;
+    }
+    block(event);
+    if (commit) showSendAlert(compose, reason, deps, path);
+  };
+
   const onPointer = (event: Event): void => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
-
-    // The Sign button's own handler drives the signing lifecycle (validate →
-    // beginSigning → pending + progress + timeout). The guard only needs to
-    // not mistake the Sign button for Gmail's Send button.
+    // The Sign button's own handler drives the signing lifecycle — never treat
+    // it as a send trigger.
     if (target.closest(`[${INJECTED_MARKER}="true"]`)) return;
 
-    if (!isGmailSendButton(target)) return;
-    const compose = composeFor(target, deps);
+    const path = classifySendTrigger(target);
+    if (!path) return;
+    const compose = resolveSendCompose(target, deps, lastInteracted);
     if (!compose) return;
-    const reason = sendBlockReason(compose);
-    if (!reason) {
-      if (event.type === 'click') onSendAllowed(compose, deps);
-      return;
-    }
-    block(event);
-    if (event.type === 'click') showSendAlert(compose, reason, deps);
+    // Block on every pointer phase (some Gmail builds act on mousedown); commit
+    // only on click, which is the phase Gmail actually sends on.
+    guard(event, compose, path, event.type === 'click');
   };
 
   const onKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return;
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
-    const compose = composeFor(target, deps);
-    if (!compose) return;
-    const reason = sendBlockReason(compose);
-    if (!reason) {
-      onSendAllowed(compose, deps);
+
+    // 1) The global compose shortcut: Cmd/Ctrl+Enter sends the main compose.
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      const compose = composeFor(target, deps);
+      if (!compose) return;
+      guard(event, compose, 'send', true);
       return;
     }
-    block(event);
-    showSendAlert(compose, reason, deps);
+
+    // 2) Tab-to-Send (or keyboard-activating the Schedule send item): Enter /
+    //    Space on a focused send trigger. Gmail's Send is a div[role=button],
+    //    which does NOT emit a synthetic click on key activation, so this is the
+    //    only way these keystrokes reach the guard (no double-fire with click).
+    if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+      if (target.closest(`[${INJECTED_MARKER}="true"]`)) return;
+      const path = classifySendTrigger(target);
+      if (!path) return;
+      const compose = resolveSendCompose(target, deps, lastInteracted);
+      if (!compose) return;
+      guard(event, compose, path, true);
+    }
   };
 
   const pointerEvents = ['mousedown', 'mouseup', 'click'] as const;
   for (const type of pointerEvents) doc.addEventListener(type, onPointer, true);
   doc.addEventListener('keydown', onKeydown, true);
+  doc.addEventListener('pointerdown', noteInteraction, true);
+  doc.addEventListener('focusin', noteInteraction, true);
 
   return () => {
     for (const type of pointerEvents) doc.removeEventListener(type, onPointer, true);
     doc.removeEventListener('keydown', onKeydown, true);
+    doc.removeEventListener('pointerdown', noteInteraction, true);
+    doc.removeEventListener('focusin', noteInteraction, true);
   };
 }
