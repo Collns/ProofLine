@@ -4,7 +4,7 @@ import { findComposeContainers } from './gmail-detector.js';
 import { tryInject, updatePolicyChip } from './inject-toolbar.js';
 import { injectBannerIntoCompose } from './inject-banner.js';
 import { isBackgroundToContentMessage } from '../shared/types.js';
-import { readComposeId, COMPOSE_ID_ATTR } from './shared.js';
+import { readComposeId, ensureComposeId, COMPOSE_ID_ATTR } from './shared.js';
 import { installSendGuard, setSignState, markSigned, endSigning, setUnsignedPolicy, getUnsignedPolicy, reconcileComposeGuard } from './send-guard.js';
 import { watchCosign, COSIGN_ENVELOPE_ATTR, type CosignStatusReply } from './cosign-release.js';
 import { composeType } from './compose-type.js';
@@ -124,6 +124,11 @@ function scheduleSweep(): void {
 function reportUnsignedSend(compose: Element, info: { overrode: boolean; footerAdded: boolean }): void {
   const policy = getUnsignedPolicy();
   const type = composeType(compose);
+  // Our own stable id is always present once the Sign button is injected;
+  // Gmail's draft id is often absent (inline reply/forward), so include it only
+  // when available. Together they keep the audit event's draft reference stable.
+  const composeId = ensureComposeId(compose);
+  const draftId = readComposeId(compose);
   const send = (recipientSetHash: string) => {
     try {
       chrome.runtime.sendMessage({
@@ -133,6 +138,8 @@ function reportUnsignedSend(compose: Element, info: { overrode: boolean; footerA
         composeType: type,
         policyMode: policy.failed ? 'block_failclosed' : policy.mode,
         recipientSetHash,
+        composeId,
+        ...(draftId ? { draftId } : {}),
       });
     } catch { /* best-effort */ }
   };
@@ -262,7 +269,10 @@ function start(): void {
   installSendGuard(document, {
     findComposes: findComposeContainers,
     onSendUnsigned: (compose) => {
-      warn('content', 'send unsigned chosen', readComposeId(compose));
+      // info, not warn — a user choice, not an error (keeps it off Chrome's
+      // extension Errors page). Log our always-present id, not the often-null
+      // Gmail draft id.
+      log('content', 'send unsigned chosen', ensureComposeId(compose));
     },
     onUnsignedSend: (compose, info) => {
       // PFL-190: sender-facing notice near Gmail's "Message sent" toast.
