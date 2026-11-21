@@ -46,6 +46,7 @@ export function SettingsPage() {
   const [callerRole, setCallerRole] = useState<string>('employee');
   const [mode, setMode] = useState<UnsignedPolicyMode>('block');
   const [allowOverride, setAllowOverride] = useState(true);
+  const [appendFooter, setAppendFooter] = useState(true);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<{ code: string; detail: string } | null>(null);
@@ -56,7 +57,11 @@ export function SettingsPage() {
       const [profile, users] = await Promise.all([fetchCompanyProfile(cid), fetchUsers(cid)]);
       if (cancelled) return;
       const policy = profile?.unsignedEmailPolicy;
-      if (policy) { setMode(policy.mode); setAllowOverride(policy.allowUnsignedOverride); }
+      if (policy) {
+        setMode(policy.mode);
+        setAllowOverride(policy.allowUnsignedOverride);
+        setAppendFooter(policy.appendUnsignedFooter !== false);
+      }
       const uid = user?.uid ?? '';
       setCallerRole(users.find((u) => u.userId === uid)?.role ?? 'employee');
       setLoading(false);
@@ -69,7 +74,7 @@ export function SettingsPage() {
   async function save(): Promise<void> {
     setBusy(true); setSaved(false); setError(null);
     try {
-      await updateUnsignedPolicy(mode, allowOverride);
+      await updateUnsignedPolicy(mode, allowOverride, appendFooter);
       setSaved(true);
     } catch (e) {
       const err = e instanceof UserManagementError ? e : null;
@@ -130,6 +135,21 @@ export function SettingsPage() {
               Allow a “Send unsigned” override in block mode.
               <span className="block text-xs text-gray-400">
                 When off, there is no way to send an unsigned email in block mode — people must sign. (Wires never have an override.)
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              checked={appendFooter}
+              onChange={(e) => { setAppendFooter(e.currentTarget.checked); setSaved(false); }}
+              className="mt-0.5"
+            />
+            <span>
+              Add a footer to unsigned emails.
+              <span className="block text-xs text-gray-400">
+                When on, emails sent without a ProofLine signature get a small line for the recipient: “This email was sent without a ProofLine signature.” It is never added to signed emails or inside quoted reply text.
               </span>
             </span>
           </label>

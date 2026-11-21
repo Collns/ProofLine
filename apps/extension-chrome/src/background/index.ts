@@ -116,6 +116,39 @@ interface ContentRouteResult {
   // fails closed (block, no override).
   policy?:        UnsignedEmailPolicy;
   policyFailed?:  boolean;
+  // PFL-190: recent unsigned-send activity for the action popup.
+  activity?:      RecentActivityEntry[];
+}
+
+/** PFL-190: one unsigned send recorded for the popup's recent-activity list. */
+export interface RecentActivityEntry {
+  composeType: string;
+  footerAdded: boolean;
+  overrode:    boolean;
+  at:          number;
+}
+
+const RECENT_ACTIVITY_KEY = "proofline:recentActivity";
+const RECENT_ACTIVITY_MAX = 10;
+
+async function getRecentActivity(): Promise<RecentActivityEntry[]> {
+  try {
+    const result = await chrome.storage.local.get(RECENT_ACTIVITY_KEY);
+    const raw = result[RECENT_ACTIVITY_KEY];
+    return Array.isArray(raw) ? (raw as RecentActivityEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function recordRecentActivity(entry: RecentActivityEntry): Promise<void> {
+  try {
+    const existing = await getRecentActivity();
+    const next = [entry, ...existing].slice(0, RECENT_ACTIVITY_MAX);
+    await chrome.storage.local.set({ [RECENT_ACTIVITY_KEY]: next });
+  } catch {
+    /* best-effort */
+  }
 }
 
 async function routeContentMessage(
@@ -184,18 +217,29 @@ async function routeContentMessage(
       }
     }
 
-    case "UNSIGNED_OVERRIDE_AUDIT": {
-      // PFL-188: record a "send unsigned" override. Best-effort; never blocks
-      // the user's send if the audit POST fails.
+    case "UNSIGNED_SENT": {
+      // PFL-188/190: an unsigned email was sent. Record it for the popup's
+      // recent-activity list, and — when it was an explicit override — audit
+      // it server-side (with footerAdded). Both best-effort; never block.
       const recipientSetHash = typeof msg["recipientSetHash"] === "string" ? msg["recipientSetHash"] : "";
       const composeType = typeof msg["composeType"] === "string" ? msg["composeType"] : "unknown";
       const policyMode = typeof msg["policyMode"] === "string" ? msg["policyMode"] : "unknown";
-      try {
-        await postUnsignedOverrideAudit({ recipientSetHash, composeType, policyMode });
-      } catch {
-        /* best-effort audit */
+      const footerAdded = msg["footerAdded"] === true;
+      const overrode = msg["overrode"] === true;
+      await recordRecentActivity({ composeType, footerAdded, overrode, at: Date.now() });
+      if (overrode) {
+        try {
+          await postUnsignedOverrideAudit({ recipientSetHash, composeType, policyMode, footerAdded });
+        } catch {
+          /* best-effort audit */
+        }
       }
       return { status: "ok" };
+    }
+
+    case "GET_RECENT_ACTIVITY": {
+      // PFL-190: the action popup reads the recent unsigned-send activity.
+      return { activity: await getRecentActivity() };
     }
 
     case "GET_SESSION_STATUS": {

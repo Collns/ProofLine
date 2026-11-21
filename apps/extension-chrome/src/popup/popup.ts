@@ -1,5 +1,12 @@
 import { log, warn } from '../shared/log.js';
 
+interface RecentActivityEntry {
+  composeType: string;
+  footerAdded: boolean;
+  overrode: boolean;
+  at: number;
+}
+
 interface AuthStatusResponse {
   ok?: boolean;
   authenticated?: boolean;
@@ -7,6 +14,7 @@ interface AuthStatusResponse {
   companyId?: string;
   userId?: string;
   loggedOut?: boolean;
+  activity?: RecentActivityEntry[];
 }
 
 function setText(id: string, value: string): void {
@@ -93,6 +101,49 @@ async function onConnectClick(): Promise<void> {
   applyStatus(res);
 }
 
+const COMPOSE_LABELS: Record<string, string> = {
+  new_compose: 'New email',
+  inline_reply: 'Reply',
+  inline_forward: 'Forward',
+  popout_reply: 'Reply',
+  popout_forward: 'Forward',
+};
+
+function relativeTime(at: number): string {
+  const secs = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (secs < 60) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
+function renderActivity(entries: RecentActivityEntry[]): void {
+  const section = document.getElementById('activity');
+  const list = document.getElementById('activity-list');
+  if (!section || !list) return;
+  if (!entries.length) {
+    section.setAttribute('hidden', 'true');
+    return;
+  }
+  section.removeAttribute('hidden');
+  list.textContent = '';
+  for (const e of entries) {
+    const li = document.createElement('li');
+    const what = COMPOSE_LABELS[e.composeType] ?? 'Email';
+    const footer = e.footerAdded ? ' · footer added' : '';
+    const label = document.createElement('span');
+    label.textContent = `${what} sent unsigned${footer}`;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = ` — ${relativeTime(e.at)}`;
+    li.appendChild(label);
+    li.appendChild(meta);
+    list.appendChild(li);
+  }
+}
+
 async function init(): Promise<void> {
   const manifest = chrome.runtime.getManifest();
   setText('version', manifest.version ?? '0.0.0');
@@ -106,6 +157,9 @@ async function init(): Promise<void> {
 
   const status = await sendMessage({ type: 'GET_AUTH_STATUS' });
   applyStatus(status);
+
+  const recent = await sendMessage({ type: 'GET_RECENT_ACTIVITY' });
+  renderActivity(recent.activity ?? []);
 }
 
 if (document.readyState === 'loading') {
