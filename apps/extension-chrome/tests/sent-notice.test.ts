@@ -17,6 +17,10 @@ describe('showUnsignedSentNotice', () => {
     // Fixed overlay, not inside any compose.
     expect(el.style.position).toBe('fixed');
     expect(el.parentElement).toBe(document.body);
+    // Stacked ABOVE Gmail's own bottom-left snackbar so Undo stays clickable,
+    // and non-interactive regardless (PFL-190 follow-up #1).
+    expect(parseInt(el.style.bottom, 10)).toBeGreaterThanOrEqual(72);
+    expect(el.style.pointerEvents).toBe('none');
   });
 
   it('removes the notice when its timer fires', () => {

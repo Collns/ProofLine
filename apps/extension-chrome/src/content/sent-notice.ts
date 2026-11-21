@@ -42,8 +42,11 @@ export function showUnsignedSentNotice(opts: SentNoticeOptions = {}): HTMLElemen
   notice.setAttribute('role', 'status');
   notice.setAttribute('aria-live', 'polite');
   notice.textContent = message;
+  // Gmail's own "Message sent · Undo · View message" snackbar sits bottom-left
+  // (~bottom:24px, ~48px tall). Stack ABOVE it so Undo stays visible and
+  // clickable; pointer-events:none is belt-and-braces in case of any overlap.
   notice.style.cssText = [
-    'position:fixed', 'left:24px', 'bottom:24px', 'z-index:2147483647',
+    'position:fixed', 'left:24px', 'bottom:88px', 'z-index:2147483647',
     'max-width:320px', 'padding:12px 16px', 'border-radius:8px',
     'background:#202124', 'color:#FFFFFF',
     'font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
