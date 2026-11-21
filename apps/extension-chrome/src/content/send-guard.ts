@@ -298,6 +298,18 @@ export function isGmailSendButton(el: Element | null): boolean {
   return /^send\b/i.test(label);
 }
 
+/**
+ * Programmatically clicks Gmail's own Send button inside a compose. Used by
+ * the warn-mode one-click confirm (PFL-190 #2): the synthetic click re-enters
+ * the capture-phase guard, which allows it (the override is armed) and then
+ * lets Gmail's handler send. No-op if the Send button can't be found.
+ */
+function triggerGmailSend(compose: Element): void {
+  const btn = Array.from(compose.querySelectorAll<HTMLElement>('[role="button"]'))
+    .find((b) => isGmailSendButton(b));
+  btn?.click();
+}
+
 function composeFor(target: Element, deps: SendGuardDeps): Element | null {
   // Primary: climb to the instrumented container. Works for dialogs AND
   // inline reply/forward boxes, independent of Gmail's DOM differences.
@@ -356,7 +368,9 @@ function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps): v
   alert.setAttribute('role', 'alert');
   alert.style.cssText = [
     'display:flex', 'gap:8px', 'align-items:center', 'flex-wrap:wrap',
-    'margin:6px 0', 'padding:8px 10px', 'border-radius:6px',
+    // Extra right padding + wrapping keeps the buttons clear of Grammarly's
+    // floating icon in inline replies (PFL-190 follow-up #3).
+    'margin:6px 0', 'padding:8px 36px 8px 10px', 'border-radius:6px',
     'background:#FDECEA', 'color:#B3261E', 'font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
   ].join(';');
 
@@ -393,8 +407,18 @@ function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps): v
       compose.setAttribute(SEND_UNSIGNED_ATTR, 'true');
       warn('content', 'user chose to send unsigned', getSignState(compose));
       deps.onSendUnsigned?.(compose);
-      text.textContent = 'Click Send again to send this email without a ProofLine signature.';
-      unsigned.remove();
+      if (unsignedPolicy.mode === 'warn') {
+        // PFL-190 #2: warn is a ONE-CLICK confirm — send immediately. The
+        // programmatic Send click flows back through the guard, which now
+        // allows it (override armed), appends the footer, fires onUnsignedSend
+        // (notice + audit), then Gmail's own handler sends.
+        clearSendAlert(compose);
+        triggerGmailSend(compose);
+      } else {
+        // block override keeps the explicit two-step confirmation.
+        text.textContent = 'Click Send again to send this email without a ProofLine signature.';
+        unsigned.remove();
+      }
     });
     alert.appendChild(unsigned);
   }

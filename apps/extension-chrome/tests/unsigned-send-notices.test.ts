@@ -83,11 +83,12 @@ afterEach(() => {
 function sendUnsigned(compose: Element, policy: EffectiveUnsignedPolicy): void {
   setUnsignedPolicy(policy);
   sendButton(compose).click();
-  if (policy.mode !== 'allow') {
-    // block/warn: first click is blocked with an alert — choose the override.
-    overrideButton(compose)?.click();
-    sendButton(compose).click();
-  }
+  if (policy.mode === 'allow') return;
+  // block/warn: the first click is blocked with an alert — choose the override.
+  // warn is a one-click confirm (the override click sends); block needs a
+  // second Send click.
+  overrideButton(compose)?.click();
+  if (policy.mode === 'block') sendButton(compose).click();
 }
 
 describe('onUnsignedSend fires for every unsigned path × compose surface', () => {
@@ -141,6 +142,18 @@ describe('recipient footer policy + placement', () => {
     expect(compose.querySelectorAll(FOOTER)).toHaveLength(1);
     expect(onUnsignedSend).toHaveBeenCalledTimes(2);
     expect(onUnsignedSend.mock.calls[1]![1]).toMatchObject({ footerAdded: false });
+  });
+});
+
+describe('warn mode is a one-click confirm (PFL-190 #2)', () => {
+  it('sends on the single "Send without signing" click — no second Send needed', () => {
+    const compose = mount(dialogHtml('New Message'));
+    setUnsignedPolicy({ mode: 'warn', allowOverride: true });
+    sendButton(compose).click();               // blocked → alert with the confirm
+    overrideButton(compose)!.click();           // one click → sends
+    expect(onUnsignedSend).toHaveBeenCalledTimes(1);
+    expect(onUnsignedSend.mock.calls[0]![1]).toMatchObject({ overrode: true, footerAdded: true });
+    expect(compose.querySelectorAll(FOOTER)).toHaveLength(1);
   });
 });
 
