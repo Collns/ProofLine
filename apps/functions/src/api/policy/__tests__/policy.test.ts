@@ -108,6 +108,21 @@ describe("POST /v1/extension/unsigned-override", () => {
     const events = Object.values(col("audit_events"));
     expect(events[0]).toMatchObject({ footerAdded: false });
   });
+
+  it("records the stable compose id, and the Gmail draft id when present", async () => {
+    await request(extApp(makeUnsignedOverrideHandler))
+      .post("/x").send({ composeType: "new_compose", policyMode: "block", composeId: "pfl-c1", draftId: "r-123" });
+    const events = Object.values(col("audit_events"));
+    expect(events[0]).toMatchObject({ composeId: "pfl-c1", draftId: "r-123" });
+  });
+
+  it("omits draftId when Gmail has no draft id (inline reply/forward)", async () => {
+    await request(extApp(makeUnsignedOverrideHandler))
+      .post("/x").send({ composeType: "inline_reply", policyMode: "block", composeId: "pfl-c2" });
+    const event = Object.values(col("audit_events"))[0]!;
+    expect(event).toMatchObject({ composeId: "pfl-c2" });
+    expect(event).not.toHaveProperty("draftId");
+  });
 });
 
 describe("POST /v1/admin/update-unsigned-policy", () => {

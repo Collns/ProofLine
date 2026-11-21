@@ -199,6 +199,10 @@ export async function postUnsignedOverrideAudit(input: {
   policyMode: string;
   /** PFL-190 — whether the recipient "sent unsigned" footer was added. */
   footerAdded: boolean;
+  /** Our always-present stable compose id (data-proofline-compose-id). */
+  composeId: string;
+  /** Gmail's draft id when present (often absent in inline reply/forward). */
+  draftId?: string;
 }): Promise<void> {
   await postJson("/v1/extension/unsigned-override", input);
 }

@@ -21,6 +21,10 @@ const BodySchema = z.object({
   policyMode:       z.string().max(40).optional(),
   // PFL-190 — whether the recipient "sent unsigned" footer was added to this send.
   footerAdded:      z.boolean().optional(),
+  // Stable compose reference: our always-present id, plus Gmail's draft id when
+  // available (often absent in inline reply/forward).
+  composeId:        z.string().max(200).optional(),
+  draftId:          z.string().max(200).optional(),
 });
 
 export function makeUnsignedOverrideHandler(deps: { now?: () => number } = {}) {
@@ -48,6 +52,8 @@ export function makeUnsignedOverrideHandler(deps: { now?: () => number } = {}) {
       composeType:      parsed.data.composeType ?? "unknown",
       policyAtTime:     parsed.data.policyMode ?? "unknown",
       footerAdded:      parsed.data.footerAdded ?? false,
+      composeId:        parsed.data.composeId ?? "",
+      ...(parsed.data.draftId ? { draftId: parsed.data.draftId } : {}),
       createdAt:        ts,
     });
     res.status(200).json({ ok: true });
