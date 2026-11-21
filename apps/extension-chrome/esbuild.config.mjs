@@ -30,6 +30,10 @@ await Promise.all([
 // SW can reach them without a CORS preflight, and let the sign popup connect.
 // A normal `pnpm build` (no env vars) ships the manifest unchanged.
 const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
+// PFL-190 #7: stamp the real version from package.json so the popup shows it
+// (the checked-in manifest keeps a 0.0.0 placeholder). Single source of truth.
+const pkg = JSON.parse(await readFile('package.json', 'utf8'));
+if (pkg.version) manifest.version = pkg.version;
 const asHostGlob = (value) => {
   try { return `${new URL(value).origin}/*`; } catch { return null; }
 };

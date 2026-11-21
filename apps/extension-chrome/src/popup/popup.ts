@@ -5,6 +5,8 @@ interface RecentActivityEntry {
   footerAdded: boolean;
   overrode: boolean;
   at: number;
+  subject?: string;
+  recipientDomain?: string;
 }
 
 interface AuthStatusResponse {
@@ -133,15 +135,28 @@ function renderActivity(entries: RecentActivityEntry[]): void {
     const li = document.createElement('li');
     const what = COMPOSE_LABELS[e.composeType] ?? 'Email';
     const footer = e.footerAdded ? ' · footer added' : '';
-    const label = document.createElement('span');
-    label.textContent = `${what} sent unsigned${footer}`;
+
+    // Line 1: which email — subject (truncated) + recipient domain, so an admin
+    // can identify it. Falls back to the compose type when the subject is empty.
+    const subject = (e.subject ?? '').trim();
+    const toDomain = (e.recipientDomain ?? '').trim();
+    const descr = document.createElement('span');
+    const title = subject ? truncate(subject, 48) : what;
+    descr.textContent = toDomain ? `${title} → ${toDomain}` : title;
+
+    // Line 2: the metadata.
     const meta = document.createElement('span');
     meta.className = 'meta';
-    meta.textContent = ` — ${relativeTime(e.at)}`;
-    li.appendChild(label);
+    meta.textContent = ` — ${what} sent unsigned${footer} · ${relativeTime(e.at)}`;
+
+    li.appendChild(descr);
     li.appendChild(meta);
     list.appendChild(li);
   }
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
 async function init(): Promise<void> {
