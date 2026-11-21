@@ -9,8 +9,26 @@ import {
 // everything here is unit-testable under jsdom by passing a Document or
 // DocumentFragment in.
 
+/**
+ * PFL-190 #2: a `div[role="dialog"]` is only a real compose if it holds BOTH a
+ * Message Body editable AND a Send button. Gmail's "Schedule send" dialog (and
+ * other transient dialogs) are also `role="dialog"` but have neither — without
+ * this check the policy chip / toolbar injected into the Schedule send dialog.
+ */
+function isComposeRoot(el: Element): boolean {
+  const hasBody = el.querySelector(INLINE_COMPOSE_BODY_SELECTOR) !== null;
+  if (!hasBody) return false;
+  const hasSend =
+    el.querySelector('tr.btC') !== null ||
+    Array.from(el.querySelectorAll('[role="button"]')).some((b) => {
+      const label = (b.getAttribute('data-tooltip') ?? b.getAttribute('aria-label') ?? '').trim();
+      return /^send\b/i.test(label);
+    });
+  return hasSend;
+}
+
 export function findComposeDialogs(root: ParentNode): Element[] {
-  return Array.from(root.querySelectorAll(COMPOSE_DIALOG_SELECTOR));
+  return Array.from(root.querySelectorAll(COMPOSE_DIALOG_SELECTOR)).filter(isComposeRoot);
 }
 
 /**

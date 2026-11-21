@@ -6,11 +6,16 @@ import {
   findToolbarWithSelector,
 } from '../src/content/gmail-detector.js';
 
+// A realistic compose dialog: a Message Body editable + a Send button (both
+// required by isComposeRoot, PFL-190 #2) plus whatever the test adds.
 function makeCompose(label: string, innerHtml: string): HTMLElement {
   const wrap = document.createElement('div');
   wrap.setAttribute('role', 'dialog');
   wrap.setAttribute('aria-label', label);
-  wrap.innerHTML = innerHtml;
+  wrap.innerHTML =
+    '<div role="textbox" aria-label="Message Body" contenteditable="true"></div>' +
+    '<div role="button" data-tooltip="Send ‪(Ctrl-Enter)‬">Send</div>' +
+    innerHtml;
   return wrap;
 }
 
@@ -28,6 +33,25 @@ describe('findComposeDialogs', () => {
 
   it('returns empty when no dialog elements exist at all', () => {
     document.body.innerHTML = '<div>just some content, no dialog role</div>';
+    expect(findComposeDialogs(document)).toHaveLength(0);
+  });
+
+  it('ignores a role="dialog" that is not a compose (PFL-190 #2: Schedule send dialog)', () => {
+    // Gmail's "Schedule send" dialog is role="dialog" but has no Message Body
+    // editable and no Send button — the policy chip must not inject into it.
+    document.body.innerHTML =
+      '<div role="dialog" aria-label="Schedule send">' +
+      '<button>Tomorrow morning</button>' +
+      '<button>Select date and time</button>' +
+      '</div>';
+    expect(findComposeDialogs(document)).toHaveLength(0);
+  });
+
+  it('ignores a dialog with a body but no Send button', () => {
+    const wrap = document.createElement('div');
+    wrap.setAttribute('role', 'dialog');
+    wrap.innerHTML = '<div role="textbox" aria-label="Message Body" contenteditable="true"></div>';
+    document.body.appendChild(wrap);
     expect(findComposeDialogs(document)).toHaveLength(0);
   });
 
