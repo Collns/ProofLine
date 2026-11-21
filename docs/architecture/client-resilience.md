@@ -126,6 +126,8 @@ Mail-flow (transport) rules can test headers and **reject** ([conditions](https:
 ### Why D matters
 It's the only layer that holds when a Gmail update silently disables the content script, when a user disables the extension, or when Outlook `SoftBlock` fails open during an outage. It doesn't replace the client (which gives the pre-send UX, signing, and the recipient footer) — it's the backstop.
 
+**The client-side guard cannot cover every Gmail send path.** Gmail exposes several ways to send (the Send button, Cmd/Ctrl+Enter, Tab-to-Send, the "Schedule send" menu, "Send & archive", pop-out/full-screen/inline composes, and mobile web), and each is a DOM surface that can change or that our selectors may not reach — mobile web, for instance, is not covered by the desktop content script at all. PFL-190 found and closed a real example: "Schedule send" scheduled unsigned mail because the guard only watched the main Send button. We now funnel every known path through one guard, but **server-side enforcement — a Workspace content-compliance / Exchange mail-flow rule that rejects outbound mail lacking the ProofLine header — is the only backstop that holds regardless of which send surface Gmail adds next, and is the recommended control for org deployments.**
+
 ---
 
 ## 6. Recommended order
