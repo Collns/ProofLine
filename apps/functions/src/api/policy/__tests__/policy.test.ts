@@ -64,17 +64,23 @@ function adminPost(callerUid: string, body: Record<string, unknown>) {
 beforeEach(() => { for (const k of Object.keys(store)) delete store[k]; });
 
 describe("GET /v1/extension/policy", () => {
-  it("defaults to block + override for a company with no policy set", async () => {
+  it("defaults to block + override + footer-on for a company with no policy set", async () => {
     col("companies")[COMPANY] = { domain: "co-1.com" };
     const res = await request(extApp(makeGetPolicyHandler)).get("/x");
     expect(res.status).toBe(200);
-    expect(res.body.policy).toEqual({ mode: "block", allowUnsignedOverride: true });
+    expect(res.body.policy).toEqual({ mode: "block", allowUnsignedOverride: true, appendUnsignedFooter: true });
   });
 
-  it("returns the stored policy", async () => {
+  it("returns the stored policy and defaults the footer to on when unset", async () => {
     col("companies")[COMPANY] = { unsignedEmailPolicy: { mode: "warn", allowUnsignedOverride: false } };
     const res = await request(extApp(makeGetPolicyHandler)).get("/x");
-    expect(res.body.policy).toEqual({ mode: "warn", allowUnsignedOverride: false });
+    expect(res.body.policy).toEqual({ mode: "warn", allowUnsignedOverride: false, appendUnsignedFooter: true });
+  });
+
+  it("returns the footer setting when the company turned it off", async () => {
+    col("companies")[COMPANY] = { unsignedEmailPolicy: { mode: "allow", allowUnsignedOverride: true, appendUnsignedFooter: false } };
+    const res = await request(extApp(makeGetPolicyHandler)).get("/x");
+    expect(res.body.policy.appendUnsignedFooter).toBe(false);
   });
 
   it("defaults to block even when the company doc is missing", async () => {
@@ -84,27 +90,46 @@ describe("GET /v1/extension/policy", () => {
 });
 
 describe("POST /v1/extension/unsigned-override", () => {
-  it("writes an audit event with actor + company from the token", async () => {
+  it("writes an audit event with actor + company from the token, recording footerAdded", async () => {
     const res = await request(extApp(makeUnsignedOverrideHandler))
-      .post("/x").send({ recipientSetHash: "abc", composeType: "inline_reply", policyMode: "block" });
+      .post("/x").send({ recipientSetHash: "abc", composeType: "inline_reply", policyMode: "block", footerAdded: true });
     expect(res.status).toBe(200);
     const events = Object.values(col("audit_events"));
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       type: "UNSIGNED_SEND_OVERRIDE", actorUserId: USER, companyId: COMPANY,
-      recipientSetHash: "abc", composeType: "inline_reply", policyAtTime: "block",
+      recipientSetHash: "abc", composeType: "inline_reply", policyAtTime: "block", footerAdded: true,
     });
+  });
+
+  it("defaults footerAdded to false when the field is absent", async () => {
+    await request(extApp(makeUnsignedOverrideHandler))
+      .post("/x").send({ recipientSetHash: "abc", composeType: "new_compose", policyMode: "warn" });
+    const events = Object.values(col("audit_events"));
+    expect(events[0]).toMatchObject({ footerAdded: false });
   });
 });
 
 describe("POST /v1/admin/update-unsigned-policy", () => {
-  it("lets an owner set the policy and audits the change", async () => {
+  it("lets an owner set the policy (incl. the footer) and audits the change", async () => {
     col("users")[USER] = { companyId: COMPANY, role: "owner", status: "active" };
-    const res = await adminPost(USER, { mode: "warn", allowUnsignedOverride: false });
+    const res = await adminPost(USER, { mode: "warn", allowUnsignedOverride: false, appendUnsignedFooter: false });
     expect(res.status).toBe(200);
-    expect(col("companies")[COMPANY]).toMatchObject({ unsignedEmailPolicy: { mode: "warn", allowUnsignedOverride: false } });
+    expect(res.body.policy).toEqual({ mode: "warn", allowUnsignedOverride: false, appendUnsignedFooter: false });
+    expect(col("companies")[COMPANY]).toMatchObject({
+      unsignedEmailPolicy: { mode: "warn", allowUnsignedOverride: false, appendUnsignedFooter: false },
+    });
     const events = Object.values(col("audit_events"));
-    expect(events[0]).toMatchObject({ type: "UNSIGNED_POLICY_UPDATED", actorUserId: USER, companyId: COMPANY, mode: "warn" });
+    expect(events[0]).toMatchObject({
+      type: "UNSIGNED_POLICY_UPDATED", actorUserId: USER, companyId: COMPANY, mode: "warn", appendUnsignedFooter: false,
+    });
+  });
+
+  it("defaults the footer to on when the field is omitted", async () => {
+    col("users")[USER] = { companyId: COMPANY, role: "owner", status: "active" };
+    const res = await adminPost(USER, { mode: "allow", allowUnsignedOverride: true });
+    expect(res.status).toBe(200);
+    expect(res.body.policy.appendUnsignedFooter).toBe(true);
   });
 
   it("lets a manager set the policy", async () => {

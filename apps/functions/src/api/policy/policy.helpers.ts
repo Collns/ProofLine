@@ -27,5 +27,9 @@ export function readUnsignedPolicy(companyData: Record<string, unknown> | null |
     typeof raw?.allowUnsignedOverride === "boolean"
       ? raw.allowUnsignedOverride
       : DEFAULT_UNSIGNED_EMAIL_POLICY.allowUnsignedOverride;
-  return { mode, allowUnsignedOverride };
+  const appendUnsignedFooter =
+    typeof (raw as { appendUnsignedFooter?: unknown } | null)?.appendUnsignedFooter === "boolean"
+      ? (raw as { appendUnsignedFooter: boolean }).appendUnsignedFooter
+      : DEFAULT_UNSIGNED_EMAIL_POLICY.appendUnsignedFooter;
+  return { mode, allowUnsignedOverride, appendUnsignedFooter };
 }

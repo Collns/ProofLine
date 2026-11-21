@@ -214,12 +214,19 @@ export interface UnsignedEmailPolicy {
   mode: UnsignedEmailPolicyMode;
   /** When false, no "Send unsigned" override exists in block mode. */
   allowUnsignedOverride: boolean;
+  /**
+   * PFL-190 — when true, a small inline-styled footer ("This email was sent
+   * without a ProofLine signature.") is appended to unsigned outbound email at
+   * send time. Signed emails never get it. Default ON.
+   */
+  appendUnsignedFooter: boolean;
 }
 
 /** LOCKED by default: every company (including existing ones) starts at block. */
 export const DEFAULT_UNSIGNED_EMAIL_POLICY: UnsignedEmailPolicy = {
   mode: 'block',
   allowUnsignedOverride: true,
+  appendUnsignedFooter: true,
 };
 
 export interface CounterpartyRecord {

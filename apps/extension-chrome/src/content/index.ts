@@ -10,6 +10,7 @@ import { watchCosign, COSIGN_ENVELOPE_ATTR, type CosignStatusReply } from './cos
 import { composeType } from './compose-type.js';
 import { canonicalizeAndHash } from './canonical-bridge.js';
 import { buildSignPayload } from './sign-payload.js';
+import { showUnsignedSentNotice } from './sent-notice.js';
 
 // Content-script entry. Runs once per Gmail tab. We use a single
 // MutationObserver on document.body — cheaper than polling and catches
@@ -31,7 +32,7 @@ let lastPolicyFetch = 0;
 
 /** Fail closed: block, no override. */
 function failClosedPolicy(): void {
-  setUnsignedPolicy({ mode: 'block', allowOverride: false, failed: true });
+  setUnsignedPolicy({ mode: 'block', allowOverride: false, failed: true, appendFooter: true });
 }
 
 function refreshPolicy(force = false): void {
@@ -41,12 +42,18 @@ function refreshPolicy(force = false): void {
   try {
     chrome.runtime.sendMessage({ type: 'GET_POLICY' }, (response) => {
       if (chrome.runtime.lastError) { failClosedPolicy(); return; }
-      const r = response as { policyFailed?: boolean; policy?: { mode?: string; allowUnsignedOverride?: boolean } } | undefined;
+      const r = response as { policyFailed?: boolean; policy?: { mode?: string; allowUnsignedOverride?: boolean; appendUnsignedFooter?: boolean } } | undefined;
       if (!r || r.policyFailed || !r.policy || !r.policy.mode) {
         failClosedPolicy();
       } else {
         const mode = (r.policy.mode === 'warn' || r.policy.mode === 'allow') ? r.policy.mode : 'block';
-        setUnsignedPolicy({ mode, allowOverride: r.policy.allowUnsignedOverride === true, failed: false });
+        setUnsignedPolicy({
+          mode,
+          allowOverride: r.policy.allowUnsignedOverride === true,
+          // PFL-190: footer defaults ON unless the company explicitly turned it off.
+          appendFooter: r.policy.appendUnsignedFooter !== false,
+          failed: false,
+        });
       }
       scheduleSweep(); // reflect the (possibly changed) policy in open composes
     });
@@ -105,27 +112,35 @@ function scheduleSweep(): void {
   setTimeout(() => { sweepScheduled = false; sweep(); }, 0);
 }
 
-/** PFL-188: record a "send unsigned" override for the admin audit log. */
-function auditUnsignedOverride(compose: Element): void {
+/**
+ * PFL-188/190: report an unsigned send to the background — it records recent
+ * activity (shown in the popup) and, for an explicit override, audits it
+ * (user, company, recipient-set hash, compose type, policy, footerAdded).
+ * Best-effort; never blocks the send.
+ */
+function reportUnsignedSend(compose: Element, info: { overrode: boolean; footerAdded: boolean }): void {
   const policy = getUnsignedPolicy();
   const type = composeType(compose);
-  const done = (recipientSetHash: string) => {
+  const send = (recipientSetHash: string) => {
     try {
       chrome.runtime.sendMessage({
-        type: 'UNSIGNED_OVERRIDE_AUDIT',
-        recipientSetHash,
+        type: 'UNSIGNED_SENT',
+        overrode: info.overrode,
+        footerAdded: info.footerAdded,
         composeType: type,
         policyMode: policy.failed ? 'block_failclosed' : policy.mode,
+        recipientSetHash,
       });
     } catch { /* best-effort */ }
   };
-  // Best-effort recipient-set hash from the current recipients.
+  // Best-effort recipient-set hash from the current recipients. The footer we
+  // just appended lives in the body, not the recipients, so the hash is stable.
   const built = buildSignPayload(compose);
-  if (!built.ok) { done(''); return; }
+  if (!built.ok) { send(''); return; }
   const p = built.payload;
   canonicalizeAndHash({ to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [] })
-    .then((r) => done(r.payloadHashHex))
-    .catch(() => done(''));
+    .then((r) => send(r.payloadHashHex))
+    .catch(() => send(''));
 }
 
 function findComposeByComposeId(composeId: string): Element | null {
@@ -245,7 +260,12 @@ function start(): void {
     findComposes: findComposeContainers,
     onSendUnsigned: (compose) => {
       warn('content', 'send unsigned chosen', readComposeId(compose));
-      auditUnsignedOverride(compose); // PFL-188: audit the override
+    },
+    onUnsignedSend: (compose, info) => {
+      // PFL-190: sender-facing notice near Gmail's "Message sent" toast.
+      showUnsignedSentNotice();
+      // PFL-188/190: record the send (recent activity + override audit).
+      reportUnsignedSend(compose, info);
     },
   });
 

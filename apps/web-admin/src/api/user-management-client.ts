@@ -153,16 +153,20 @@ export type UnsignedPolicyMode = 'block' | 'warn' | 'allow';
 export interface UpdateUnsignedPolicyResponse {
   ok: true;
   companyId: string;
-  policy: { mode: UnsignedPolicyMode; allowUnsignedOverride: boolean };
+  policy: { mode: UnsignedPolicyMode; allowUnsignedOverride: boolean; appendUnsignedFooter: boolean };
 }
 
 /** Owner/manager only (enforced server-side). */
 export function updateUnsignedPolicy(
   mode: UnsignedPolicyMode,
   allowUnsignedOverride: boolean,
+  appendUnsignedFooter: boolean,
 ): Promise<UpdateUnsignedPolicyResponse> {
-  return adminPost<{ mode: UnsignedPolicyMode; allowUnsignedOverride: boolean }, UpdateUnsignedPolicyResponse>(
+  return adminPost<
+    { mode: UnsignedPolicyMode; allowUnsignedOverride: boolean; appendUnsignedFooter: boolean },
+    UpdateUnsignedPolicyResponse
+  >(
     '/v1/admin/update-unsigned-policy',
-    { mode, allowUnsignedOverride },
+    { mode, allowUnsignedOverride, appendUnsignedFooter },
   );
 }

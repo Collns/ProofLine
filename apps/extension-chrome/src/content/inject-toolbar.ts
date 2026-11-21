@@ -14,6 +14,7 @@ import { buildSignPayload } from './sign-payload.js';
 import { mountWireFields } from './wire-fields.js';
 import { canonicalizeAndHash } from './canonical-bridge.js';
 import { clearComposeGuardState, beginSigning, endSigning, setSignState, clearSendAlert, getUnsignedPolicy } from './send-guard.js';
+import { removeUnsignedFooter } from './unsigned-footer.js';
 
 const BUTTON_LABEL = 'Sign with ProofLine';
 const FALLBACK_TIMEOUT_MS = 3000;
@@ -73,6 +74,10 @@ async function onClick(compose: Element): Promise<void> {
   // Fresh attempt: drop any stale block/fail alert from a prior click so a
   // validation failure can't leave an old "still signing" message on screen.
   clearSendAlert(compose);
+  // PFL-190: strip any recipient "sent unsigned" footer left by an earlier
+  // unsigned-send attempt, so it can never be folded into this signature (the
+  // body is read via innerText, which would otherwise include it).
+  removeUnsignedFooter(compose);
 
   // Keep SIGN_BUTTON_CLICKED for backwards compatibility with PFL-042.
   // PFL-044 will collapse this once the live ceremony lands.

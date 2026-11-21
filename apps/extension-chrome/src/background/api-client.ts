@@ -197,6 +197,8 @@ export async function postUnsignedOverrideAudit(input: {
   recipientSetHash: string;
   composeType: string;
   policyMode: string;
+  /** PFL-190 — whether the recipient "sent unsigned" footer was added. */
+  footerAdded: boolean;
 }): Promise<void> {
   await postJson("/v1/extension/unsigned-override", input);
 }

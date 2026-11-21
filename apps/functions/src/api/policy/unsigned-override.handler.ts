@@ -19,6 +19,8 @@ const BodySchema = z.object({
   recipientSetHash: z.string().max(200).optional(),
   composeType:      z.string().max(40).optional(),
   policyMode:       z.string().max(40).optional(),
+  // PFL-190 — whether the recipient "sent unsigned" footer was added to this send.
+  footerAdded:      z.boolean().optional(),
 });
 
 export function makeUnsignedOverrideHandler(deps: { now?: () => number } = {}) {
@@ -45,6 +47,7 @@ export function makeUnsignedOverrideHandler(deps: { now?: () => number } = {}) {
       recipientSetHash: parsed.data.recipientSetHash ?? "",
       composeType:      parsed.data.composeType ?? "unknown",
       policyAtTime:     parsed.data.policyMode ?? "unknown",
+      footerAdded:      parsed.data.footerAdded ?? false,
       createdAt:        ts,
     });
     res.status(200).json({ ok: true });

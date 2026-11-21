@@ -36,6 +36,7 @@ import {
   resolveInstrumentedCompose,
 } from './shared.js';
 import { contentFingerprint } from './compose-content.js';
+import { insertUnsignedFooter } from './unsigned-footer.js';
 
 export type SignState = 'pending' | 'failed' | 'cosign_pending' | 'signed';
 
@@ -48,8 +49,15 @@ const WIRE_CHECKBOX_SELECTOR    = '[data-proofline-wire-checkbox]';
 export interface SendGuardDeps {
   /** Returns the compose containers currently on the page. */
   findComposes: (root: ParentNode) => Element[];
-  /** Called when the user explicitly sends unsigned (for audit logging). */
+  /** Called when the user explicitly chooses "Send unsigned" in the alert. */
   onSendUnsigned?: (compose: Element) => void;
+  /**
+   * PFL-190 — called when an unsigned send actually proceeds: allow mode, the
+   * warn-mode confirm, or a block-mode override. `overrode` is true for the
+   * confirm/override paths (false for plain allow-mode); `footerAdded` says
+   * whether the recipient "sent unsigned" footer was appended to this send.
+   */
+  onUnsignedSend?: (compose: Element, info: { overrode: boolean; footerAdded: boolean }) => void;
 }
 
 // ─── PFL-188: company unsigned-email policy ───────────────────────────────────
@@ -66,9 +74,16 @@ export interface EffectiveUnsignedPolicy {
   allowOverride: boolean;
   /** True when the policy couldn't be fetched and we're failing closed. */
   failed?: boolean;
+  /** PFL-190 — append the recipient "sent unsigned" footer. Default true. */
+  appendFooter?: boolean;
 }
 
 let unsignedPolicy: EffectiveUnsignedPolicy = { mode: 'allow', allowOverride: true };
+
+/** PFL-190 — the footer is on unless the policy explicitly turns it off. */
+function shouldAppendFooter(): boolean {
+  return unsignedPolicy.appendFooter !== false;
+}
 
 export function setUnsignedPolicy(policy: EffectiveUnsignedPolicy): void {
   unsignedPolicy = policy;
@@ -398,10 +413,26 @@ function block(event: Event): void {
 
 /** A send is passing — consume any one-time unsigned choice and, for a
  *  message that was signed, clear the guard state so Gmail may recycle the
- *  container for a fresh draft without it looking pre-signed. */
-function onSendAllowed(compose: Element): void {
+ *  container for a fresh draft without it looking pre-signed. For an unsigned
+ *  send (allow mode, warn confirm, or block override) PFL-190 appends the
+ *  recipient footer (if the policy enables it) and notifies the caller so it
+ *  can show the sender notice and audit the send. */
+function onSendAllowed(compose: Element, deps: SendGuardDeps): void {
+  const overrode = compose.getAttribute(SEND_UNSIGNED_ATTR) === 'true';
+  const wasSigned = getSignState(compose) === 'signed';
   compose.removeAttribute(SEND_UNSIGNED_ATTR);
-  if (getSignState(compose) === 'signed') clearComposeGuardState(compose);
+  if (wasSigned) {
+    // A valid signed send: clear guard state so Gmail may recycle the
+    // container. Signed emails never get the unsigned footer or notice.
+    clearComposeGuardState(compose);
+    return;
+  }
+  // Insert the footer BEFORE Gmail serializes the body. onSendAllowed runs in
+  // the capture phase, ahead of Gmail's own Send handler, so the footer is in
+  // place when Gmail reads the body. insertUnsignedFooter is idempotent, so a
+  // resend never duplicates it.
+  const footerAdded = shouldAppendFooter() ? insertUnsignedFooter(compose) : false;
+  deps.onUnsignedSend?.(compose, { overrode, footerAdded });
 }
 
 /**
@@ -422,7 +453,7 @@ export function installSendGuard(doc: Document, deps: SendGuardDeps): () => void
     if (!compose) return;
     const reason = sendBlockReason(compose);
     if (!reason) {
-      if (event.type === 'click') onSendAllowed(compose);
+      if (event.type === 'click') onSendAllowed(compose, deps);
       return;
     }
     block(event);
@@ -437,7 +468,7 @@ export function installSendGuard(doc: Document, deps: SendGuardDeps): () => void
     if (!compose) return;
     const reason = sendBlockReason(compose);
     if (!reason) {
-      onSendAllowed(compose);
+      onSendAllowed(compose, deps);
       return;
     }
     block(event);

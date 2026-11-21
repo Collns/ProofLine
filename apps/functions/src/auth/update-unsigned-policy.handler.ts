@@ -25,6 +25,9 @@ const BodySchema = z.object({
     errorMap: () => ({ message: "mode must be block, warn or allow" }),
   }),
   allowUnsignedOverride: z.boolean(),
+  // PFL-190 — recipient footer on unsigned email. Optional for older callers;
+  // defaults ON to match DEFAULT_UNSIGNED_EMAIL_POLICY.
+  appendUnsignedFooter: z.boolean().optional(),
 });
 
 const ADMIN_ROLES = new Set(["owner", "manager"]);
@@ -32,7 +35,7 @@ const ADMIN_ROLES = new Set(["owner", "manager"]);
 export interface UpdateUnsignedPolicyResponse {
   ok: true;
   companyId: string;
-  policy: { mode: "block" | "warn" | "allow"; allowUnsignedOverride: boolean };
+  policy: { mode: "block" | "warn" | "allow"; allowUnsignedOverride: boolean; appendUnsignedFooter: boolean };
 }
 
 export interface UpdateUnsignedPolicyDeps {
@@ -72,6 +75,7 @@ export function makeUpdateUnsignedPolicyHandler(deps: UpdateUnsignedPolicyDeps =
       return;
     }
     const { mode, allowUnsignedOverride } = parsed.data;
+    const appendUnsignedFooter = parsed.data.appendUnsignedFooter ?? true;
 
     const firestore = getFirestore();
     const callerSnap = await firestore.collection("users").doc(caller.uid).get();
@@ -101,7 +105,7 @@ export function makeUpdateUnsignedPolicyHandler(deps: UpdateUnsignedPolicyDeps =
     }
 
     const ts = now();
-    const policy = { mode, allowUnsignedOverride };
+    const policy = { mode, allowUnsignedOverride, appendUnsignedFooter };
     await firestore.collection("companies").doc(callerDoc.companyId).set(
       { unsignedEmailPolicy: policy, updatedAt: ts },
       { merge: true },
@@ -114,6 +118,7 @@ export function makeUpdateUnsignedPolicyHandler(deps: UpdateUnsignedPolicyDeps =
         companyId:   callerDoc.companyId,
         mode,
         allowUnsignedOverride,
+        appendUnsignedFooter,
         createdAt:   ts,
       });
     } catch (err) {
