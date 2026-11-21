@@ -50,21 +50,32 @@ export function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<{ code: string; detail: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [profile, users] = await Promise.all([fetchCompanyProfile(cid), fetchUsers(cid)]);
-      if (cancelled) return;
-      const policy = profile?.unsignedEmailPolicy;
-      if (policy) {
-        setMode(policy.mode);
-        setAllowOverride(policy.allowUnsignedOverride);
-        setAppendFooter(policy.appendUnsignedFooter !== false);
+      try {
+        const [profile, users] = await Promise.all([fetchCompanyProfile(cid), fetchUsers(cid)]);
+        if (cancelled) return;
+        const policy = profile?.unsignedEmailPolicy;
+        if (!policy) {
+          // PFL-190 #8: fail safe — if we couldn't load the stored policy, do
+          // NOT present an editable default (which a Save would silently push
+          // over the real setting). Make the admin reload first.
+          setLoadError("Couldn't load your company's current signing policy. Reload before changing it.");
+        } else {
+          setMode(policy.mode);
+          setAllowOverride(policy.allowUnsignedOverride);
+          setAppendFooter(policy.appendUnsignedFooter !== false);
+        }
+        const uid = user?.uid ?? '';
+        setCallerRole(users.find((u) => u.userId === uid)?.role ?? 'employee');
+      } catch {
+        if (!cancelled) setLoadError("Couldn't load your company's current signing policy. Reload before changing it.");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      const uid = user?.uid ?? '';
-      setCallerRole(users.find((u) => u.userId === uid)?.role ?? 'employee');
-      setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [cid, user?.uid]);
@@ -91,7 +102,18 @@ export function SettingsPage() {
       description="Control whether people at your company can send email without a ProofLine signature. Wire instructions are always blocked unless signed, regardless of this setting."
     >
       {loading ? (
-        <p className="text-sm text-gray-500">Loading…</p>
+        <p className="text-sm text-gray-500">Loading the current policy…</p>
+      ) : loadError ? (
+        <div role="alert" className="max-w-xl rounded-md border border-[#FCA5A5] bg-[#FEF2F2] p-4 text-sm text-[#B3261E]">
+          <p>{loadError}</p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-3 rounded-md border border-[#B3261E] px-3 py-1.5 text-sm font-medium text-[#B3261E]"
+          >
+            Reload
+          </button>
+        </div>
       ) : !canEdit ? (
         <p className="rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
           Only an owner or manager can change the signing policy. The current policy is{' '}

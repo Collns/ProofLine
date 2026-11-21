@@ -126,6 +126,12 @@ function reportUnsignedSend(compose: Element, info: { overrode: boolean; footerA
   // when available. Together they keep the audit event's draft reference stable.
   const composeId = ensureComposeId(compose);
   const draftId = readComposeId(compose);
+  // PFL-190 #7: carry a truncated subject + the first recipient's domain so the
+  // popup's recent-activity list is identifiable. Domain only — never the full
+  // recipient address.
+  const built = buildSignPayload(compose);
+  const subject = built.ok ? (built.payload.subject ?? '').slice(0, 80) : '';
+  const recipientDomain = built.ok ? firstRecipientDomain(built.payload.to) : '';
   const send = (recipientSetHash: string) => {
     try {
       chrome.runtime.sendMessage({
@@ -136,18 +142,26 @@ function reportUnsignedSend(compose: Element, info: { overrode: boolean; footerA
         policyMode: policy.failed ? 'block_failclosed' : policy.mode,
         recipientSetHash,
         composeId,
+        subject,
+        recipientDomain,
         ...(draftId ? { draftId } : {}),
       });
     } catch { /* best-effort */ }
   };
   // Best-effort recipient-set hash from the current recipients. The footer we
   // just appended lives in the body, not the recipients, so the hash is stable.
-  const built = buildSignPayload(compose);
   if (!built.ok) { send(''); return; }
   const p = built.payload;
   canonicalizeAndHash({ to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [] })
     .then((r) => send(r.payloadHashHex))
     .catch(() => send(''));
+}
+
+/** First recipient's domain (lowercased), or '' — never the full address. */
+function firstRecipientDomain(to: string[] | undefined): string {
+  const first = to?.[0] ?? '';
+  const at = first.lastIndexOf('@');
+  return at >= 0 ? first.slice(at + 1).trim().toLowerCase() : '';
 }
 
 function findComposeByComposeId(composeId: string): Element | null {

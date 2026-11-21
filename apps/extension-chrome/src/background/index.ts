@@ -126,6 +126,11 @@ export interface RecentActivityEntry {
   footerAdded: boolean;
   overrode:    boolean;
   at:          number;
+  // PFL-190 #7: so an admin can tell which email an entry was. Subject is
+  // truncated by the content script; recipientDomain is the first recipient's
+  // domain only (never the full address).
+  subject?:         string;
+  recipientDomain?: string;
 }
 
 const RECENT_ACTIVITY_KEY = "proofline:recentActivity";
@@ -228,7 +233,9 @@ async function routeContentMessage(
       const overrode = msg["overrode"] === true;
       const composeId = typeof msg["composeId"] === "string" ? msg["composeId"] : "";
       const draftId = typeof msg["draftId"] === "string" ? msg["draftId"] : undefined;
-      await recordRecentActivity({ composeType, footerAdded, overrode, at: Date.now() });
+      const subject = typeof msg["subject"] === "string" ? msg["subject"] : "";
+      const recipientDomain = typeof msg["recipientDomain"] === "string" ? msg["recipientDomain"] : "";
+      await recordRecentActivity({ composeType, footerAdded, overrode, at: Date.now(), subject, recipientDomain });
       if (overrode) {
         try {
           await postUnsignedOverrideAudit({ recipientSetHash, composeType, policyMode, footerAdded, composeId, draftId });

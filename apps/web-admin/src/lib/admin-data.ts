@@ -208,6 +208,10 @@ export async function fetchCompanyProfile(cidOverride?: string): Promise<Company
     ein:              body.ein,
     onboardingStatus: body.onboardingStatus,
     kmsKeyName:       body.kmsKeyName,
+    // PFL-190 #8: the server returns the stored unsigned-email policy, but the
+    // mapper used to drop it — so the settings page always fell back to the
+    // block default and could silently overwrite a stored Warn/Allow on save.
+    unsignedEmailPolicy: body.unsignedEmailPolicy,
   };
 }
 
