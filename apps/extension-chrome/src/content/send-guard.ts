@@ -29,7 +29,7 @@
  * not touched.
  */
 
-import { warn } from '../shared/log.js';
+import { log } from '../shared/log.js';
 import {
   INJECTED_MARKER,
   isInsideEditable,
@@ -405,7 +405,9 @@ function showSendAlert(compose: Element, reason: string, deps: SendGuardDeps): v
     unsigned.addEventListener('click', (e) => {
       e.preventDefault();
       compose.setAttribute(SEND_UNSIGNED_ATTR, 'true');
-      warn('content', 'user chose to send unsigned', getSignState(compose));
+      // info level, not warn: a deliberate user choice, not an error — Chrome's
+      // extension Errors page lists console.warn/error (PFL-190 follow-up).
+      log('content', 'user chose to send unsigned', getSignState(compose));
       deps.onSendUnsigned?.(compose);
       if (unsignedPolicy.mode === 'warn') {
         // PFL-190 #2: warn is a ONE-CLICK confirm — send immediately. The

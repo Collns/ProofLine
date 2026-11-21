@@ -226,10 +226,12 @@ async function routeContentMessage(
       const policyMode = typeof msg["policyMode"] === "string" ? msg["policyMode"] : "unknown";
       const footerAdded = msg["footerAdded"] === true;
       const overrode = msg["overrode"] === true;
+      const composeId = typeof msg["composeId"] === "string" ? msg["composeId"] : "";
+      const draftId = typeof msg["draftId"] === "string" ? msg["draftId"] : undefined;
       await recordRecentActivity({ composeType, footerAdded, overrode, at: Date.now() });
       if (overrode) {
         try {
-          await postUnsignedOverrideAudit({ recipientSetHash, composeType, policyMode, footerAdded });
+          await postUnsignedOverrideAudit({ recipientSetHash, composeType, policyMode, footerAdded, composeId, draftId });
         } catch {
           /* best-effort audit */
         }
