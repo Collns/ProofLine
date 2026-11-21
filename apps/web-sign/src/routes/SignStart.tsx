@@ -151,6 +151,15 @@ export function SignStart() {
           freshBiometric:   true,
         });
         if (!signResp.ok) {
+          // PFL-190 #5: tell the extension IMMEDIATELY so the compose banner
+          // shows the specific error, instead of waiting for the user to close
+          // this popup (which previously surfaced only a generic timeout).
+          await deliver({
+            kind: 'error',
+            ceremonyId: params.ceremonyId,
+            code: signResp.error,
+            message: 'Policy denied this signing request.',
+          });
           if (cancelled) return;
           setPhase({ kind: 'finalize-error', code: signResp.error, detail: 'Policy denied this signing request.' });
           return;
@@ -168,13 +177,13 @@ export function SignStart() {
           ...(signResp.screening ? { screening: signResp.screening } : {}),
         });
       } catch (e) {
-        if (cancelled) return;
         const err = e instanceof ApiError ? e : null;
-        setPhase({
-          kind: 'finalize-error',
-          code: err?.code ?? 'NETWORK',
-          detail: err?.message ?? 'Could not reach the signing server.',
-        });
+        const code = err?.code ?? 'NETWORK';
+        const detail = err?.message ?? 'Could not reach the signing server.';
+        // PFL-190 #5: surface it to the compose immediately.
+        await deliver({ kind: 'error', ceremonyId: params.ceremonyId, code, message: detail });
+        if (cancelled) return;
+        setPhase({ kind: 'finalize-error', code, detail });
       }
     })();
     return () => { cancelled = true; };

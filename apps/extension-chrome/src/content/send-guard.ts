@@ -235,6 +235,41 @@ function showSigningFailed(compose: Element, reason: string): void {
   parent.insertBefore(alert, before);
 }
 
+/**
+ * PFL-190 #5: a signing attempt failed with a known reason (e.g. the popup
+ * reported a server error). Cancel the pending state and show the SPECIFIC
+ * message in the compose banner, with a Retry button — instead of leaving the
+ * compose stuck on "Signing…" or showing the generic "didn't hear back".
+ */
+export function failSigningWithMessage(compose: Element, message: string): void {
+  endSigning(compose);
+  setSignState(compose, 'failed');
+  showSigningFailed(compose, message);
+}
+
+/**
+ * PFL-190 #5: turn a sign-failure code/message from the popup into something a
+ * sender can act on. Prefers a known-code message; otherwise uses the server's
+ * own message when it's specific; else names the code.
+ */
+export function friendlySignError(code: string, message?: string): string {
+  switch (code) {
+    case 'USER_CANCELLED':
+      return 'Signing was cancelled.';
+    case 'SENDER_DOMAIN_MISMATCH':
+      return "This account can only sign mail from your company's verified domain.";
+    case 'AUTH_REQUIRED':
+      return 'Connect ProofLine to sign — click the extension icon.';
+    case 'NETWORK':
+      return "Couldn't reach ProofLine to sign. Check your connection and try again.";
+    default: {
+      const generic = new Set(['', 'Server rejected the assertion.', 'Server rejected the signature.']);
+      const m = (message ?? '').trim();
+      return m && !generic.has(m) ? m : `ProofLine couldn't sign this email (${code}).`;
+    }
+  }
+}
+
 function isWire(compose: Element): boolean {
   return compose.querySelector<HTMLInputElement>(WIRE_CHECKBOX_SELECTOR)?.checked === true;
 }

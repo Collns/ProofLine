@@ -428,12 +428,14 @@ export async function resolveSignerDisplayRecord(
   // doc. Look up companies/{companyId} and read legalName + domain there.
   let companyName = "";
   let domain = "";
+  let testCompany = false;
   if (data.companyId) {
     const companySnap = await db.collection("companies").doc(data.companyId).get();
     if (companySnap.exists) {
-      const company = (companySnap.data() ?? {}) as { legalName?: string; domain?: string };
+      const company = (companySnap.data() ?? {}) as { legalName?: string; domain?: string; testCompany?: boolean };
       companyName = company.legalName ?? "";
       domain = company.domain ?? "";
+      testCompany = company.testCompany === true; // PFL-190 6a
     }
   }
 
@@ -444,5 +446,6 @@ export async function resolveSignerDisplayRecord(
     companyName,
     domain,
     signedAt: Date.now(),
+    testCompany,
   };
 }

@@ -5,7 +5,7 @@ import { tryInject, updatePolicyChip } from './inject-toolbar.js';
 import { injectBannerIntoCompose } from './inject-banner.js';
 import { isBackgroundToContentMessage } from '../shared/types.js';
 import { readComposeId, ensureComposeId, COMPOSE_ID_ATTR } from './shared.js';
-import { installSendGuard, setSignState, markSigned, endSigning, setUnsignedPolicy, getUnsignedPolicy, reconcileComposeGuard } from './send-guard.js';
+import { installSendGuard, setSignState, markSigned, endSigning, setUnsignedPolicy, getUnsignedPolicy, reconcileComposeGuard, failSigningWithMessage, friendlySignError } from './send-guard.js';
 import { watchCosign, COSIGN_ENVELOPE_ATTR, type CosignStatusReply } from './cosign-release.js';
 import { composeType } from './compose-type.js';
 import { canonicalizeAndHash } from './canonical-bridge.js';
@@ -214,10 +214,14 @@ function listenForBackgroundMessages(): void {
     }
     if (message.type === 'SIGN_FAILED') {
       // A new attempt on this compose failed; stop watching any earlier envelope.
-      findComposeByComposeId(message.composeId)?.removeAttribute(COSIGN_ENVELOPE_ATTR);
       warn('content', 'sign failed', message.code, message.message);
       const compose = findComposeByComposeId(message.composeId);
-      if (compose) { endSigning(compose); setSignState(compose, 'failed'); }
+      if (compose) {
+        compose.removeAttribute(COSIGN_ENVELOPE_ATTR);
+        // PFL-190 #5: show the SPECIFIC popup error in the compose banner now
+        // (not a generic "didn't hear back" after the popup is closed), + Retry.
+        failSigningWithMessage(compose, friendlySignError(message.code, message.message));
+      }
       sendResponse({ ok: true });
       return false;
     }

@@ -39,6 +39,8 @@ export interface SignerDisplayRecord {
   companyName: string;
   domain: string;
   signedAt: number;
+  /** PFL-190 6a: the signer's company is flagged as a test company. */
+  testCompany?: boolean;
 }
 
 // ─── Design tokens (PRD §8.2) ─────────────────────────────────────────────────
@@ -76,6 +78,8 @@ interface BannerContext {
     signedAt: number;
   }>;
   isWireInstruction: boolean;
+  /** PFL-190 6a: render a visible "Test company" warning, matching the verify page. */
+  testCompany?: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -157,6 +161,20 @@ export function renderBanner(ctx: BannerContext): string {
        </td></tr>`
     : "";
 
+  // PFL-190 6a: a visible "Test company" warning, matching the verify page copy.
+  // Sender-domain checks are relaxed for test companies, so the From address was
+  // not bound to a verified domain — the recipient must see that.
+  const testCompanyNote = ctx.testCompany
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-top:8px;">
+         <tbody><tr><td style="padding:6px 8px;border:1px solid #FCD34D;border-radius:4px;
+               background:#FFFBEB;font-size:12px;color:${COLORS.amber700};
+               font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+           <strong>Test company</strong> — sender-domain checks are relaxed for this company,
+           so the From address was not bound to a verified domain.
+         </td></tr></tbody>
+       </table>`
+    : "";
+
   return `<!-- ProofLine-Banner-v1 -->
 <table role="presentation" cellpadding="0" cellspacing="0" width="100%"
        style="border-collapse:collapse;margin:0 0 16px 0;
@@ -185,6 +203,8 @@ export function renderBanner(ctx: BannerContext): string {
           </tbody>
         </table>
 
+        ${testCompanyNote}
+
         <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
           <tbody>
             <tr>
@@ -207,7 +227,7 @@ export function renderBanner(ctx: BannerContext): string {
             <tr>
               <td style="padding-top:6px;font-size:11px;color:${COLORS.gray500};
                          font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-                Anchored on Base · Envelope&nbsp;
+                Anchoring on Base · details at the verify link · Envelope&nbsp;
                 <code style="font-family:monospace;font-size:10px;">
                   ${escapeHtml(ctx.envelopeId.slice(0, 8))}…
                 </code>
@@ -257,5 +277,8 @@ export function renderBannerFromEnvelope(
     state,
     signers,
     isWireInstruction: envelope.payload.isWireInstruction,
+    // PFL-190 6a: flag the card if any signer's company is a test company
+    // (the sender's record carries it).
+    testCompany: signerDisplayRecords.some((r) => r.testCompany === true),
   });
 }
