@@ -124,6 +124,7 @@ Compared against PRD v3.2 §6 / TDD v3.2. Evidence is from the repo as of the da
 
 | Date | Who | What | PR / card |
 |---|---|---|---|
+| 2026-11-28 | Collins | Ruleset for `main` (`.github/rulesets/main.json`): PR + 1 approval, squash only, required checks | this PR |
 | 2026-11-28 | Collins | CI runs only affected tests; prod smoke check; AGENTS.md + tracker check | this PR |
 | 2026-11-28 | Collins | Created TRACKER.md from repo + board + 11-26 handoff | — |
 | 2026-11-26 | Daniel | Handoff + board reconciliation | #152 |

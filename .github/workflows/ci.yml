@@ -100,7 +100,7 @@ jobs:
           echo "::notice title=CI scope::mode=$mode contracts=$contracts base=${BASE:0:7}"
 
   build:
-    name: build + test
+    name: build
     needs: changes
     runs-on: ubuntu-latest
     env:

@@ -29,6 +29,15 @@ CI enforces this: the `tracker` check fails a PR that changes code without
 touching `TRACKER.md`. For changes that truly don't need it (dependency bumps,
 CI-only tweaks), add the `skip-tracker` label to the PR.
 
+## Merging to main
+
+`main` is protected by the ruleset in `.github/rulesets/main.json` (applied in
+GitHub → Settings → Rules). Don't try to push to `main` directly; it will be
+rejected. Open a PR, which needs 1 approval, resolved review threads, green
+`build` / `contracts` / `tracker` checks and an up-to-date branch. Squash
+merge only. If you change the ruleset, edit that file in the same PR and
+re-import it.
+
 ## Working rules
 
 - Branch per card, named after the card ID (`feat/PFL-xxx-short-name`); squash-merge to `main`.
