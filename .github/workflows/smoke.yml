@@ -1,0 +1,68 @@
+name: Prod smoke check
+
+# Is prod (proofline-cdabb) up? Checks the four hosting sites and the API.
+# Run it right after `firebase deploy`:
+#   gh workflow run smoke.yml
+# and it also runs every 30 minutes as a basic uptime check.
+# A failure sends GitHub's normal "workflow failed" email to whoever last
+# touched the schedule (and shows red on the Actions tab).
+#
+# The API check hits /healthz, which sits behind the functions config
+# guard: it returns 503 CONFIG_INVALID when secrets/config are missing,
+# so this check also catches a misconfigured deploy, not just a dead one.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"
+
+concurrency:
+  group: smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SITES: >-
+        https://proofline-admin.web.app/
+        https://proofline-sign.web.app/
+        https://proofline-verify.web.app/
+        https://proofline-counterparty.web.app/
+      API_HEALTH: https://us-central1-proofline-cdabb.cloudfunctions.net/api/healthz
+    steps:
+      - name: Hosting sites return 200 with the app shell
+        run: |
+          set -uo pipefail
+          failed=0
+          for url in $SITES; do
+            body="$(mktemp)"
+            code="$(curl -sS -L -o "$body" -w '%{http_code}' \
+                     --max-time 20 --retry 2 --retry-delay 5 "$url" || echo 000)"
+            # Every site is a Vite SPA: a live deploy serves index.html with a root div.
+            if [ "$code" = "200" ] && grep -qi '<div id="root"\|<div id="app"' "$body"; then
+              echo "OK    $code  $url"
+            else
+              echo "::error title=Site down::$url returned $code (or no app shell)"
+              failed=1
+            fi
+          done
+          exit $failed
+
+      - name: API /healthz is 200 and ok:true
+        run: |
+          set -uo pipefail
+          body="$(mktemp)"
+          code="$(curl -sS -o "$body" -w '%{http_code}' \
+                   --max-time 30 --retry 2 --retry-delay 10 "$API_HEALTH" || echo 000)"
+          echo "HTTP $code: $(head -c 300 "$body")"
+          if [ "$code" = "200" ] && grep -q '"ok":true' "$body"; then
+            echo "OK    API healthy"
+          elif [ "$code" = "503" ]; then
+            echo "::error title=API misconfigured::/healthz returned 503 CONFIG_INVALID. Check function secrets/env (see PFL-211)."
+            exit 1
+          else
+            echo "::error title=API down::/healthz returned $code"
+            exit 1
+          fi
