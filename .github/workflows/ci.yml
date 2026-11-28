@@ -1,36 +1,186 @@
 name: CI
+
+# Runs only what a change can affect:
+#   - JS/TS: tests for changed packages + every package that depends on them,
+#     built together with everything those packages need (workspace deps
+#     resolve to each other's dist/).
+#   - Contracts: forge only when contracts/ changed.
+#   - Docs-only changes: jobs report green without running anything.
+# A weekly scheduled run (and manual dispatch) runs the full suite as a
+# backstop in case the change detection ever misses something.
+#
+# Job ids stay `build` and `contracts` so existing branch-protection
+# required checks keep matching. Skipping happens at the STEP level, never
+# with workflow-level `paths:` filters, so a required check is never left
+# "waiting for status".
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: "17 7 * * 1" # Mondays 07:17 UTC (02:17 Toronto): full suite
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Run the full suite (ignore change detection)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  changes:
+    name: detect changes
     runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.scope.outputs.mode }}           # full | affected | none
+      base: ${{ steps.scope.outputs.base }}
+      contracts: ${{ steps.scope.outputs.contracts }} # true | false
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need history to diff against the base commit
+
+      - id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          FORCE_FULL: ${{ inputs.full }}
+        run: |
+          set -euo pipefail
+
+          full() {
+            echo "mode=full"      >> "$GITHUB_OUTPUT"
+            echo "contracts=true" >> "$GITHUB_OUTPUT"
+            echo "base="          >> "$GITHUB_OUTPUT"
+            echo "::notice title=CI scope::FULL run ($1)"
+            exit 0
+          }
+
+          case "$EVENT" in
+            schedule)          full "weekly scheduled backstop" ;;
+            workflow_dispatch) [ "${FORCE_FULL:-true}" = "false" ] || full "manual full run"
+                               BASE="$(git rev-parse HEAD~1)" ;;
+            pull_request)      BASE="$PR_BASE" ;;
+            push)              BASE="$PUSH_BEFORE" ;;
+            *)                 full "unknown event $EVENT" ;;
+          esac
+
+          # New branch, force-push or missing history: no reliable base.
+          if [ -z "${BASE:-}" ] \
+             || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            full "no usable base commit"
+          fi
+
+          CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          echo "Changed files vs ${BASE}:"
+          echo "${CHANGED:-<none>}"
+
+          # Shared root config can change any package's behaviour. These
+          # files belong to no package, so pnpm's filter would select nothing.
+          if echo "$CHANGED" | grep -qE '^(pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|tsconfig\.base\.json|\.npmrc|\.github/workflows/ci\.yml)$'; then
+            full "shared root config changed"
+          fi
+
+          contracts=false
+          echo "$CHANGED" | grep -q '^contracts/' && contracts=true
+
+          mode=none
+          echo "$CHANGED" | grep -qE '^(apps|packages)/' && mode=affected
+
+          echo "mode=$mode"           >> "$GITHUB_OUTPUT"
+          echo "base=$BASE"           >> "$GITHUB_OUTPUT"
+          echo "contracts=$contracts" >> "$GITHUB_OUTPUT"
+          echo "::notice title=CI scope::mode=$mode contracts=$contracts base=${BASE:0:7}"
+
+  build:
+    name: build
+    needs: changes
+    runs-on: ubuntu-latest
+    env:
+      MODE: ${{ needs.changes.outputs.mode }}
+      BASE: ${{ needs.changes.outputs.base }}
+    steps:
+      - name: Nothing to build
+        if: env.MODE == 'none'
+        run: echo "No apps/ or packages/ changes. Skipping build and tests."
+
+      - uses: actions/checkout@v4
+        if: env.MODE != 'none'
+        with:
+          fetch-depth: 0 # pnpm's [ref] filter diffs against BASE
+
       - uses: pnpm/action-setup@v3
+        if: env.MODE != 'none'
         with:
           version: 9
+
       - uses: actions/setup-node@v4
+        if: env.MODE != 'none'
         with:
           node-version: 22
-          cache: 'pnpm'
+          cache: "pnpm"
+
       - name: Install dependencies
+        if: env.MODE != 'none'
         run: pnpm install --frozen-lockfile
-      - name: Build all packages
-        run: pnpm -r --if-present build
-      - name: Run all tests
-        run: pnpm -r --if-present test
+
+      # Filters (pnpm 9):
+      #   "...[BASE]"    changed packages + everything that depends on them
+      #   "...[BASE]..." the above + everything THOSE depend on (for build)
+      #   "!proofline"   exclude the repo root, whose `test` script is
+      #                  `pnpm -r test` and would re-run the whole suite
+      - name: Build
+        if: env.MODE != 'none'
+        run: |
+          if [ "$MODE" = "full" ]; then
+            pnpm -r --if-present build
+          else
+            pnpm -r --if-present --filter "...[$BASE]..." --filter '!proofline' build
+          fi
+
+      - name: Test
+        if: env.MODE != 'none'
+        run: |
+          if [ "$MODE" = "full" ]; then
+            pnpm -r --if-present test
+          else
+            echo "Testing changed packages and their dependents:"
+            pnpm -r --filter "...[$BASE]" --filter '!proofline' ls --depth -1 --parseable | sed "s#^$PWD/##"
+            pnpm -r --if-present --filter "...[$BASE]" --filter '!proofline' test
+          fi
+
   contracts:
+    name: contracts
+    needs: changes
     runs-on: ubuntu-latest
+    env:
+      RUN: ${{ needs.changes.outputs.contracts }}
     steps:
+      - name: Nothing to test
+        if: env.RUN != 'true'
+        run: echo "No contracts/ changes. Skipping forge."
+
       - uses: actions/checkout@v4
+        if: env.RUN == 'true'
+        with:
+          submodules: recursive # contracts/lib/forge-std is a git submodule
+
       - uses: foundry-rs/foundry-toolchain@v1
+        if: env.RUN == 'true'
+
       - name: Build contracts
+        if: env.RUN == 'true'
         working-directory: contracts
         run: forge build
+
       - name: Test contracts
+        if: env.RUN == 'true'
         working-directory: contracts
         run: forge test

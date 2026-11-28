@@ -1,0 +1,46 @@
+name: Tracker
+
+# Fails a PR that changes code but doesn't update TRACKER.md, so progress
+# tracking can't silently fall behind whether the work was done by a person,
+# Claude, Copilot, Cursor or anything else. See AGENTS.md.
+# Escape hatch: add the `skip-tracker` label to the PR.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+jobs:
+  tracker:
+    name: tracker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skipped by label
+        if: contains(github.event.pull_request.labels.*.name, 'skip-tracker')
+        run: echo "skip-tracker label set. Not checking TRACKER.md."
+
+      - uses: actions/checkout@v4
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-tracker') }}
+        with:
+          fetch-depth: 0
+
+      - name: Code changes must update TRACKER.md
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-tracker') }}
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          CHANGED="$(git diff --name-only "$BASE" HEAD)"
+
+          if ! echo "$CHANGED" | grep -qE '^(apps|packages|contracts|infra|scripts)/|^(firebase\.json|firestore\.rules|firestore\.indexes\.json)$'; then
+            echo "No code changes. Tracker update not required."
+            exit 0
+          fi
+
+          if echo "$CHANGED" | grep -qx 'TRACKER.md'; then
+            echo "TRACKER.md updated. Thanks."
+            exit 0
+          fi
+
+          echo "::error title=TRACKER.md not updated::This PR changes code but not TRACKER.md. Add a Log row (and flip any status icons) per AGENTS.md, or add the 'skip-tracker' label if it truly doesn't apply."
+          exit 1
